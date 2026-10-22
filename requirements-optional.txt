@@ -1,0 +1,2 @@
+coacd>=1.0.5                             # exact collision shapes for free-form parts (physics)
+pywin32>=306; sys_platform == "win32"    # SolidWorks bridge

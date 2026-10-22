@@ -1,0 +1,11 @@
+{
+  "autodeskProduct": "Fusion",
+  "type": "addin",
+  "id": "9f3b2c1e-5d4a-4e7b-9a61-d4e5da1a1c05",
+  "author": "Daedalus",
+  "description": {"": "Daedalus CAD Link: inventory, standard parts, fasteners, copilot and analysis for the open design"},
+  "version": "1.0.0",
+  "runOnStartup": true,
+  "supportedOS": "windows|mac",
+  "editEnabled": true
+}

@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+env/
+
+# Daedalus local data / outputs
+*.zip
+*.daedalus.autosave
+autosave/
+exports/
+*.log
+
+# Large docs: attach to GitHub Releases instead
+docs/*.pdf
+
+# OS / editors
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
