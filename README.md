@@ -23,8 +23,51 @@ settings are migrated on first launch.
 
 ---
 
+## Highlights
+
+| | |
+|---|---|
+| 🤖 **AI copilot (Icarus)** | Describe a part and Icarus builds it with the same feature tools you use, as editable history. Runs free on local Ollama, or on Claude. One prompt is one undo step. |
+| 📐 **Full parametric modelling** | Constrained sketches, 3D sketches, 40+ feature types, configurations and equations, surfaces, sheet metal with flat patterns. |
+| 🏗️ **Frames and HSS** | Frames along a 3D sketch; the HSS builder covers AISC, CSA and EN sizes or any custom size; section properties; cut lists with weights. |
+| ⚙️ **Assemblies that move** | Standard, advanced and mechanical mates (gear, rack, screw, cam, slot), subassemblies, and MuJoCo physics with motors, springs and contact. |
+| 🔬 **Simulation built in** | FEA (static, frequency, buckling, thermal, fatigue, harmonic), assembly FEA with bolts, drop tests, CFD, topology optimisation, design studies. |
+| 📄 **Production drawings** | Automatic views, sections, details, GD&T, revision tables. Export to PDF, DXF and DWG. |
+| 🛠️ **Shop-floor ready** | Auto CAM builds the whole program and writes G-code (Fanuc, Haas, Siemens, LinuxCNC, GRBL). Also a backplot, quoting and a machine schedule. |
+| 📏 **Units for engineering and construction** | SI, US customary and ft-in fractions. Type any unit into any field (`3' 4-1/2"`, `25 mm`, `4/12`). The Measure panel works in your units. |
+| 🔗 **Works with your CAD** | Links with SolidWorks, Fusion, Rhino, Inventor and Solid Edge. Opens STEP assemblies of 1,600+ parts in seconds. |
+| 📦 **BOM and inventory** | Standard parts library with duplicate detection; Holocron inventory; Send BOM turns a design into a project with stock and shortfalls. |
+| 📘 **Design data** | 27 machine-design calculators (shafts, gears, keys, brakes, fatigue…) and search across your own handbooks. |
+
+<table>
+<tr>
+<td align="center"><img src="docs/sketcher.png" width="270"><br><sub>Constrained sketcher</sub></td>
+<td align="center"><img src="docs/sketch3d_frame.png" width="270"><br><sub>3D sketch → frame</sub></td>
+<td align="center"><img src="docs/assembly.png" width="270"><br><sub>Mates and motion</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/v08_physics.png" width="270"><br><sub>Physics simulation</sub></td>
+<td align="center"><img src="docs/v09_static.png" width="270"><br><sub>Static FEA</sub></td>
+<td align="center"><img src="docs/v09_flow.png" width="270"><br><sub>CFD flow</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/v10_topology.png" width="270"><br><sub>Topology optimisation</sub></td>
+<td align="center"><img src="docs/v11_sheetmetal.png" width="270"><br><sub>Sheet metal</sub></td>
+<td align="center"><img src="docs/v10_drawing.png" width="270"><br><sub>2D drawings</sub></td>
+</tr>
+<tr>
+<td align="center"><img src="docs/v10_cam.png" width="270"><br><sub>CAM toolpaths</sub></td>
+<td align="center"><img src="docs/doodle.png" width="270"><br><sub>Doodle → model</sub></td>
+<td align="center"><img src="docs/layers.png" width="270"><br><sub>Layers</sub></td>
+</tr>
+</table>
+
+<sub>Screenshots are from earlier versions; the current interface uses the teal theme.</sub>
+
+---
+
 ## Contents
-[Install](#install) · [Features](#features) · [Icarus copilot](#icarus-copilot) · [CAD Link](#cad-link) ·
+[Highlights](#highlights) · [Install](#install) · [Features](#features) · [Icarus copilot](#icarus-copilot) · [CAD Link](#cad-link) ·
 [Keys & mouse](#keys--mouse) · [Tips](#tips) · [Architecture](#architecture) · [Development](#development) ·
 [Version history](#version-history) · [Roadmap](#roadmap)
 
