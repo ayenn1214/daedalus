@@ -1,7 +1,13 @@
-# Daedalus
+<p align="center">
+  <img src="docs/logo.png" width="160" alt="Daedalus logo">
+</p>
 
-Native desktop parametric CAD with a AI modeling copilot (local Ollama or Claude).
+<h1 align="center">Daedalus</h1>
+
+<p align="center">
+Native desktop parametric CAD with an AI modelling copilot (local Ollama or Claude).<br>
 Python · Qt (PySide6) · OpenCASCADE kernel (via build123d/OCP) · VTK viewport.
+</p>
 
 Formerly **Strata CAD**. Files save as `.daedalus`; old `.strata` files open as before. On first launch
 Daedalus copies your Strata settings (API key, snaps, inventory location) and the inventory file
