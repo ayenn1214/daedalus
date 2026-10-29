@@ -69,7 +69,7 @@ settings are migrated on first launch.
 ## Contents
 [Highlights](#highlights) · [Install](#install) · [Features](#features) · [Icarus copilot](#icarus-copilot) · [CAD Link](#cad-link) ·
 [Keys & mouse](#keys--mouse) · [Tips](#tips) · [Architecture](#architecture) · [Development](#development) ·
-[Version history](#version-history) · [Roadmap](#roadmap)
+[Version history](#version-history) · [Roadmap](#roadmap) · [License](#license)
 
 ---
 
@@ -389,3 +389,29 @@ Release notes and the user guide (PDF) are on the [Releases](../../releases) pag
 - 3D adaptive CAM.
 - Background rebuild thread with progress for heavy parts.
 - Selection-aware prompts ("fillet these"); 3D doodle for frame layouts.
+
+---
+
+## License
+
+Copyright © 2026 Ankur Narula.
+
+Daedalus is free software: you can redistribute it and/or modify it under the terms of the **GNU General Public
+License v3.0 or later** — see [LICENSE](LICENSE). It comes with no warranty.
+
+Daedalus builds on these open-source packages, which keep their own licenses:
+
+| Package | License |
+|---|---|
+| python-solvespace (sketch solver) | GPL-3.0-or-later |
+| gmsh (FEA meshing) | GPL-2.0-or-later |
+| PySide6 / Qt | LGPL-3.0 |
+| build123d, OCP | Apache-2.0 |
+| OpenCASCADE | LGPL-2.1 with exception |
+| MuJoCo | Apache-2.0 |
+| VTK, SciPy, numba, shapely, scikit-fem | BSD |
+| ezdxf, openpyxl, qtawesome (Phosphor icons), CoACD, svgelements, anthropic | MIT |
+
+SolidWorks, Fusion, Rhino, Inventor, Solid Edge, Unity, Mastercam and AISC are trademarks of their respective
+owners; Daedalus is not affiliated with them.
+
