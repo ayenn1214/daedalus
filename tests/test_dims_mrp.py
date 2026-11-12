@@ -258,3 +258,20 @@ def test_vendor_list_with_shop_headers():
     assert s["category"] == "Hardware Supplier" and ("Sabre", "email", "dan@x.com", "atang@x.com") in rep
     assert next(v for v in inv.vendors if v["id"] == "b")["contactName"] == "BRIAN"
     assert next(v for v in inv.vendors if v["name"].startswith("SUMMIT"))["status"] == "Prospective"
+
+
+def test_every_shortage_is_on_the_reorder_list():
+    inv = M.Inventory()
+    a = M.new_part(id="a", name="Above RP but short", currentStock=24, reorderPoint=10)
+    b = M.new_part(id="b", name="Below RP, no project", currentStock=2, reorderPoint=5)
+    c = M.new_part(id="c", name="Fine", currentStock=50, reorderPoint=5)
+    d = M.new_part(id="d", name="Short but discontinued", currentStock=0, discontinued=True)
+    inv.parts = [a, b, c, d]
+    pid = inv.find_or_create_project("RLCL", totalQtyNeeded=6)
+    for p in (a, c, d):
+        inv.set_allocation(p, pid, 12 if p is a else 1)
+    short = {r["part"]["id"] for r in inv.shortages()}
+    low = [p["id"] for p in inv.reorder_list()]
+    assert short - {"d"} <= set(low) and low[0] == "a" and "b" in low and "c" not in low and "d" not in low
+    row = inv.reorder_rows([a], inv.total_needed)[0]
+    assert row["Suggested Qty"] >= 72 - 24                                 # orders enough to cover the projects

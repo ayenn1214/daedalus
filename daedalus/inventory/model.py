@@ -277,9 +277,17 @@ class Inventory:
         return " · ".join(bits)
 
     def low_stock(self):
-        """Parts at or below their reorder point — discontinued parts are never reordered."""
-        return [p for p in self.parts if num(p.get("currentStock")) <= num(p.get("reorderPoint"))
-                and not p.get("discontinued")]
+        """Parts to reorder: at or below their reorder point, or short for what their projects need (the Shortages
+        tab), so every shortage is on the reorder list too. Discontinued parts are never reordered."""
+        comp = self.component_ids()
+        out = []
+        for p in self.parts:
+            if p.get("discontinued"):
+                continue
+            stock = num(p.get("currentStock"))
+            if stock <= num(p.get("reorderPoint")) or (p["id"] not in comp and self.total_needed(p) > stock):
+                out.append(p)
+        return out
 
     def component_ids(self) -> set:
         """Parts welded into a weldment (not separate stock). Assembly components are stocked parts of their own."""
@@ -512,7 +520,8 @@ class Inventory:
             low = [p for p in low if self.allocation(p, project)]
         if vendor != "all":
             low = [p for p in low if any(s["name"] == vendor for s in self.suppliers(p))]
-        return sorted(low, key=lambda p: num(p.get("currentStock")) / (num(p.get("reorderPoint")) or 1))
+        return sorted(low, key=lambda p: (-(max(0.0, self.total_needed(p) - num(p.get("currentStock"))) > 0),
+                                          num(p.get("currentStock")) / (num(p.get("reorderPoint")) or 1)))
 
     def projects_with_low(self):
         low = self.low_stock()

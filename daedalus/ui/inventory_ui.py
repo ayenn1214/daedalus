@@ -699,7 +699,7 @@ class InventoryPage(QWidget):
             grid.addWidget(c, i // 3, i % 3)
         v.addLayout(grid)
         v.addWidget(_section("Low Stock"))
-        v.addWidget(self.parts_tree(low[:8], actions=False) if low else _muted("Nothing below its reorder point."))
+        v.addWidget(self.parts_tree(low[:8], actions=False) if low else _muted("Nothing to reorder."))
         v.addWidget(_section("Recent Activity"))
         rec = list(reversed(inv.transactions[-6:]))
         v.addWidget(self.log_table(rec) if rec else _muted("No activity logged yet."))
@@ -1311,7 +1311,7 @@ class InventoryPage(QWidget):
             v.addWidget(self.table(["", "Part", "Type", "On Hand", "Reorder Pt", nh, "Suggested Qty", "Suppliers",
                                     "Est. Cost", ""], rows, 7) if rows else _muted("No parts match this filter."))
         else:
-            v.addWidget(_muted("Everything is above its reorder point."))
+            v.addWidget(_muted("Nothing to reorder — every part is above its reorder point and covers its projects."))
         oo = inv.open_part_orders()
         if oo:
             v.addWidget(_section("Parts On Order"))
@@ -1383,7 +1383,7 @@ class InventoryPage(QWidget):
         inv = self.inv
         low = inv.low_stock()
         if not low:
-            return self.toast.show_msg("Nothing to export — everything is above its reorder point")
+            return self.toast.show_msg("Nothing to export — nothing to reorder")
         path = self._save_path(f"dims-reorder-by-project-{M.today()}.xlsx", "Excel (*.xlsx)")
         if not path:
             return
