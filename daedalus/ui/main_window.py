@@ -28,8 +28,10 @@ from . import theme
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, modules=None):
         super().__init__()
+        from .. import modules as MOD
+        self.mods = frozenset(modules) if modules else MOD.ALL
         self.settings = QSettings("Daedalus", "Daedalus")
         from .units_ui import default_units
         Document.default_units = default_units(self.settings)
@@ -124,11 +126,13 @@ class MainWindow(QMainWindow):
         self.cam_panel.status.connect(lambda t: self.statusBar().showMessage(t, 8000))
         self.cam_panel.auto_requested.connect(self.auto_cam)
         from .islands import Sidebar
-        self.sidebar = Sidebar([("tree", "Feature tree", self.history), ("objects", "Objects", self.objects_panel),
-                                ("mates", "Mates", self.mates_panel), ("layers", "Layers", self.layers),
-                                ("physics", "Physics", self.physics_panel), ("studies", "Studies", self.studies_panel),
-                                ("cam", "CAM", self.cam_panel), ("props", "Properties", self.inspector)],
-                               self.settings)
+        hide = MOD.hidden_islands(self.mods)
+        self.sidebar = Sidebar([p for p in [
+            ("tree", "Feature tree", self.history), ("objects", "Objects", self.objects_panel),
+            ("mates", "Mates", self.mates_panel), ("layers", "Layers", self.layers),
+            ("physics", "Physics", self.physics_panel), ("studies", "Studies", self.studies_panel),
+            ("cam", "CAM", self.cam_panel), ("props", "Properties", self.inspector)] if p[0] not in hide],
+            self.settings, key="" if self.mods >= MOD.ALL else "/" + "-".join(sorted(self.mods)))
         self.left_split = self.sidebar.split
         left = QDockWidget("Design", self)
         left.setObjectName("history")
@@ -151,7 +155,7 @@ class MainWindow(QMainWindow):
         self.addDockWidget(Qt.RightDockWidgetArea, right)
         self.copilot_dock = right
         right.visibilityChanged.connect(lambda _v: self._sync_claude_toggle_safe())
-        if not self.settings.value("ui/claude_visible", True, type=bool):
+        if not self.settings.value("ui/claude_visible", True, type=bool) or "3d" not in self.mods:
             right.hide()
         QTimer.singleShot(0, self._sync_claude_toggle)
         self.copilot.render_provider = self._renders_for_claude
@@ -609,7 +613,10 @@ class MainWindow(QMainWindow):
             ("Image", "📎", "Attach a photo or drawing for Icarus", lambda: (self.copilot_dock.show(),
                                                                           self.copilot.attach_image())),
         ]), "Icarus")
-        self.tool_groups = [(tabs.tabText(i), groups[i]) for i in range(tabs.count())]
+        from .. import modules as MOD
+        hidden = MOD.hidden_tabs(self.mods)
+        self.tool_groups = [(tabs.tabText(i), groups[i]) for i in range(tabs.count())
+                            if tabs.tabText(i) not in hidden]
         from .adaptive import Adaptive, text_mode
         self._adaptive = []
         mode = self.settings.value("ui/toolbar_size", "auto")
@@ -629,6 +636,12 @@ class MainWindow(QMainWindow):
                     ad.level = -1
                     ad.fit()
         tabs.currentChanged.connect(shown)
+        for i in range(tabs.count()):
+            if tabs.tabText(i) in hidden:
+                tabs.setTabVisible(i, False)
+        first = next((i for i in range(tabs.count()) if tabs.isTabVisible(i)), 0)
+        if first != tabs.currentIndex():
+            tabs.setCurrentIndex(first)
         return tabs
 
     def _view_bar(self):
@@ -1516,16 +1529,19 @@ class MainWindow(QMainWindow):
         act(f, "Save view as image…", self.save_view_image)
         act(f, "Copy view to clipboard", self.copy_view_image, "Ctrl+Shift+C")
         f.addSeparator()
-        act(f, "Open 2D drawing (DXF/DWG/SVG)…", self.open_2d)
-        act(f, "Drawings…", self.show_drawings, "Ctrl+D")
+        dr_acts = [act(f, "Open 2D drawing (DXF/DWG/SVG)…", self.open_2d), act(f, "Drawings…", self.show_drawings,
+                                                                               "Ctrl+D")]
         f.addSeparator()
         act(f, "Standard parts library…", self.show_std_library, "Ctrl+L")
         act(f, "Save object as standard part…", self.save_std_part, "Ctrl+Shift+L")
         f.addSeparator()
-        act(f, "Inventory…", self.show_inventory, "Ctrl+Shift+I")
+        inv_acts = [act(f, "Inventory…", self.show_inventory, "Ctrl+Shift+I")]
         act(f, "Quote…", self.show_quote, "Ctrl+Alt+Q")
         act(f, "Simulate G-code file…", lambda: self.simulate_gcode())
-        act(f, "Send BOM to inventory…", self.send_bom_to_inventory)
+        inv_acts.append(act(f, "Send BOM to inventory…", self.send_bom_to_inventory))
+        for key, acts in (("drawing", dr_acts), ("inventory", inv_acts)):
+            for a in acts:
+                a.setVisible(key in self.mods)
         f.addSeparator()
         act(f, "Quit", self.close, QKeySequence.Quit)
 
@@ -1724,6 +1740,7 @@ class MainWindow(QMainWindow):
                 act(demo, f"{lab_} demo session", lambda _=False, a=app_: self.solidworks_link(demo=True, app=a))
 
         h = mb.addMenu("&Help")
+        act(h, "Startup modules…", self.startup_modules)
         act(h, "Setup check (Python + Icarus)…", self.show_setup_check)
         act(h, "Design data calculators…", lambda: self.design_data(0))
         act(h, "Reference library (your handbooks)…", lambda: self.design_data(1))
@@ -1811,7 +1828,9 @@ class MainWindow(QMainWindow):
 
     def _update_title(self):
         name = self.doc.path.name if self.doc.path else "Untitled"
-        self.setWindowTitle(f"{'• ' if self.doc.dirty else ''}{name} — {APP_NAME}")
+        from .. import modules as MOD
+        part = "" if self.mods >= MOD.ALL else f" · {MOD.describe(self.mods)}"
+        self.setWindowTitle(f"{'• ' if self.doc.dirty else ''}{name} — {APP_NAME}{part}")
 
     def pick_material(self, obj=None):
         from .materials_ui import MaterialDialog
@@ -2229,6 +2248,8 @@ class MainWindow(QMainWindow):
         QApplication.quit()
 
     def show_inventory(self):
+        if not self._module_on("inventory"):
+            return
         if self._sketching:
             return self._need("Finish or cancel the sketch first.")
         self.inventory_page.store.check_external()
@@ -2478,17 +2499,23 @@ class MainWindow(QMainWindow):
             self.statusBar().showMessage("Export options saved with the document", 5000)
 
     def show_drawings(self):
+        if not self._module_on("drawing"):
+            return
         if self._sketching:
             return self._need("Finish or cancel the sketch first.")
         self.stack.setCurrentIndex(3)
 
     def new_drawing(self):
+        if not self._module_on("drawing"):
+            return
         if not self.doc.result.bodies:
             return self._need("Model something first — drawings are made from the 3D model.")
         self.show_drawings()
         self.drawing_page.new_drawing()
 
     def open_2d(self, path=None):
+        if not self._module_on("drawing"):
+            return
         self.show_drawings()
         self.drawing_page.open_2d(path)
 
@@ -2966,6 +2993,19 @@ class MainWindow(QMainWindow):
                                                      not self.isMinimized() and self.asm.set_mode(None)))
             self._mdock = d
         return self._mdock
+
+    def _module_on(self, key) -> bool:
+        """False (with a note) when that module isn't part of this workspace."""
+        if key in self.mods:
+            return True
+        from .. import modules as MOD
+        self.statusBar().showMessage(f"{MOD.MODULES[key][0]} isn't loaded in this workspace — Help ▸ Startup "
+                                     f"modules… to add it", 8000)
+        return False
+
+    def startup_modules(self):
+        from .modules_ui import StartupModulesDialog
+        StartupModulesDialog(self.settings, self, current=self.mods).exec()
 
     def units_dialog(self, tab=0):
         from .units_ui import UnitsDialog

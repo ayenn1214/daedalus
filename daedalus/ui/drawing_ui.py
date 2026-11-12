@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from ..core.features import FeatureError
+from ..errors import FeatureError
 from ..drawing import dxfio, render
 from ..drawing import views as dv
 from ..drawing.model import SCALES, SHEETS, VIEW_DIRS, Options, scale_text
@@ -913,9 +913,10 @@ class DrawingPage(QWidget):
     closed = Signal()
     status = Signal(str)
 
-    def __init__(self, doc_getter, parent=None):
+    def __init__(self, doc_getter, parent=None, lite: bool = False):
         super().__init__(parent)
         self._doc = doc_getter
+        self.lite = lite                  # drawings module on its own: no 3D model behind the page
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -925,6 +926,7 @@ class DrawingPage(QWidget):
         back = QPushButton("◀ 3D model")
         back.clicked.connect(self.closed.emit)
         h.addWidget(back)
+        back.setVisible(not lite)
         self.dr_box = QComboBox()
         self.dr_box.setMinimumWidth(140)
         self.dr_box.activated.connect(lambda _i: self.refresh(fit=True))
@@ -1065,9 +1067,12 @@ class DrawingPage(QWidget):
     # ------------------------------------------------------------- menus
     def _new_menu(self):
         m = QMenu(self)
-        m.addAction("Drawing of the model…", self.new_drawing)
-        m.addAction("Flat pattern drawing…", self.new_flat)
+        if not self.lite:
+            m.addAction("Drawing of the model…", self.new_drawing)
+            m.addAction("Flat pattern drawing…", self.new_flat)
         m.addAction("Blank 2D drawing", self.new_blank)
+        if self.lite:
+            m.addAction("Drawings from a .daedalus file…", self.load_drawings)
         m.addSeparator()
         m.addAction("Add sheet", self.add_sheet)
         m.addAction("Delete drawing", self.delete_drawing)
@@ -1075,6 +1080,12 @@ class DrawingPage(QWidget):
 
     def _view_menu(self):
         m = QMenu(self)
+        if self.lite:
+            a = m.addAction("Model views need the 3D workspace")
+            a.setEnabled(False)
+            m.addSeparator()
+            m.addAction("Add revision…", self.add_revision)
+            return m
         for name in VIEW_DIRS:
             m.addAction(name.capitalize(), lambda n=name: self.add_view(n))
         m.addSeparator()
@@ -1159,6 +1170,18 @@ class DrawingPage(QWidget):
             except FeatureError as e:
                 return self._err("Flat pattern", e)
             self.refresh(fit=True, select=dr.name)
+
+    def load_drawings(self):
+        from PySide6.QtWidgets import QFileDialog
+        path, _ = QFileDialog.getOpenFileName(self, "Drawings from a Daedalus file", "", "Daedalus (*.daedalus *.strata)")
+        if not path:
+            return
+        try:
+            got = self.doc.load_drawings(path)
+        except (FeatureError, OSError, ValueError) as e:
+            return self._err("Open drawings", e)
+        self.status.emit(f"{len(got)} drawing(s) loaded — model views stay empty without the 3D workspace")
+        self.refresh(fit=True, select=got[0].name)
 
     def new_blank(self):
         from ..drawing.model import Drawing, Sheet

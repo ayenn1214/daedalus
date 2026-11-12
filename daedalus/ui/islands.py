@@ -45,9 +45,10 @@ class Sidebar(QWidget):
     """panels: [(key, label, widget)] in their natural order."""
     layout_changed = Signal()
 
-    def __init__(self, panels, settings=None, parent=None):
+    def __init__(self, panels, settings=None, parent=None, key: str = ""):
         super().__init__(parent)
         self.settings = settings
+        self._key = key                   # layouts saved per module set ('' = all modules)
         self.keys = [k for k, _l, _w in panels]
         self.labels = {k: l for k, l, _w in panels}
         self.inner = {k: w for k, _l, w in panels}                     # the panel itself
@@ -86,7 +87,7 @@ class Sidebar(QWidget):
         return self.settings.value(key, default, type=typ) if typ else self.settings.value(key, default)
 
     def _load(self):
-        raw = self._setting("ui/islands", "")
+        raw = self._setting("ui/islands" + self._key, "")
         try:
             got = json.loads(raw) if raw else None
         except (TypeError, ValueError):
@@ -100,15 +101,15 @@ class Sidebar(QWidget):
 
     def _save(self):
         if self.settings is not None:
-            self.settings.setValue("ui/islands", json.dumps(self.islands))
+            self.settings.setValue("ui/islands" + self._key, json.dumps(self.islands))
             self.settings.setValue("ui/islands_horizontal", self.side_by_side)
 
     def _save_sizes(self):
         if self.settings is not None:
-            self.settings.setValue("ui/island_sizes", json.dumps(self.split.sizes()))
+            self.settings.setValue("ui/island_sizes" + self._key, json.dumps(self.split.sizes()))
 
     def _restore_sizes(self):
-        raw = self._setting("ui/island_sizes", "")
+        raw = self._setting("ui/island_sizes" + self._key, "")
         try:
             sizes = json.loads(raw) if raw else None
         except (TypeError, ValueError):

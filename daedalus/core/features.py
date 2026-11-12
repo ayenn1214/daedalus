@@ -109,8 +109,7 @@ class Param:
         return {"description": self.help}
 
 
-class FeatureError(RuntimeError):
-    pass
+from ..errors import FeatureError  # noqa: E402,F401  (defined kernel-free so light modules can catch it)
 
 
 def as_part(shape) -> Part:

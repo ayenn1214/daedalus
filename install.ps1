@@ -143,7 +143,21 @@ function Make-Shortcuts {
         $lnk.Description = "Daedalus CAD"
         $lnk.Save()
     }
-    Ok "Desktop and Start-menu shortcuts"
+    # one Start-menu entry per module set (each boots only that part — inventory / drawings start in ~1 s)
+    $sub = Join-Path ([Environment]::GetFolderPath("Programs")) "Daedalus"
+    New-Item -ItemType Directory -Force -Path $sub | Out-Null
+    $sets = @(@("Daedalus 3D", "3d"), @("Daedalus Simulation", "sim"),
+              @("Daedalus Drawings", "drawing"), @("Daedalus Inventory", "inventory"))
+    foreach ($s in $sets) {
+        $lnk = $shell.CreateShortcut((Join-Path $sub ($s[0] + ".lnk")))
+        $lnk.TargetPath = $VPyw
+        $lnk.Arguments = "-m daedalus --only " + $s[1]
+        $lnk.WorkingDirectory = $Root
+        if (Test-Path $ico) { $lnk.IconLocation = $ico }
+        $lnk.Description = $s[0]
+        $lnk.Save()
+    }
+    Ok "Desktop and Start-menu shortcuts (plus Start ▸ Daedalus ▸ 3D / Simulation / Drawings / Inventory)"
 }
 
 # ------------------------------------------------------------------ Icarus agent (Ollama)

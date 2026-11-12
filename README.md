@@ -93,6 +93,22 @@ pip install -r requirements-optional.txt   # CoACD (exact physics shapes), pywin
 python -m daedalus                  # or: python -m daedalus part.daedalus
 ```
 
+**Startup modules:** Daedalus can load only the parts you need.
+
+| Command | Opens | Loads the CAD kernel? |
+|---|---|---|
+| `python -m daedalus` | Everything (or your saved choice) | Yes |
+| `--only 3d` | Modelling, assemblies, CAM, Icarus | Yes |
+| `--only sim` | 3D view with the Simulation and Evaluate tools; modelling tools hidden | Yes |
+| `--only drawing` | 2D drawings: DXF/DWG/SVG/HPGL editing, blank sheets, title blocks, export | No (~1 s start) |
+| `--only inventory` | Holocron inventory | No (~1 s start) |
+| `--only drawing,inventory` | Both, as tabs | No |
+
+- **Saving a choice:** Help ▸ Startup modules… saves the set to use when no flag is given.
+- **Shortcuts:** the installer adds Start ▸ Daedalus ▸ 3D / Simulation / Drawings / Inventory.
+- **From the light window:** File ▸ Open 3D workspace loads the rest when you need it.
+- **Model views:** the drawings module on its own can't create views of a 3D model. It can still open the drawings saved in a `.daedalus` file.
+
 **Setup check:** run `python -m daedalus --check` (add `--json` for machine-readable output), or open
 **Help ▸ Setup check**. It installs missing packages, starts Ollama and downloads models.
 

@@ -237,8 +237,9 @@ class InventoryPage(QWidget):
             ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Clients"),
             ("reorder", "Reorder"), ("shortages", "Shortages"), ("log", "Activity Log"), ("sync", "Import / Export")]
 
-    def __init__(self, store: InventoryStore | None = None, parent=None):
+    def __init__(self, store: InventoryStore | None = None, parent=None, lite: bool = False):
         super().__init__(parent)
+        self.lite = lite                  # inventory module on its own: no 3D model to send a BOM from
         self.settings = QSettings("Daedalus", "Daedalus")
         path = self.settings.value("inventory/path") or None
         self.store = store or get_store(path)
@@ -259,7 +260,8 @@ class InventoryPage(QWidget):
         top.setStyleSheet(f"#invtop{{background:{theme.PANEL}; border-bottom:1px solid {theme.BORDER};}}")
         h = QHBoxLayout(top)
         h.setContentsMargins(8, 6, 8, 6)
-        h.addWidget(_btn("◀ 3D model", self.closed.emit))
+        if not lite:
+            h.addWidget(_btn("◀ 3D model", self.closed.emit))
         title = QLabel("⬡  Holocron Inventory")
         title.setObjectName("h1")
         h.addWidget(title)

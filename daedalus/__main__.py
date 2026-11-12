@@ -2,8 +2,15 @@ import sys
 
 
 def main():
-    args = [a for a in sys.argv[1:] if not a.startswith("--")]
-    flags = {a for a in sys.argv[1:] if a.startswith("--")}
+    from . import modules as MOD
+    try:
+        mods_flag = MOD.from_argv(sys.argv[1:])
+    except MOD.ModuleError as e:
+        print(e)
+        sys.exit(2)
+    argv = MOD.strip_args(sys.argv[1:])
+    args = [a for a in argv if not a.startswith("--")]
+    flags = {a for a in argv if a.startswith("--")}
     if flags & {"--check", "--set-model", "--recommended-model"}:     # setup check (no window, no CAD kernel)
         from .setup_check import main as check
         sys.exit(check(sys.argv[1:]))
@@ -49,20 +56,51 @@ def main():
             splash.showMessage(msg)
             app.processEvents()
 
-    step("Loading geometry kernel…")
     from .ui import theme
     from .migrate import migrate_settings
     migrate_settings()
     theme.apply(app)
+    if mods_flag is None:
+        from PySide6.QtCore import QSettings
+        mods = MOD.load(QSettings("Daedalus", "Daedalus"))
+    else:
+        mods = mods_flag
+    if not MOD.needs_3d(mods):                         # drawings / inventory only: no CAD kernel, no 3D view
+        from .ui.lite_window import LiteWindow
+        step(f"Opening {MOD.describe(mods)}…")
+        w = LiteWindow(mods)
+        w.show()
+        if splash is not None:
+            splash.finish(w)
+        _startup_lite(w, args)
+        sys.exit(app.exec())
+    step("Loading geometry kernel…")
     from .ui.main_window import MainWindow
     step("Building workspace…")
-    w = MainWindow()
+    w = MainWindow(modules=mods)
     w.show()
     w.view.start()
     if splash is not None:
         splash.finish(w)
     _startup(w, args)
     sys.exit(app.exec())
+
+
+def _startup_lite(w, args):
+    """A 2D file or a .daedalus file on the command line → its drawings."""
+    if not args or w.drawing_page is None:
+        return
+    from pathlib import Path
+    p = Path(args[0])
+    try:
+        if p.suffix.lower() in (".daedalus", ".strata"):
+            got = w.doc.load_drawings(p)
+            w.drawing_page.refresh(fit=True, select=got[0].name)
+        else:
+            dr = w.doc.open_2d(p)
+            w.drawing_page.refresh(fit=True, select=dr.name)
+    except Exception as e:  # noqa: BLE001
+        w.statusBar().showMessage(f"Couldn't open {p.name}: {e}", 10000)
 
 
 def _startup(w, args):
