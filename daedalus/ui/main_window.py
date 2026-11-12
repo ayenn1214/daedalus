@@ -2234,10 +2234,6 @@ class MainWindow(QMainWindow):
 
     def switch_theme(self, mode):
         """Save the theme and offer to restart (colours are read at start-up)."""
-        import sys
-
-        from PySide6.QtCore import QProcess
-
         from . import theme
         if mode == theme.MODE:
             return
@@ -2247,12 +2243,9 @@ class MainWindow(QMainWindow):
         if r != QMessageBox.Yes or not self._confirm_discard():
             self.statusBar().showMessage(f"{theme.THEMES[mode]} will be used next time Daedalus starts", 8000)
             return
-        argv = list(getattr(sys, "orig_argv", [sys.executable, "-m", "daedalus"]))
-        if self.doc.path:
-            argv = [a for a in argv if not str(a).lower().endswith((".daedalus", ".strata"))] + [str(self.doc.path)]
+        from . import restart as RS
         self.doc.dirty = False
-        QProcess.startDetached(argv[0], argv[1:])
-        QApplication.quit()
+        RS.restart(self, RS.launch_args([str(self.doc.path)] if self.doc.path else [], drop_files=True))
 
     def show_inventory(self):
         if not self._module_on("inventory"):

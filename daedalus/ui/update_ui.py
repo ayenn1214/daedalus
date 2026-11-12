@@ -95,16 +95,11 @@ def _rollback(window, folder):
     if QMessageBox.question(window, "Roll back", f"Put back the files the last update replaced "
                             f"({folder.name.removeprefix('backup-')})? Daedalus restarts.") != QMessageBox.Yes:
         return
-    U.rollback(folder)
-    _quit(window)
-
-
-def _quit(window):
-    for w in QApplication.topLevelWidgets():
-        if w.isVisible() and w is not window:
-            w.close()
-    if window.close():
-        QApplication.quit()
+    from . import restart as RS
+    if not RS.close_all(window):
+        return QMessageBox.information(window, "Roll back", "Roll back cancelled — Daedalus is still open.")
+    U.rollback(folder, relaunch_args=RS.launch_args())
+    RS.hard_quit()
 
 
 class UpdateDialog(QDialog):
@@ -186,10 +181,10 @@ class UpdateDialog(QDialog):
                 self.accept()
                 if QMessageBox.question(win, "Update", f"Updated to {self.info['version']}. Restart Daedalus now?") \
                         == QMessageBox.Yes:
-                    import subprocess
-                    import sys
-                    subprocess.Popen([sys.executable, "-m", "daedalus"], cwd=cur["root"])
-                    _quit(win)
+                    from . import restart as RS
+                    if not RS.restart(win):
+                        QMessageBox.information(win, "Update", "Restart cancelled — the update is installed and "
+                                                               "takes effect the next time Daedalus starts.")
             self._t = _in_thread(lambda: U.git_update(self.info), done)
             return
 
@@ -198,6 +193,10 @@ class UpdateDialog(QDialog):
             if isinstance(res, Exception):
                 return QMessageBox.warning(self, "Update", str(res))
             self.accept()
-            U.launch_helper(res, self.info)
-            _quit(win)
+            from . import restart as RS
+            if not RS.close_all(win):                # e.g. Cancel on "save changes?": don't swap files under it
+                return QMessageBox.information(win, "Update", "Update postponed — Daedalus is still open. Choose "
+                                                             "Update now again when you're ready.")
+            U.launch_helper(res, self.info, relaunch_args=RS.launch_args())
+            RS.hard_quit()
         self._t = _in_thread(lambda: U.download(self.info, token), done)

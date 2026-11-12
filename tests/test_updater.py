@@ -188,3 +188,45 @@ def test_update_ui(monkeypatch):
     d = UI.UpdateDialog(info, w)
     from PySide6.QtWidgets import QLabel
     assert any("2.10.0" in lab.text() for lab in d.findChildren(QLabel))
+
+
+def test_restart_closes_first_and_never_starts_twice(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMainWindow
+    QApplication.instance() or QApplication([])
+    from daedalus.ui import restart as RS
+
+    class W(QMainWindow):
+        ok = True
+
+        def closeEvent(self, e):
+            e.accept() if self.ok else e.ignore()
+    started, quit_ = [], []
+    monkeypatch.setattr(RS.QProcess, "startDetached", lambda *a: started.append(a) or True)
+    monkeypatch.setattr(RS, "hard_quit", lambda *a: quit_.append(1))
+    a, b = W(), W()
+    a.show()
+    b.show()
+    b.ok = False                                         # e.g. "Save changes?" → Cancel
+    assert not RS.restart(a) and not started and not quit_ and a.isVisible()
+    b.ok = True
+    monkeypatch.setattr(RS.sys, "argv", ["daedalus", "--only", "inventory"])
+    assert RS.restart(a) and not a.isVisible() and not b.isVisible() and quit_ == [1]
+    exe, args, cwd = started[0]
+    assert args == ["-m", "daedalus", "--only", "inventory"] and os.path.isdir(cwd)
+
+
+def test_helper_leaves_files_alone_if_daedalus_stays_open(tmp_path):
+    t = _install(tmp_path)
+    stage = tmp_path / "stage"
+    (stage / "daedalus").mkdir(parents=True)
+    (stage / "daedalus" / "__init__.py").write_text('__version__ = "2.10.0"\n')
+    script = tmp_path / "apply_update.py"
+    script.write_text(U.HELPER.replace("range(3600)", "range(2)"))      # don't wait 30 min in a test
+    import inspect
+    args = {"pid": os.getpid(), "stage": str(stage), "target": str(t), "old": "2.9.0", "new": "2.10.0",
+            "commit": "", "apply_src": inspect.getsource(U._apply), "python": sys.executable,
+            "python_gui": sys.executable, "relaunch": True, "relaunch_args": []}
+    subprocess.run([sys.executable, "-I", str(script), json.dumps(args)], check=True, timeout=60)
+    assert "not applied" in (t / ".update" / "last-update.log").read_text()
+    assert '2.9.0' in (t / "daedalus" / "__init__.py").read_text()

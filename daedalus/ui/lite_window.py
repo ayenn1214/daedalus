@@ -92,10 +92,6 @@ class LiteWindow(QMainWindow):
 
     def switch_theme(self, mode):
         """Save the theme; colours are read at start-up, so offer a restart."""
-        import sys
-
-        from PySide6.QtCore import QProcess
-
         from . import theme
         if mode == theme.MODE:
             return
@@ -104,11 +100,8 @@ class LiteWindow(QMainWindow):
                 != QMessageBox.Yes:
             self.statusBar().showMessage(f"{theme.THEMES[mode]} will be used next time", 8000)
             return
-        if self.close():
-            argv = list(getattr(sys, "orig_argv", [sys.executable, "-m", "daedalus"]))
-            QProcess.startDetached(argv[0], argv[1:])
-            from PySide6.QtWidgets import QApplication
-            QApplication.quit()
+        from . import restart as RS
+        RS.restart(self)
 
     def _needs_3d(self, what):
         if QMessageBox.question(self, what, f"{what} needs the 3D workspace. Open it now?") == QMessageBox.Yes:

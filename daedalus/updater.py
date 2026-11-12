@@ -251,23 +251,33 @@ HELPER = r'''
 import json, os, subprocess, sys, time
 args = json.loads(sys.argv[1])
 pid = args["pid"]
-for _ in range(600):                                     # wait for Daedalus to close (≤ 5 min)
+alive = True
+for _ in range(3600):                                    # wait for Daedalus to close (≤ 30 min)
     try:
         if os.name == "nt":
             import ctypes
             h = ctypes.windll.kernel32.OpenProcess(0x100000, False, pid)
             if not h:
+                alive = False
                 break
             r = ctypes.windll.kernel32.WaitForSingleObject(h, 500)
             ctypes.windll.kernel32.CloseHandle(h)
             if r == 0:
+                alive = False
                 break
         else:
             os.kill(pid, 0)
             time.sleep(0.5)
     except OSError:
+        alive = False
         break
+os.makedirs(os.path.join(args["target"], ".update"), exist_ok=True)
 log = open(os.path.join(args["target"], ".update", "last-update.log"), "w", encoding="utf-8")
+if alive:                                                # never swap files under a running Daedalus
+    log.write("Daedalus didn't close within 30 min — update not applied\n")
+    log.close()
+    sys.exit(0)
+time.sleep(1.0)                                          # let Windows release file handles
 try:
     ns = {}
     exec(args["apply_src"], ns)
@@ -281,9 +291,15 @@ try:
     log.write("ok\n")
 except Exception as e:
     log.write("FAILED: %r\n" % (e,))
-log.close()
 if args.get("relaunch"):
-    subprocess.Popen([args["python_gui"], "-m", "daedalus", *args["relaunch_args"]], cwd=args["target"])
+    try:
+        flags = 0x00000008 | 0x00000200 if os.name == "nt" else 0     # DETACHED_PROCESS | NEW_PROCESS_GROUP
+        subprocess.Popen([args["python_gui"], "-m", "daedalus", *args["relaunch_args"]], cwd=args["target"],
+                         creationflags=flags, start_new_session=os.name != "nt", close_fds=True)
+        log.write("restarted\n")
+    except Exception as e:
+        log.write("RESTART FAILED: %r\n" % (e,))
+log.close()
 '''
 
 
