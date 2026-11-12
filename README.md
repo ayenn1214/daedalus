@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.0</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.1</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -416,7 +416,8 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
-| **3.0.0** | **DIMS (Daedalus Inventory Management System) as an MRP-lite:** part-number registry (C10/C20/C30, P00–P04, 1000-001), item profiles with vendor options and lead times, BOM workbench with raw material and finishing, job orders split into one PO draft per vendor, kits and pick lists, material needs, time-phased incoming / projected stock / order log · team server on Supabase (per-record sync, roles, audit trail) · weekly Excel backup reminder · analytics (trends, cost, vendor prices, production history) · binning list · discontinued parts · MFG revision check · part thumbnails · Icarus inside DIMS · auto-update from GitHub · startup modules (3D / sim / drawings / inventory) · bug reports |
+| **3.0.1** | Vendors: shop categories (Manufacturing/Machining, Parts Supplier, Raw Material, One-Stop …) and status, second contact / phone, area, full company name; every category shows on the Vendors tab; vendor import matches existing short names |
+| 3.0.0 | **DIMS (Daedalus Inventory Management System) as an MRP-lite:** part-number registry (C10/C20/C30, P00–P04, 1000-001), item profiles with vendor options and lead times, BOM workbench with raw material and finishing, job orders split into one PO draft per vendor, kits and pick lists, material needs, time-phased incoming / projected stock / order log · team server on Supabase (per-record sync, roles, audit trail) · weekly Excel backup reminder · analytics (trends, cost, vendor prices, production history) · binning list · discontinued parts · MFG revision check · part thumbnails · Icarus inside DIMS · auto-update from GitHub · startup modules (3D / sim / drawings / inventory) · bug reports |
 | 2.9.0 | Unit systems (SI, US customary, construction ft-in), any-unit input, unit converter · Measure panel (points, entities, bodies) · HSS builder (AISC, CSA, EN, custom) · cut-list weights |
 | 2.8.2 | Speed: edits on large models 6–15× faster (300 parts: edit 1.34 s → 0.09 s, undo 1.35 s → 0.10 s), redraw 230 → 25 ms, faster start-up |
 | 2.8.1 | Design Data: 27 calculators + searchable handbook library |
