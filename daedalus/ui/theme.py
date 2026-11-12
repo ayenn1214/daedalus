@@ -17,13 +17,14 @@ def _mode() -> str:
             m = QSettings("Daedalus", "Daedalus").value("ui/theme", "graphite") or "graphite"
         except Exception:  # noqa: BLE001
             m = "graphite"
-    return m if m in ("graphite", "black") else "graphite"
+    return m if m in THEMES else "graphite"
 
 
+THEMES = {"graphite": "Graphite", "black": "Black", "light": "Light", "rangate": "Rangate Blue",
+          "rangate_light": "Rangate Blue Light", "midnight": "Midnight"}
 MODE = _mode()
-THEMES = {"graphite": "Graphite", "black": "Black"}
 
-if MODE == "black":
+if MODE in ("black", "midnight"):
     # pure black surfaces; every colour (accent, status, selection, plots, parts) kept
     ACCENT = "#0A3A36"        # deep teal — fills (primary buttons, checked boxes, hub disc)
     ACCENT_HOVER = "#0F4F49"  # fill hover
@@ -121,6 +122,49 @@ else:
     DOODLE_PAPER, DOODLE_GRID, DOODLE_INK, DOODLE_HINT = "#f3f0e8", "#e4dfd2", "#2b2b2b", "#9a9384"
     THUMB_BG = ((0.92, 0.93, 0.95), (0.74, 0.77, 0.81))
     THUMB_BODY, THUMB_EDGE = (0.72, 0.75, 0.80), (0.12, 0.13, 0.15)
+
+# ---------------------------------------------------------------- more themes (built on graphite / black above)
+_LIGHT = dict(
+    BG="#eef0f3", PANEL="#f7f8fa", PANEL_2="#ffffff", RAISED="#e3e7ec", INPUT="#ffffff", BORDER="#c9d0d8",
+    BORDER_SOFT="#dde2e8", TEXT="#1d2329", MUTED="#5d6874", DIM="#8a949f", ICON="#3a444f", ERROR="#c93c37",
+    OK="#2f8a3a", WARN="#9a6f00", INFO="#2f6fb3", PURPLE="#7a4fc4", ROW_ALT="#f1f3f6", SCROLL="#c3cad2",
+    SCROLL_HOVER="#a8b1bb", HOVER_BORDER="#aab3bd",
+    ACCENT="#0F6E64", ACCENT_HOVER="#138276", ACCENT_SOFT="#d5ede9", ACCENT_LINE="#138276", ACCENT_TEXT="#0B5E55",
+    ON_ACCENT="#ffffff",
+    VIEW_BG_TOP=(0.98, 0.98, 0.99), VIEW_BG_BOTTOM=(0.85, 0.88, 0.91), BODY_COLOR=(0.70, 0.72, 0.75),
+    EDGE_COLOR=(0.12, 0.13, 0.15), VIEW_TEXT=(0.12, 0.14, 0.16), VIEW_GHOST=(0.45, 0.48, 0.52),
+    VIEW_LINES=(0.15, 0.16, 0.2),
+    SK_BG="#ffffff", SK_GRID="#eef1f4", SK_GRID_MAJOR="#dde2e8", SK_AXIS="#b7c0ca", SK_DEFINED="#1d2329",
+    SK_CONSTR="#7d8590", SK_SEL="#1f7ae0", SK_HOVER="#4fa3ff", SK_DIM="#1f5fae", SK_UNDER="#9aa4ae",
+    SK_BADGE="#3a444f", SK_BADGE_BG="#eef0f3", SK_GUIDE="#c98a00", SK_RUBBER=(31, 122, 224, 30),
+    DRAW_BG="#ffffff", DRAW_TEXT="#1d2329", DRAW_INVERT=False,
+    DOODLE_PAPER="#ffffff", DOODLE_GRID="#e8ebef", DOODLE_INK="#1d2329", DOODLE_HINT="#8a949f",
+    THUMB_BG=((0.97, 0.98, 0.99), (0.84, 0.87, 0.90)), THUMB_BODY=(0.72, 0.75, 0.80), THUMB_EDGE=(0.12, 0.13, 0.15))
+_BLUE = dict(ACCENT="#1B4F9C", ACCENT_HOVER="#2160B8", ACCENT_LINE="#3A74C8", ON_ACCENT="#ffffff",
+             SKETCH_COLOR=(0.17, 0.42, 0.78), SELECT_COLOR=(0.25, 0.52, 0.90))
+_EXTRA = {
+    "light": _LIGHT,
+    "rangate_light": {**_LIGHT, **_BLUE, "ACCENT_SOFT": "#dbe6f6", "ACCENT_TEXT": "#1A4A91"},
+    "rangate": {**_BLUE, "ACCENT_SOFT": "#172E52", "ACCENT_LINE": "#4A83D6", "ACCENT_TEXT": "#8FB8F0",
+                "ON_ACCENT": "#EEF4FF", "BG": "#141b26", "PANEL": "#1a2331", "PANEL_2": "#212c3c",
+                "RAISED": "#283546", "INPUT": "#161e2a", "BORDER": "#33425a", "BORDER_SOFT": "#263246",
+                "ROW_ALT": "#1d2737", "SCROLL": "#3a4a62", "SCROLL_HOVER": "#4d6080", "HOVER_BORDER": "#47597a",
+                "MUTED": "#93a1b5", "DIM": "#647389", "SK_BG": "#121923", "SK_GRID": "#1a2331",
+                "SK_GRID_MAJOR": "#223047", "SK_AXIS": "#36486a", "SK_BADGE_BG": "#1f2a3b",
+                "DRAW_BG": "#56647a", "VIEW_BG_TOP": (0.84, 0.88, 0.93), "VIEW_BG_BOTTOM": (0.52, 0.59, 0.69)},
+    "midnight": {"ACCENT": "#3B2F8F", "ACCENT_HOVER": "#4A3CAB", "ACCENT_SOFT": "#1F1A4A", "ACCENT_LINE": "#7C6CF0",
+                 "ACCENT_TEXT": "#B3A9FF", "ON_ACCENT": "#EEEBFF", "BG": "#0b0e18", "PANEL": "#111627",
+                 "PANEL_2": "#171e35", "RAISED": "#1e2744", "INPUT": "#0d1120", "BORDER": "#2a3456",
+                 "BORDER_SOFT": "#1b2340", "ROW_ALT": "#131a2d", "SCROLL": "#2f3a60", "SCROLL_HOVER": "#45527f",
+                 "HOVER_BORDER": "#3a4772", "SK_BG": "#0b0e18", "SK_GRID": "#121829", "SK_GRID_MAJOR": "#1a2238",
+                 "SK_AXIS": "#33406a", "SK_BADGE_BG": "#161c30", "SKETCH_COLOR": (0.49, 0.42, 0.94),
+                 "SELECT_COLOR": (0.60, 0.55, 1.0), "VIEW_BG_TOP": (0.09, 0.10, 0.18),
+                 "VIEW_BG_BOTTOM": (0.02, 0.02, 0.06), "THUMB_BG": ((0.09, 0.10, 0.18), (0.02, 0.02, 0.06))},
+}
+if MODE in _EXTRA:
+    globals().update(_EXTRA[MODE])
+    SK_FREE, SK_BAD = ACCENT_LINE, ERROR
+LIGHT = MODE in ("light", "rangate_light")
 
 FONT = "'Segoe UI Variable Text', 'Segoe UI', 'Inter', 'Helvetica Neue', 'Arial'"
 

@@ -67,6 +67,18 @@ class LiteWindow(QMainWindow):
             e = mb.addMenu("&Edit")
             act(e, "Undo", lambda: self.doc.undo() and self.drawing_page.refresh(), QKeySequence.Undo)
             act(e, "Redo", lambda: self.doc.redo() and self.drawing_page.refresh(), QKeySequence.Redo)
+        vw = mb.addMenu("&View")
+        from PySide6.QtGui import QActionGroup
+
+        from . import theme as _theme
+        tm = vw.addMenu("Theme")
+        grp = QActionGroup(self)
+        for key, label in _theme.THEMES.items():
+            a_ = tm.addAction(label)
+            a_.setCheckable(True)
+            a_.setChecked(key == _theme.MODE)
+            grp.addAction(a_)
+            a_.triggered.connect(lambda _=False, k=key: self.switch_theme(k))
         h = mb.addMenu("&Help")
         act(h, "Startup modules…", self.startup_modules)
         act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
@@ -77,6 +89,26 @@ class LiteWindow(QMainWindow):
             return self.inventory_page.report_bug()
         from .bug_report import BugReportDialog
         BugReportDialog(self, context={"Area": MOD.describe(self.mods)}).exec()
+
+    def switch_theme(self, mode):
+        """Save the theme; colours are read at start-up, so offer a restart."""
+        import sys
+
+        from PySide6.QtCore import QProcess
+
+        from . import theme
+        if mode == theme.MODE:
+            return
+        theme.set_mode(mode)
+        if QMessageBox.question(self, "Theme", f"{theme.THEMES[mode]} applies after a restart.\n\nRestart now?") \
+                != QMessageBox.Yes:
+            self.statusBar().showMessage(f"{theme.THEMES[mode]} will be used next time", 8000)
+            return
+        if self.close():
+            argv = list(getattr(sys, "orig_argv", [sys.executable, "-m", "daedalus"]))
+            QProcess.startDetached(argv[0], argv[1:])
+            from PySide6.QtWidgets import QApplication
+            QApplication.quit()
 
     def _needs_3d(self, what):
         if QMessageBox.question(self, what, f"{what} needs the 3D workspace. Open it now?") == QMessageBox.Yes:
