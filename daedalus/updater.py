@@ -197,7 +197,18 @@ def download(info: dict, token: str | None = None, progress=None) -> Path:
 def apply_now(stage: Path, target: Path | None = None, partial: bool = False) -> dict:
     """Swap the staged files into the install (used by the helper after Daedalus has closed; also by tests).
     Replaced / removed files go to .update/backup-<old version>. Returns {copied, removed, requirements_changed}."""
-    return _apply(str(stage), str(target or root()), __version__, partial)
+    target = Path(target or root())
+    return _apply(str(stage), str(target), installed_version(target), partial)
+
+
+def installed_version(target: Path) -> str:
+    """The version of the files in an install folder (its daedalus/__init__.py), else the running one."""
+    import re as _re
+    try:
+        m = _re.search(r'__version__\s*=\s*"([^"]+)"', (Path(target) / "daedalus" / "__init__.py").read_text())
+        return m.group(1) if m else __version__
+    except OSError:
+        return __version__
 
 
 def _apply(stage, target, old_version, partial=False):
