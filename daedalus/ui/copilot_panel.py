@@ -54,10 +54,11 @@ class _Worker(QThread):
     tool = Signal(str, str, str, bool)
     failed = Signal(str)
 
-    def __init__(self, copilot, prompt, state, bridge, images=None):
+    def __init__(self, copilot, prompt, state, bridge, images=None, documents=None):
         super().__init__()
         self.copilot, self.prompt, self.state, self.bridge = copilot, prompt, state, bridge
         self.images = images or []
+        self.documents = documents or []
 
     def _call(self, name, args):
         self.bridge.request.emit(name, args)          # blocks until GUI thread ran it
@@ -70,7 +71,7 @@ class _Worker(QThread):
                 self.prompt, self.state,
                 on_text=self.text.emit,
                 on_tool=lambda n, a, r, e: self.tool.emit(n, json.dumps(a), r, e),
-                images=self.images,
+                images=self.images, documents=self.documents,
             )
         except Exception as e:  # noqa: BLE001
             self.failed.emit(f"{e.__class__.__name__}: {e}")
@@ -95,6 +96,8 @@ class CopilotPanel(QWidget):
         self.worker: _Worker | None = None
         self._turn_checkpointed = False
         self._attached: list[tuple[str, bytes]] = []
+        self._docs: list[dict] = []                 # spreadsheets / PDFs (ai.attachments.describe)
+        self.setAcceptDrops(True)
         self.render_provider = None          # () -> [png bytes], set by the main window
         self._verify_rounds = 0
 
@@ -158,10 +161,11 @@ class CopilotPanel(QWidget):
         lay.addWidget(self.input)
 
         att = QHBoxLayout()
-        self.attach_btn = QPushButton("Image" if icons.available() else "📎 Image")
+        self.attach_btn = QPushButton("Attach" if icons.available() else "📎 Attach")
         self.attach_btn.setIcon(icons.icon("attach"))
         self.attach_btn.setObjectName("ghost")
-        self.attach_btn.setToolTip("Attach a photo / drawing / screenshot to model from (needs a vision model)")
+        self.attach_btn.setToolTip("Attach a picture (needs a vision model), an Excel / CSV sheet or a PDF — or drop "
+                                   "files onto this panel")
         self.attach_btn.clicked.connect(self.attach_image)
         self.attach_lbl = QLabel("")
         self.attach_lbl.setObjectName("muted")
@@ -172,7 +176,7 @@ class CopilotPanel(QWidget):
         self.clear_att_btn.setIcon(icons.icon("close"))
         self.clear_att_btn.setObjectName("ghost")
         self.clear_att_btn.setFixedWidth(28)
-        self.clear_att_btn.setToolTip("Remove attached images")
+        self.clear_att_btn.setToolTip("Remove attachments")
         self.clear_att_btn.clicked.connect(self.clear_attachments)
         self.clear_att_btn.hide()
         att.addWidget(self.attach_btn)
@@ -370,20 +374,50 @@ class CopilotPanel(QWidget):
 
     # ----------------------------------------------------------- images
     def attach_image(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Attach image", "", "Images (*.png *.jpg *.jpeg *.webp)")
-        if path:
-            with open(path, "rb") as f:
-                self.attach_bytes(os.path.basename(path), f.read())
+        from ..ai.attachments import FILTER
+        paths, _ = QFileDialog.getOpenFileNames(self, "Attach", "", FILTER)
+        for p in paths:
+            self.attach_path(p)
+
+    def attach_path(self, path: str) -> bool:
+        """Picture → sent as an image; Excel / CSV / PDF → read into the prompt (PDFs also go to Claude whole)."""
+        from ..ai import attachments as AT
+        try:
+            d = AT.describe(path)
+        except Exception as e:  # noqa: BLE001
+            self._append("Icarus", html.escape(f"Couldn't read {os.path.basename(path)}: {e}"), theme.ERROR)
+            return False
+        if d["kind"] == "image":
+            self.attach_bytes(d["name"], d["data"])
+        else:
+            self._docs.append(d)
+            self._show_attached()
+        return True
 
     def attach_bytes(self, name: str, data: bytes):
         self._attached.append((name, data))
-        self.attach_lbl.setText("Attached: " + " · ".join(n for n, _ in self._attached))
-        self.clear_att_btn.show()
+        self._show_attached()
+
+    def _show_attached(self):
+        names = [n for n, _ in self._attached] + [d["name"] for d in self._docs]
+        self.attach_lbl.setText("Attached: " + " · ".join(names) if names else "")
+        self.clear_att_btn.setVisible(bool(names))
 
     def clear_attachments(self):
         self._attached.clear()
-        self.attach_lbl.setText("")
-        self.clear_att_btn.hide()
+        self._docs.clear()
+        self._show_attached()
+
+    def dragEnterEvent(self, e):
+        from ..ai.attachments import kind_of
+        if e.mimeData().hasUrls() and any(kind_of(u.toLocalFile()) for u in e.mimeData().urls()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        for u in e.mimeData().urls():
+            if u.toLocalFile():
+                self.attach_path(u.toLocalFile())
+        e.acceptProposedAction()
 
     def ask_with_image(self, prompt: str, png: bytes, label="doodle.png"):
         """Entry point for the Doodle page: prompt + image, then render check."""
@@ -412,8 +446,8 @@ class CopilotPanel(QWidget):
             self.copilot.messages = old
             self._cp_sig = want
 
-    def _start(self, prompt, images, show=True):
-        self.worker = _Worker(self.copilot, prompt, self.executor.model_state(), self.bridge, images)
+    def _start(self, prompt, images, show=True, documents=None):
+        self.worker = _Worker(self.copilot, prompt, self.executor.model_state(), self.bridge, images, documents)
         who = f"Icarus · {self.who()}"
         self.worker.text.connect(lambda t: self._append(who, html.escape(t).replace("\n", "<br>")))
         self.worker.tool.connect(self._on_tool)
@@ -447,15 +481,29 @@ class CopilotPanel(QWidget):
         self._ensure_copilot(key)
         self.input.clear()
         images = [d for _, d in self._attached]
-        names = [n for n, _ in self._attached]
+        names = [n for n, _ in self._attached] + [d["name"] for d in self._docs]
+        docs = list(self._docs)
         self.clear_attachments()
+        pdfs = []
+        if docs:
+            from ..ai.attachments import prompt_block
+            att = getattr(self.executor, "attachments", None)
+            if isinstance(att, dict):
+                att.update({d["name"]: d["path"] for d in docs})
+            blocks = []
+            for d in docs:
+                if d["kind"] == "pdf" and self.kind() == "claude" and d["data"] and len(d["data"]) < 30_000_000:
+                    pdfs.append(d["data"])                 # Claude reads the PDF itself (scans, drawings too)
+                    d = {**d, "text": "(sent as a PDF document above)"}
+                blocks.append(prompt_block(d))
+            prompt = "\n\n".join(blocks) + "\n\n" + prompt
         self._append("You", html.escape(prompt) + (f'<br><span style="color:{theme.MUTED}">Attached: '
                                                     f'{html.escape(", ".join(names))}</span>' if names else ""))
         if self.doc is not None:
             self.doc.checkpoint()             # whole turn (incl. render check) = one undo step
         self._verify_rounds = 1 if images and self.verify_cb.isChecked() and self.render_provider else 0
         self.status.setText("")
-        self._start(prompt, images)
+        self._start(prompt, images, documents=pdfs)
 
     def _on_tool(self, name, args, result, err):
         try:

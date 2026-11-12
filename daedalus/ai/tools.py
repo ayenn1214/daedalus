@@ -664,7 +664,10 @@ class ToolExecutor:
     """Runs tool calls against a Document. No checkpoints: the caller groups
     a whole assistant turn into one undo step."""
 
+    attachments: dict = {}                        # replaced per instance below; files attached in the chat
+
     def __init__(self, doc: Document):
+        self.attachments = {}
         self.doc = doc
 
     def model_state(self) -> dict:
@@ -1078,6 +1081,7 @@ class ToolExecutor:
             self._dims_x = DimsToolExecutor(self._inv_store, lambda msg, undo=None: (
                 self.dims_page.commit(msg, undo) if getattr(self, "dims_page", None) is not None
                 else self._inv_store().save()))
+            self._dims_x.attachments = self.attachments
         return self._dims_x
 
     def _inventory(self, name, args, J):

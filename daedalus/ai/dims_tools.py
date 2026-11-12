@@ -199,6 +199,22 @@ DIMS_TOOLS += [
                     "record) and the parts it supplies with its price and part number.",
      "input_schema": {"type": "object", "properties": {"vendor": _S}, "required": ["vendor"]}},
 ]
+DIMS_TOOLS += [
+    {"name": "dims_read_file",
+     "description": "Read an attached Excel / CSV (rows as a table, numbered) or PDF (text by page). file = the "
+                    "attachment's name or full path. For long sheets read on with start / limit; sheet picks one.",
+     "input_schema": {"type": "object", "properties": {"file": _S, "sheet": _S, "start": _N, "limit": _N},
+                      "required": ["file"]}},
+    {"name": "dims_import_file",
+     "description": "Import an attached spreadsheet into DIMS. kind: vendors (vendor list) | prices (part number, "
+                    "vendor, price, vendor part #, lead) | parts (the master inventory columns: Type, Name, Part "
+                    "Number, Current Stock, …) | counts (part + counted qty — sets stock). apply=false (default) "
+                    "only previews what would change; show the user, then call again with apply=true when they "
+                    "agree.",
+     "input_schema": {"type": "object", "properties": {
+         "file": _S, "kind": {"type": "string", "enum": ["vendors", "prices", "parts", "counts"]}, "sheet": _S,
+         "apply": _B}, "required": ["file", "kind"]}},
+]
 DIMS_NAMES = {t["name"] for t in DIMS_TOOLS}
 
 DIMS_SYSTEM = """You are Icarus, the assistant inside DIMS — the Daedalus Inventory Management System a fabrication
@@ -213,6 +229,9 @@ orders, part orders, vendors and clients.
   undone from the toast in the app.
 - The user's role limits what can be saved (viewer: nothing; floor: stock movements only). If a change is refused,
   say so plainly.
+- Attached files arrive as <attachment> blocks (spreadsheets as numbered tables, PDFs as text or as the document
+  itself). Read more of a long sheet with dims_read_file. To bring a sheet into DIMS use dims_import_file — preview
+  first (apply=false), tell the user what would change, and apply only when they say so.
 - Reports (trends, cost analysis, vendor prices, production history, binning list, revision check) can be exported
   to Excel with dims_export — offer it when a table is long.
 - Fastener names follow the shop format, e.g. '5/8-11 UNC x 2" HHCS FT', 'M8 Hex Nut'.
@@ -257,6 +276,7 @@ class DimsToolExecutor:
     def __init__(self, store_fn: Callable, commit: Callable | None = None):
         self.store_fn = store_fn
         self.commit_fn = commit
+        self.attachments: dict = {}              # name → path of files attached in the chat
 
     @property
     def store(self):
@@ -734,6 +754,84 @@ class DimsToolExecutor:
         self._commit(f"{'Used' if mode == 'usage' else 'Received'} {qty:g} × {p['name']}",
                      lambda: (self.inv.undo_transaction(tx), self._commit("Undone")))
         return _j({"ok": True, "part": p["name"], "mode": mode, "qty": qty, "stock": M.num(p.get("currentStock"))})
+
+    # ------------------------------------------------------------ attached files
+    def _file(self, ref):
+        ref = str(ref or "").strip()
+        path = self.attachments.get(ref) or next((p for n, p in self.attachments.items() if n.lower() == ref.lower()),
+                                                 None) or ref
+        if not os.path.isfile(path):
+            raise LookupError(f"No attached file '{ref}'" + (f" — attached: {', '.join(self.attachments)}"
+                                                              if self.attachments else ""))
+        return path
+
+    def _dims_read_file(self, a):
+        from . import attachments as AT
+        path = self._file(a["file"])
+        if AT.kind_of(path) == "pdf":
+            return AT.pdf_text(path)
+        if AT.kind_of(path) != "sheet":
+            raise ValueError("Only spreadsheets and PDFs can be read here")
+        return AT.sheet_text(path, int(a.get("start") or 0), int(a.get("limit") or AT.MAX_ROWS), a.get("sheet"))
+
+    def _dims_import_file(self, a):
+        import copy
+
+        from . import attachments as AT
+        from ..inventory import mrp as R
+        path = self._file(a["file"])
+        rows = AT.read_rows(path, a.get("sheet"))
+        if not rows:
+            raise ValueError("No header row with column names found")
+        apply = bool(a.get("apply"))
+        real = self.inv
+        inv = real if apply else copy.deepcopy(real)
+        kind = a["kind"]
+        before = {p["id"]: M.num(p.get("currentStock")) for p in inv.parts}
+        out = {"kind": kind, "rows": len(rows), "columns": list(rows[0]), "applied": apply}
+        if kind == "vendors":
+            rep = []
+            added, updated = R.import_vendors(inv, rows, report=rep)
+            out.update(added=added, updated=updated,
+                       kept_existing=[{"vendor": v, "field": f, "kept": k, "sheet": x} for v, f, k, x in rep])
+        elif kind == "prices":
+            out.update(R.import_prices(inv, rows))
+        elif kind == "parts":
+            added, updated = inv.import_rows(rows)
+            out.update(added=added, updated=updated)
+        else:
+            changes, missing = [], []
+            for r in rows:
+                low = {str(k).strip().lower(): v for k, v in r.items()}
+                ref = next((low[k] for k in ("part number", "part no", "part #", "pn", "part", "name", "item",
+                                              "description") if low.get(k) not in (None, "")), None)
+                qty = next((low[k] for k in ("count", "counted", "qty", "quantity", "on hand", "stock",
+                                              "current stock") if low.get(k) not in (None, "")), None)
+                if ref is None or qty is None:
+                    continue
+                try:
+                    p = self._find_in(inv, str(ref))
+                except LookupError:
+                    missing.append(str(ref))
+                    continue
+                diff = M.num(qty) - M.num(p.get("currentStock"))
+                if diff:
+                    inv.record(p["id"], "receiving" if diff > 0 else "usage", abs(diff),
+                               f"Count from {os.path.basename(path)} (counted {M.num(qty):g})")
+                changes.append({"part": p["name"], "was": before.get(p["id"]), "now": M.num(qty)})
+            out.update(changed=[c for c in changes if c["was"] != c["now"]], unchanged=sum(
+                c["was"] == c["now"] for c in changes), not_found=missing)
+        if apply:
+            self._commit(f"Imported {kind} from {os.path.basename(path)}")
+        return _j(out)
+
+    def _find_in(self, inv, ref):
+        saved = self.store_fn
+        try:
+            self.store_fn = lambda: type("S", (), {"inv": inv})()
+            return self.find_part(ref)
+        finally:
+            self.store_fn = saved
 
     def _dims_count(self, a):
         p = self.find_part(a["part"])

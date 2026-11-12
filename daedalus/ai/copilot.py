@@ -156,8 +156,9 @@ class Copilot:
     def ask(self, prompt: str, model_state: dict | None = None,
             on_text: Callable[[str], None] = print,
             on_tool: Callable[[str, dict, str, bool], None] | None = None,
-            images: list[bytes] | None = None) -> str:
-        """`images`: PNG/JPEG bytes sent before the text (drawings, photos, renders)."""
+            images: list[bytes] | None = None, documents: list[bytes] | None = None) -> str:
+        """`images`: PNG/JPEG bytes sent before the text (drawings, photos, renders). `documents`: PDF bytes, read
+        by the model page by page (text, scans and drawings)."""
         import base64
         self._stop = False
         content = prompt
@@ -168,6 +169,9 @@ class Copilot:
             media = "image/jpeg" if img[:3] == b"\xff\xd8\xff" else "image/png"
             blocks.append({"type": "image", "source": {"type": "base64", "media_type": media,
                                                        "data": base64.b64encode(img).decode()}})
+        for doc in documents or []:
+            blocks.append({"type": "document", "source": {"type": "base64", "media_type": "application/pdf",
+                                                           "data": base64.b64encode(doc).decode()}})
         blocks.append({"type": "text", "text": content})
         if self.messages and self.messages[-1]["role"] == "user":
             # previous turn was stopped right after tool results — merge

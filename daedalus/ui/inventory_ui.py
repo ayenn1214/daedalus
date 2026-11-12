@@ -1,5 +1,5 @@
 """DIMS (Daedalus Inventory Management System) page — native Qt (dashboard, projects, production, locations, parts, vendors, clients,
-reorder, shortages, activity log, import / export)."""
+reorder (incl. project shortages), activity log, import / export)."""
 from __future__ import annotations
 
 import datetime as dt
@@ -237,7 +237,7 @@ class InventoryPage(QWidget):
 
     TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
             ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Clients"),
-            ("reorder", "Reorder"), ("shortages", "Shortages"), ("engineering", "Engineering"),
+            ("reorder", "Reorder"), ("engineering", "Engineering"),
             ("timephased", "Time-Phased"), ("analytics", "Analytics"), ("log", "Activity Log"),
             ("sync", "Import / Export")]
 
@@ -259,7 +259,7 @@ class InventoryPage(QWidget):
         from .inventory_extras_ui import ThumbLoader
         self.thumbs = ThumbLoader(self)
         self.thumbs.ready.connect(lambda _src: self._thumb_refresh())
-        self.reorder_filter = {"project": "all", "vendor": "all"}
+        self.reorder_filter = {"project": "all", "vendor": "all", "why": "all"}
         self.sel_parts: set = set()
         self.sel_reorder: set = set()
         self.collapsed: set = set()
@@ -430,6 +430,9 @@ class InventoryPage(QWidget):
             self._sync_status()
 
     def goto(self, key):
+        if key == "shortages":                       # merged into Reorder: show only the project shortages
+            self.reorder_filter["why"] = "short"
+            key = "reorder"
         self.tabs.setCurrentIndex([k for k, _ in self.TABS].index(key))
 
     def current_key(self):
@@ -1258,9 +1261,21 @@ class InventoryPage(QWidget):
             vs.setCurrentIndex(max(0, vs.findData(f["vendor"])))
             vs.currentIndexChanged.connect(lambda _i: (f.__setitem__("vendor", vs.currentData()),
                                                        self.refresh_current()))
+            short = {r["part"]["id"]: r for r in inv.shortages()}
+            ws = QComboBox()
+            for k, lab in (("all", "All reasons"), ("short", "Short for projects"), ("low", "Below reorder point")):
+                ws.addItem(lab, k)
+            ws.setCurrentIndex(max(0, ws.findData(f.get("why", "all"))))
+            ws.currentIndexChanged.connect(lambda _i: (f.__setitem__("why", ws.currentData()),
+                                                       self.refresh_current()))
             lst = inv.reorder_list(f["project"], f["vendor"])
+            if f.get("why") == "short":
+                lst = [p for p in lst if p["id"] in short]
+            elif f.get("why") == "low":
+                lst = [p for p in lst if M.num(p.get("currentStock")) <= M.num(p.get("reorderPoint"))]
             row.addWidget(ps)
             row.addWidget(vs)
+            row.addWidget(ws)
             row.addWidget(_muted(f"{len(lst)} of {len(all_low)} parts", False), 1)
             row.addWidget(_btn("Export All (per project)", self.export_reorder_by_project))
             row.addWidget(_btn("Export List (.xlsx)", self.export_reorder, primary=True))
@@ -1300,16 +1315,26 @@ class InventoryPage(QWidget):
                     sl.addWidget(_muted("—", False))
                 name = QTableWidgetItem(p["name"])
                 name.setToolTip(inv.spec_line(p))
-                rows.append([cb, name, M.TYPE_LABEL.get(p.get("type"), ""),
+                is_short, is_low = p["id"] in short, M.num(p.get("currentStock")) <= M.num(p.get("reorderPoint"))
+                why = QTableWidgetItem(" + ".join(x for x, on in (("Short", is_short), ("Below RP", is_low)) if on))
+                why.setForeground(QBrush(QColor(theme.ERROR if is_short else theme.WARN)))
+                why.setToolTip("Short = the projects it's on need more than is in stock; Below RP = at or below its "
+                               "reorder point")
+                comp = "\n".join(f"{inv.project_name(c['projectId']) or '(deleted project)'} needs {c['needed']:g}"
+                                 for c in short[p["id"]]["contributing"]) if is_short else ""
+                rows.append([cb, name, why, M.TYPE_LABEL.get(p.get("type"), ""),
                              _num_item(f"{M.num(p.get('currentStock')):g} {p.get('unit') or ''}", theme.ERROR),
                              _num_item(M.num(p.get("reorderPoint"))),
                              _num_item(need if need else "—", theme.ERROR if need > M.num(p.get("currentStock")) else None),
-                             _num_item(sq), sup_w, _num_item(M.fmt_money(sq * unit)),
+                             _num_item(sq), comp, sup_w, _num_item(M.fmt_money(sq * unit)),
                              _actions(_small("Order", lambda _=False, pp=p, q=sq: self.order_part(pp, q)),
                                       _small("Mark Received", lambda _=False, i=p["id"]: self.move(i, "receiving")))])
             nh = "Needed (this project)" if f["project"] != "all" else "Needed (projects)"
-            v.addWidget(self.table(["", "Part", "Type", "On Hand", "Reorder Pt", nh, "Suggested Qty", "Suppliers",
-                                    "Est. Cost", ""], rows, 7) if rows else _muted("No parts match this filter."))
+            v.addWidget(_muted("Everything to buy: parts short for their projects (combined demand of every project "
+                               "they're on) and parts at or below their reorder point. Suggested qty covers both."))
+            v.addWidget(self.table(["", "Part", "Why", "Type", "On Hand", "Reorder Pt", nh, "Suggested Qty",
+                                    "Competing Projects", "Suppliers", "Est. Cost", ""], rows, 9) if rows
+                        else _muted("No parts match this filter."))
         else:
             v.addWidget(_muted("Nothing to reorder — every part is above its reorder point and covers its projects."))
         oo = inv.open_part_orders()
@@ -1401,38 +1426,6 @@ class InventoryPage(QWidget):
         if p:
             self.settings.setValue("inventory/export_dir", str(Path(p).parent))
         return p
-
-    # ============================================================ shortages
-    def build_shortages(self):
-        inv = self.inv
-        w, v = self._page()
-        rows = inv.shortages()
-        if not rows:
-            v.addWidget(_muted("No cross-project shortages — every part's combined demand across its projects is "
-                               "covered by stock."))
-        else:
-            v.addWidget(_muted("Total demand for a part across every project it's on, compared with stock — catches "
-                               "projects that each look fine alone but compete for the same parts."))
-            t = []
-            for r in rows:
-                p = r["part"]
-                rp = inv.part(p.get("replacementId")) if p.get("discontinued") else None
-                name = QTableWidgetItem(p["name"] + ("  (discontinued" + (f" → use {rp['name']}" if rp else "") + ")"
-                                                     if p.get("discontinued") else ""))
-                if p.get("discontinued"):
-                    name.setForeground(QBrush(QColor(theme.WARN)))
-                name.setToolTip(inv.spec_line(p))
-                comp = "\n".join(f"{inv.project_name(c['projectId']) or '(deleted project)'} needs {c['needed']:g}"
-                                 for c in r["contributing"])
-                t.append([name, _num_item(f"{M.num(p.get('currentStock')):g} {p.get('unit') or ''}"),
-                          _num_item(r["totalNeeded"]), _num_item(f"−{r['short']:g}", theme.ERROR, True), comp,
-                          _actions(_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
-                                   _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
-                                   _small("Order", lambda _=False, pp=p, s=r["short"]: self.order_part(pp, int(s))),
-                                   _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i)))])
-            v.addWidget(self.table(["Part", "On Hand", "Total Needed", "Short", "Competing Projects", ""], t, 4))
-        v.addStretch(1)
-        return w
 
     # ================================================================= log
     def log_table(self, entries):

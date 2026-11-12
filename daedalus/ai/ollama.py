@@ -199,7 +199,8 @@ class OllamaCopilot:
     def ask(self, prompt: str, model_state: dict | None = None,
             on_text: Callable[[str], None] = print,
             on_tool: Callable[[str, dict, str, bool], None] | None = None,
-            images: list[bytes] | None = None) -> str:
+            images: list[bytes] | None = None, documents: list[bytes] | None = None) -> str:
+        """documents (PDF bytes) aren't sent — local models get the PDF's extracted text in the prompt."""
         self._stop = False
         content = prompt
         if model_state is not None:

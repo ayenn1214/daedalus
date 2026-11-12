@@ -605,9 +605,9 @@ class MainWindow(QMainWindow):
             ("Send BOM", "⇢", "Add this design's BOM to an inventory project", self.send_bom_to_inventory),
             ("Stock check", "☑", "BOM with stock, bin locations and shortfalls", self.bom),
             (None, None, None, None),
-            ("Reorder", "⚠", "Parts at or below their reorder point", lambda: (self.show_inventory(),
+            ("Reorder", "⚠", "Parts to buy: short for projects or at their reorder point", lambda: (self.show_inventory(),
                                                                               self.inventory_page.goto("reorder"))),
-            ("Shortages", "▼", "Demand across all projects vs stock", lambda: (self.show_inventory(),
+            ("Shortages", "▼", "Parts short for their projects (Reorder, filtered)", lambda: (self.show_inventory(),
                                                                               self.inventory_page.goto("shortages"))),
         ]), "Inventory")
         tabs.addTab(tab([
