@@ -301,6 +301,11 @@ begin
   return total;
 end $$;
 
+-- functions: trigger functions are never callable through the API; dims_role only by signed-in users (policies)
+revoke all on function public.dims_apply_stock(), public.dims_audit_row(), public.dims_new_user(),
+  public.dims_touch(), public.dims_stamp() from public, anon, authenticated;
+revoke all on function public.dims_role() from public, anon;
+grant execute on function public.dims_role() to authenticated;
 revoke all on function public.dims_import_app_storage() from public, anon;
 grant execute on function public.dims_import_app_storage() to authenticated;
 
