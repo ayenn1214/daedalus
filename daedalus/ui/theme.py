@@ -21,10 +21,10 @@ def _mode() -> str:
 
 
 THEMES = {"graphite": "Graphite", "black": "Black", "light": "Light", "rangate": "Rangate Blue",
-          "rangate_light": "Rangate Blue Light", "midnight": "Midnight"}
+          "rangate_light": "Rangate Blue Light", "midnight": "Midnight", "sith": "Sith"}
 MODE = _mode()
 
-if MODE in ("black", "midnight"):
+if MODE in ("black", "midnight", "sith"):
     # pure black surfaces; every colour (accent, status, selection, plots, parts) kept
     ACCENT = "#0A3A36"        # deep teal — fills (primary buttons, checked boxes, hub disc)
     ACCENT_HOVER = "#0F4F49"  # fill hover
@@ -140,12 +140,14 @@ _LIGHT = dict(
     DRAW_BG="#ffffff", DRAW_TEXT="#1d2329", DRAW_INVERT=False,
     DOODLE_PAPER="#ffffff", DOODLE_GRID="#e8ebef", DOODLE_INK="#1d2329", DOODLE_HINT="#8a949f",
     THUMB_BG=((0.97, 0.98, 0.99), (0.84, 0.87, 0.90)), THUMB_BODY=(0.72, 0.75, 0.80), THUMB_EDGE=(0.12, 0.13, 0.15))
-_BLUE = dict(ACCENT="#1B4F9C", ACCENT_HOVER="#2160B8", ACCENT_LINE="#3A74C8", ON_ACCENT="#ffffff",
-             SKETCH_COLOR=(0.17, 0.42, 0.78), SELECT_COLOR=(0.25, 0.52, 0.90))
+# Rangate blue = RAL 5003 Sapphire blue (#1F3855)
+_BLUE = dict(ACCENT="#1F3855", ACCENT_HOVER="#284770", ACCENT_LINE="#2E5283", ON_ACCENT="#ffffff",
+             SKETCH_COLOR=(0.18, 0.32, 0.51), SELECT_COLOR=(0.30, 0.47, 0.69))
 _EXTRA = {
     "light": _LIGHT,
-    "rangate_light": {**_LIGHT, **_BLUE, "ACCENT_SOFT": "#dbe6f6", "ACCENT_TEXT": "#1A4A91"},
-    "rangate": {**_BLUE, "ACCENT_SOFT": "#172E52", "ACCENT_LINE": "#4A83D6", "ACCENT_TEXT": "#8FB8F0",
+    "rangate_light": {**_LIGHT, **_BLUE, "ACCENT_SOFT": "#dce4ef", "ACCENT_TEXT": "#1F3855"},
+    "rangate": {**_BLUE, "ACCENT_SOFT": "#13233A", "ACCENT_LINE": "#4C78B0", "ACCENT_TEXT": "#9DBBE3",
+                "SKETCH_COLOR": (0.30, 0.47, 0.69), "SELECT_COLOR": (0.42, 0.60, 0.84),
                 "ON_ACCENT": "#EEF4FF", "BG": "#141b26", "PANEL": "#1a2331", "PANEL_2": "#212c3c",
                 "RAISED": "#283546", "INPUT": "#161e2a", "BORDER": "#33425a", "BORDER_SOFT": "#263246",
                 "ROW_ALT": "#1d2737", "SCROLL": "#3a4a62", "SCROLL_HOVER": "#4d6080", "HOVER_BORDER": "#47597a",
@@ -160,6 +162,15 @@ _EXTRA = {
                  "SK_AXIS": "#33406a", "SK_BADGE_BG": "#161c30", "SKETCH_COLOR": (0.49, 0.42, 0.94),
                  "SELECT_COLOR": (0.60, 0.55, 1.0), "VIEW_BG_TOP": (0.09, 0.10, 0.18),
                  "VIEW_BG_BOTTOM": (0.02, 0.02, 0.06), "THUMB_BG": ((0.09, 0.10, 0.18), (0.02, 0.02, 0.06))},
+    "sith": {"ACCENT": "#7A0E12", "ACCENT_HOVER": "#9A1218", "ACCENT_SOFT": "#2A0607", "ACCENT_LINE": "#D3262E",
+             "ACCENT_TEXT": "#FF6B6B", "ON_ACCENT": "#FFECEC", "BG": "#050404", "PANEL": "#0d0a0a",
+             "PANEL_2": "#161010", "RAISED": "#201616", "INPUT": "#080606", "BORDER": "#3a1e1f",
+             "BORDER_SOFT": "#221313", "ROW_ALT": "#110c0c", "SCROLL": "#3d2224", "SCROLL_HOVER": "#5a2f32",
+             "HOVER_BORDER": "#5a2a2c", "MUTED": "#a39393", "DIM": "#6e5b5b", "SK_BG": "#050404",
+             "SK_GRID": "#140c0c", "SK_GRID_MAJOR": "#1f1212", "SK_AXIS": "#4a2224", "SK_BADGE_BG": "#1a0f0f",
+             "SKETCH_COLOR": (0.83, 0.15, 0.18), "SELECT_COLOR": (1.0, 0.28, 0.30), "VIEW_HILITE": (1.0, 0.35, 0.35),
+             "VIEW_BG_TOP": (0.12, 0.04, 0.05), "VIEW_BG_BOTTOM": (0.0, 0.0, 0.0),
+             "THUMB_BG": ((0.12, 0.04, 0.05), (0.0, 0.0, 0.0))},
 }
 if MODE in _EXTRA:
     globals().update(_EXTRA[MODE])
