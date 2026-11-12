@@ -290,6 +290,8 @@ class InventoryPage(QWidget):
                                "trends, orders — or have it record changes for you")
         self.icarus_btn.setCheckable(True)
         h.addWidget(self.icarus_btn)
+        h.addWidget(_btn("▦", self.table_layout, "Table layout: row and column spacing, grid lines, text size, "
+                                               "column widths"))
         h.addWidget(_btn("?", self.guide, "User guide"))
         h.addWidget(_btn("Report bug", self.report_bug, "Report a bug or ask for a feature"))
         self.who = _btn("", self.set_name, "Your name on the activity log")
@@ -523,6 +525,8 @@ class InventoryPage(QWidget):
         y = sc.verticalScrollBar().value()
         w = getattr(self, f"build_{key}")()
         w.setObjectName("invpage")
+        from . import table_prefs as TP
+        TP.apply_all(w, self.settings)                # row / column spacing, grid lines, remembered widths
         sc.setWidget(w)
         QTimer.singleShot(0, lambda: sc.verticalScrollBar().setValue(y))
 
@@ -1755,6 +1759,13 @@ class InventoryPage(QWidget):
                                                 "Role": getattr(self.store, "role", None) or "file",
                                                 "Last sync problem": getattr(self.store, "last_error", None) or "—"},
                         inv=self.inv, commit=lambda msg: self.commit(msg)).exec()
+
+    def table_layout(self):
+        from .table_prefs import TablePrefsDialog
+        d = TablePrefsDialog(self.refresh_current, self, self.settings)
+        d.setModal(False)
+        d.show()
+        self._table_dlg = d
 
     def guide(self):
         QMessageBox.information(self, "DIMS", D.GUIDE)
