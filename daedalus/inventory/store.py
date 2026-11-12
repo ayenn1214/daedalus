@@ -25,7 +25,10 @@ def default_path() -> Path:
 
 
 class InventoryStore:
-    """Inventory + its file. Call save() after edits; check_external() to pick up other users' changes."""
+    """Inventory + its file. Call save() after edits; check_external() to pick up other users' changes.
+    If another PC saved the shared file since we read it, save() merges record by record (see merge.py)."""
+
+    kind = "file"
 
     def __init__(self, path: str | Path | None = None):
         self.path = Path(path) if path else default_path()
@@ -35,7 +38,31 @@ class InventoryStore:
         self.inv = Inventory()
         self._mtime = None
         self.listeners = []
+        self.base: dict = {}
+        self.conflicts: list = []
         self.load()
+
+    # ------------------------------------------------------------- display
+    def label(self) -> str:
+        return self.path.name
+
+    def location(self) -> str:
+        return str(self.path)
+
+    def saved_at(self):
+        try:
+            return self.path.stat().st_mtime
+        except OSError:
+            return None
+
+    def pending(self) -> list:
+        return []
+
+    @property
+    def online(self):
+        return True
+
+    last_error = ""
 
     # ------------------------------------------------------------------ io
     def load(self):
@@ -50,15 +77,32 @@ class InventoryStore:
         user = self.inv.userName
         self.inv.load_values(values)
         self.inv.userName = user
+        self.base = self.inv.dump_values()
+
+    def _read_values(self):
+        raw = json.loads(self.path.read_text(encoding="utf-8"))
+        return raw.get("values", raw) if isinstance(raw, dict) else {}
 
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        values = self.inv.dump_values()
+        try:                                       # someone else saved the shared file since we read it: merge
+            m = self.path.stat().st_mtime
+            if self._mtime is not None and m > self._mtime + 1e-6:
+                from .merge import merge_values
+                values = merge_values(self.base, values, self._read_values(), self.conflicts)
+                user = self.inv.userName
+                self.inv.load_values(values)
+                self.inv.userName = user
+        except (OSError, ValueError):
+            pass
         data = {"format": "holocron-inventory", "version": 1, "savedAt": int(time.time() * 1000),
-                "savedBy": self.inv.userName or "", "values": self.inv.dump_values()}
+                "savedBy": self.inv.userName or "", "values": values}
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
         os.replace(tmp, self.path)
         self._mtime = self.path.stat().st_mtime
+        self.base = values
         for fn in list(self.listeners):
             try:
                 fn()
@@ -98,7 +142,7 @@ _STORE: InventoryStore | None = None
 def get_store(path=None) -> InventoryStore:
     """The app-wide store (lazily created)."""
     global _STORE
-    if _STORE is None or (path and Path(path) != _STORE.path):
+    if _STORE is None or getattr(_STORE, "kind", "file") != "file" or (path and Path(path) != _STORE.path):
         _STORE = InventoryStore(path)
     return _STORE
 

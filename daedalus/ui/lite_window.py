@@ -17,7 +17,8 @@ class LiteWindow(QMainWindow):
         self.settings = QSettings("Daedalus", "Daedalus")
         self._open_full = open_full
         self.full = None
-        self.setWindowTitle(f"{APP_NAME} · {MOD.describe(self.mods)}")
+        self.setWindowTitle("Holocron Inventory" if self.mods == {"inventory"} else
+                            f"{APP_NAME} · {MOD.describe(self.mods)}")
         self.resize(1300, 850)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)

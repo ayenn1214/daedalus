@@ -992,7 +992,9 @@ class ToolExecutor:
                     from ..inventory.store import get_store
                     try:
                         from PySide6.QtCore import QSettings
-                        st = get_store(QSettings("Daedalus", "Daedalus").value("inventory/path") or None)
+
+                        from ..inventory.backends import open_store
+                        st = open_store(QSettings("Daedalus", "Daedalus"))
                     except Exception:  # noqa: BLE001
                         st = get_store()
                 st.check_external()
@@ -1048,12 +1050,15 @@ class ToolExecutor:
         from ..inventory import cad as IC
         from ..inventory.model import num
         from ..inventory.store import get_store
-        try:
-            from PySide6.QtCore import QSettings
-            path = QSettings("Daedalus", "Daedalus").value("inventory/path") or None
-        except Exception:  # noqa: BLE001
-            path = None
-        st = getattr(self, "inventory_store", None) or get_store(path)
+        st = getattr(self, "inventory_store", None)
+        if st is None:
+            try:
+                from PySide6.QtCore import QSettings
+
+                from ..inventory.backends import open_store
+                st = open_store(QSettings("Daedalus", "Daedalus"))
+            except Exception:  # noqa: BLE001
+                st = get_store()
         st.check_external()
         inv = st.inv
         if name == "inventory_stock_check":

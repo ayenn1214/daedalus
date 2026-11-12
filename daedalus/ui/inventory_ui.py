@@ -230,6 +230,7 @@ class Toast(QFrame):
 class InventoryPage(QWidget):
     closed = Signal()
     status = Signal(str)
+    _fetched = Signal(object)                 # background team-server check → UI thread
     send_bom_requested = Signal()
     insert_std_requested = Signal(str)        # standard part id → insert into the open model
 
@@ -242,7 +243,10 @@ class InventoryPage(QWidget):
         self.lite = lite                  # inventory module on its own: no 3D model to send a BOM from
         self.settings = QSettings("Daedalus", "Daedalus")
         path = self.settings.value("inventory/path") or None
-        self.store = store or get_store(path)
+        if store is None:
+            from ..inventory.backends import open_store
+            store = open_store(self.settings, path)
+        self.store = store
         self.store.inv.userName = self.settings.value("inventory/user") or os.environ.get("USERNAME") or \
             os.environ.get("USER") or ""
         self.parts_filter = {"type": "all", "project": "all", "q": ""}
@@ -293,8 +297,17 @@ class InventoryPage(QWidget):
         self.timer.timeout.connect(self._poll)
         self.timer.start(3000)
         self._committing = False
+        self._bg = None
+        self._fetched.connect(self._on_fetched)
         self.store.listeners.append(self._on_store_saved)
         self.refresh()
+
+    def showEvent(self, e):
+        super().showEvent(e)
+        st = self.store
+        if getattr(st, "kind", "file") == "supabase" and not st.signed_in and not getattr(self, "_asked", False):
+            self._asked = True
+            QTimer.singleShot(0, lambda: self.team_sign_in(reason="Sign in to the team inventory."))
 
     def _on_store_saved(self):
         if not self._committing:
@@ -306,13 +319,24 @@ class InventoryPage(QWidget):
         return self.store.inv
 
     def commit(self, msg=None, undo=None):
+        from ..inventory.supabase import AuthError, SyncError
         self._committing = True
         try:
             self.store.save()
+        except AuthError:
+            self._committing = False
+            self.team_sign_in(reason="Your session ended — sign in again to send your changes.")
+        except SyncError:
+            msg = (msg + " — " if msg else "") + "saved on this PC, will sync when the team server is back"
         except OSError as e:
             QMessageBox.warning(self, "Inventory", f"Couldn't save the inventory file:\n{e}")
         finally:
             self._committing = False
+        conf = getattr(self.store, "conflicts", None)
+        if conf:
+            names = ", ".join(sorted({str(c[0]) for c in conf})[:4])
+            self.status.emit(f"Merged with a teammate's changes ({names}) — the newest edit to the same field won")
+            conf.clear()
         self.refresh()
         if msg:
             self.toast.show_msg(msg, undo)
@@ -321,8 +345,43 @@ class InventoryPage(QWidget):
     def _poll(self):
         if not self.isVisible() or QApplication.activeModalWidget() is not None:
             return
+        if getattr(self.store, "kind", "file") == "supabase":
+            if self._bg is None and self.store.signed_in:       # network on a thread; merge on the UI thread
+                import threading
+                st = self.store
+
+                def work():
+                    try:
+                        self._fetched.emit(("ok", st, st.fetch_changes()))
+                    except Exception as e:  # noqa: BLE001
+                        self._fetched.emit(("err", st, e))
+                self._bg = threading.Thread(target=work, daemon=True)
+                self._bg.start()
+            return
         if self.store.check_external():
             self.refresh()
+
+    def _on_fetched(self, res):
+        kind, st, payload = res
+        self._bg = None
+        if st is not self.store:
+            return
+        if kind == "err":
+            st.last_error = str(payload)
+            self._sync_status()
+            return
+        changed = st.apply_changes(payload)
+        if st.pending():
+            from ..inventory.supabase import SyncError
+            try:
+                st.save()
+                changed = True
+            except SyncError as e:
+                st.last_error = str(e)
+        if changed:
+            self.refresh()
+        else:
+            self._sync_status()
 
     def goto(self, key):
         self.tabs.setCurrentIndex([k for k, _ in self.TABS].index(key))
@@ -343,13 +402,30 @@ class InventoryPage(QWidget):
                   "shortages": len(inv.shortages())}
         for i, (k, lab) in enumerate(self.TABS):
             self.tabs.setTabText(i, f"{lab}  {counts[k]}" if k in counts else lab)
-        try:
-            ts = dt.datetime.fromtimestamp(self.store.path.stat().st_mtime).strftime("%H:%M:%S")
-        except OSError:
-            ts = "not saved yet"
-        self.sync_lab.setText(f"● {self.store.path.name} · {ts}")
-        self.sync_lab.setToolTip(str(self.store.path))
+        self._sync_status()
         self.refresh_current()
+
+    def _sync_status(self):
+        st = self.store
+        t = st.saved_at()
+        ts = dt.datetime.fromtimestamp(t).strftime("%H:%M:%S") if t else "not saved yet"
+        color, tip = theme.MUTED, st.location()
+        if getattr(st, "kind", "file") == "supabase":
+            pend = st.pending()
+            if not st.signed_in:
+                text, color = "● Team server · sign in", theme.ERROR
+            elif pend or not st.online:
+                text, color = f"● Team server · offline — {len(pend)} change(s) waiting", theme.WARN \
+                    if hasattr(theme, "WARN") else "#e0a030"
+            else:
+                text, color = f"● Team · {st.email} · synced {ts}", theme.OK if hasattr(theme, "OK") else "#4caf50"
+            if st.last_error:
+                tip += "\n" + st.last_error
+        else:
+            text = f"● {st.label()} · {ts}"
+        self.sync_lab.setText(text)
+        self.sync_lab.setToolTip(tip)
+        self.sync_lab.setStyleSheet(f"color:{color}")
 
     def refresh_current(self):
         key = self.current_key()
@@ -1236,17 +1312,42 @@ class InventoryPage(QWidget):
             cv.addWidget(_muted(f"by {by}" if by else "", False))
             grid.addWidget(c, 0, i)
         v.addLayout(grid)
-        v.addWidget(_section("Data file"))
-        row = QHBoxLayout()
-        path = QLineEdit(str(self.store.path))
-        path.setReadOnly(True)
-        row.addWidget(path, 1)
-        row.addWidget(_btn("Open folder", lambda: _open_link(str(self.store.path.parent))))
-        row.addWidget(_btn("Use another file…", self.choose_file, "Point at a shared file (e.g. on a network "
-                                                                   "drive) — everyone using it sees the same data"))
-        v.addLayout(row)
-        v.addWidget(_muted("Everything is saved to this file as you work. Put it on a shared drive and point each "
-                           "Daedalus at it to work as a team; changes from other PCs appear within a few seconds."))
+        v.addWidget(_section("Where the data lives"))
+        st = self.store
+        if getattr(st, "kind", "file") == "supabase":
+            row = QHBoxLayout()
+            loc = QLineEdit(st.location())
+            loc.setReadOnly(True)
+            row.addWidget(loc, 1)
+            if st.signed_in:
+                row.addWidget(_btn("Sign out", self.team_sign_out))
+            else:
+                row.addWidget(_btn("Sign in…", self.team_sign_in, primary=True))
+            row.addWidget(_btn("Server settings…", self.team_connect))
+            row.addWidget(_btn("Use a file instead…", self.choose_file))
+            v.addLayout(row)
+            pend = st.pending()
+            v.addWidget(_muted(
+                (f"Signed in as {st.email}. " if st.signed_in else "Not signed in. ") +
+                "Everyone signed in to this team server shares one inventory: changes are saved as you work and "
+                "teammates' changes appear within a few seconds. If two people edit at once, both edits are kept "
+                "(stock counts add up); only the same field edited twice keeps the newest." +
+                (f" {len(pend)} change(s) waiting to be sent." if pend else "") +
+                (f" Last problem: {st.last_error}" if st.last_error else "")))
+        else:
+            row = QHBoxLayout()
+            path = QLineEdit(st.location())
+            path.setReadOnly(True)
+            row.addWidget(path, 1)
+            row.addWidget(_btn("Open folder", lambda: _open_link(str(self.store.path.parent))))
+            row.addWidget(_btn("Use another file…", self.choose_file, "Point at a shared file (e.g. on a network "
+                                                                       "drive) — everyone using it sees the same data"))
+            row.addWidget(_btn("Connect to team server…", self.team_connect, "Supabase: sign-in per person, works "
+                                                                            "from anywhere", primary=True))
+            v.addLayout(row)
+            v.addWidget(_muted("Saved to this file as you work. For a team, either put the file on a shared drive and "
+                               "point each PC at it, or connect to a team server (Supabase — the same one the Holocron "
+                               "web app used) so everyone signs in with their own account from anywhere."))
         v.addWidget(_section("Settings"))
         row = QHBoxLayout()
         row.addWidget(_muted("USD → CAD exchange rate for totals (stock value, project value, reorder cost)."), 1)
@@ -1277,16 +1378,65 @@ class InventoryPage(QWidget):
         return w
 
     def choose_file(self):
-        p, _ = QFileDialog.getSaveFileName(self, "Inventory data file", str(self.store.path),
+        start = str(getattr(self.store, "path", "") or (self.settings.value("inventory/path") or ""))
+        p, _ = QFileDialog.getSaveFileName(self, "Inventory data file", start,
                                            "Inventory (*.json)", options=QFileDialog.DontConfirmOverwrite)
         if not p:
             return
         if not p.lower().endswith(".json"):
             p += ".json"
         existed = Path(p).exists()
+        if getattr(self.store, "kind", "file") != "file":
+            from ..inventory.backends import use_file
+            values = self.inv.dump_values()
+            self._swap_store(use_file(self.settings, p))
+            if not existed:
+                self.store.inv.load_values(values)
         self.store.move_to(p)
         self.settings.setValue("inventory/path", p)
         self.commit("Opened " + Path(p).name if existed else "Data moved to " + Path(p).name)
+
+    # ------------------------------------------------------------- team server
+    def _swap_store(self, store):
+        try:
+            self.store.listeners.remove(self._on_store_saved)
+        except (ValueError, AttributeError):
+            pass
+        user = self.inv.userName
+        self.store = store
+        if not store.inv.userName:
+            store.inv.userName = user
+        store.listeners.append(self._on_store_saved)
+
+    def team_connect(self):
+        from .inventory_team_ui import TeamServerDialog
+        dlg = TeamServerDialog(self.settings, self.store, self)
+        if dlg.exec() and dlg.store is not None:
+            from ..inventory.backends import use_team
+            local = self.inv.dump_values() if getattr(self.store, "kind", "file") == "file" else None
+            self._swap_store(use_team(self.settings, dlg.store))
+            if local is not None and dlg.upload.isChecked():
+                from ..inventory.supabase import SyncError
+                try:
+                    self.store.upload_all(local)
+                    self.toast.show_msg("This PC's inventory is now on the team server")
+                except SyncError as e:
+                    QMessageBox.warning(self, "Team server", str(e))
+            self.refresh()
+
+    def team_sign_in(self, reason=None):
+        from .inventory_team_ui import SignInDialog
+        if SignInDialog(self.store, self, reason=reason).exec():
+            from ..inventory.supabase import SyncError
+            try:
+                self.store.load()
+            except SyncError as e:
+                QMessageBox.warning(self, "Team server", str(e))
+            self.refresh()
+
+    def team_sign_out(self):
+        self.store.sign_out()
+        self.refresh()
 
     def import_file(self):
         p, _ = QFileDialog.getOpenFileName(self, "Import", self.settings.value("inventory/export_dir") or "",

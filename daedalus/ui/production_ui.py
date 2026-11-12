@@ -20,8 +20,8 @@ def app_inventory():
     try:
         from PySide6.QtCore import QSettings
 
-        from ..inventory.store import get_store
-        return get_store(QSettings("Daedalus", "Daedalus").value("inventory/path") or None)
+        from ..inventory.backends import open_store
+        return open_store(QSettings("Daedalus", "Daedalus"))
     except Exception:  # noqa: BLE001
         return None
 
