@@ -234,6 +234,8 @@ python -m daedalus                  # or: python -m daedalus part.daedalus
   - Projects, production Gantt, locations, parts, vendors, reorder and shortages.
   - Excel import/export.
   - **Send BOM** turns a design into a project.
+  - **Team mode:** a shared Supabase database with a sign-in per person, and no web hosting. Simultaneous edits merge, and stock counts add up. Edits made offline are kept and sent later. Shared-drive file mode merges the same way.
+  - **Weekly Excel backup:** a reminder to everyone from Friday until one person downloads the full workbook, which clears it for the whole team.
 - **Import hub:** one search across projects, the standard library, inventory and fasteners, with linked or embedded imports.
 
 ### Interface

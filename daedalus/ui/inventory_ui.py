@@ -231,6 +231,7 @@ class InventoryPage(QWidget):
     closed = Signal()
     status = Signal(str)
     _fetched = Signal(object)                 # background team-server check → UI thread
+    backup_due = Signal(bool)                 # weekly Excel backup reminder on / off
     send_bom_requested = Signal()
     insert_std_requested = Signal(str)        # standard part id → insert into the open model
 
@@ -281,6 +282,20 @@ class InventoryPage(QWidget):
         self.who = _btn("", self.set_name, "Your name on the activity log")
         h.addWidget(self.who)
         lay.addWidget(top)
+        self.backup_bar = QFrame()
+        self.backup_bar.setObjectName("invbackup")
+        self.backup_bar.setStyleSheet(f"#invbackup{{background:{theme.PANEL}; border-bottom:2px solid {theme.WARN};}}")
+        bh = QHBoxLayout(self.backup_bar)
+        bh.setContentsMargins(10, 5, 10, 5)
+        self.backup_lab = QLabel()
+        bh.addWidget(self.backup_lab, 1)
+        bh.addWidget(_btn("Download Excel backup", self.download_backup, "Saves the full inventory as an Excel "
+                          "workbook and clears this reminder for everyone", primary=True))
+        bh.addWidget(_btn("Later", self.snooze_backup, "Hide for 2 hours on this PC"))
+        self.backup_bar.hide()
+        self._backup_on = None
+        self._snooze_until = 0.0
+        lay.addWidget(self.backup_bar)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.pages = {}
@@ -343,8 +358,13 @@ class InventoryPage(QWidget):
             self.status.emit(msg)
 
     def _poll(self):
-        if not self.isVisible() or QApplication.activeModalWidget() is not None:
+        self._update_backup()
+        if QApplication.activeModalWidget() is not None:
             return
+        if not self.isVisible():                  # hidden: still pick up teammates' changes, every 30 s
+            self._hidden_ticks = getattr(self, "_hidden_ticks", 0) + 1
+            if self._hidden_ticks % 10:
+                return
         if getattr(self.store, "kind", "file") == "supabase":
             if self._bg is None and self.store.signed_in:       # network on a thread; merge on the UI thread
                 import threading
@@ -426,6 +446,47 @@ class InventoryPage(QWidget):
         self.sync_lab.setText(text)
         self.sync_lab.setToolTip(tip)
         self.sync_lab.setStyleSheet(f"color:{color}")
+        self._update_backup()
+
+    # -------------------------------------------------------------- weekly backup
+    def _update_backup(self):
+        import time as _t
+
+        from ..inventory import backup as BK
+        due = BK.is_due(self.inv.syncMeta or {})
+        last = BK.last_backup(self.inv.syncMeta or {})
+        if due:
+            when = (f"last one {dt.datetime.fromtimestamp(last['at'] / 1000):%a %b %d} by {last['by']}" if last
+                    else "none yet")
+            self.backup_lab.setText(f"📦  Weekly Excel backup is due — nobody has downloaded this week's yet "
+                                    f"({when}). One download clears it for everyone.")
+        self.backup_bar.setVisible(due and _t.time() >= self._snooze_until)
+        if due != self._backup_on:
+            self._backup_on = due
+            self.backup_due.emit(due)
+
+    def snooze_backup(self):
+        import time as _t
+        self._snooze_until = _t.time() + 2 * 3600
+        self.backup_bar.hide()
+
+    def download_backup(self):
+        from ..inventory import backup as BK
+        d = self.settings.value("inventory/backup_dir") or self.settings.value("inventory/export_dir") or \
+            str(Path.home())
+        p, _ = QFileDialog.getSaveFileName(self, "Weekly inventory backup", str(Path(d) / BK.default_name()),
+                                           "Excel (*.xlsx)")
+        if not p:
+            return
+        if not p.lower().endswith(".xlsx"):
+            p += ".xlsx"
+        self.settings.setValue("inventory/backup_dir", str(Path(p).parent))
+        try:
+            BK.write_backup(self.inv, p)
+        except Exception as e:  # noqa: BLE001
+            return QMessageBox.warning(self, "Backup", f"Couldn't write the backup:\n{e}")
+        BK.mark_done(self.inv, p)
+        self.commit(f"Backup saved: {Path(p).name} — reminder cleared for everyone")
 
     def refresh_current(self):
         key = self.current_key()
@@ -1348,6 +1409,17 @@ class InventoryPage(QWidget):
             v.addWidget(_muted("Saved to this file as you work. For a team, either put the file on a shared drive and "
                                "point each PC at it, or connect to a team server (Supabase — the same one the Holocron "
                                "web app used) so everyone signs in with their own account from anywhere."))
+        v.addWidget(_section("Weekly backup"))
+        from ..inventory import backup as BK
+        last = BK.last_backup(inv.syncMeta or {})
+        row = QHBoxLayout()
+        row.addWidget(_muted(
+            "Every Friday everyone gets a reminder to download a full Excel backup; the first person to do it clears "
+            "it for the whole team. " + (f"Last backup: {dt.datetime.fromtimestamp(last['at'] / 1000):%Y-%m-%d %H:%M}"
+                                         f" by {last['by']} ({last['file']})." if last else "No backup yet.") +
+            (" This week's is due." if BK.is_due(inv.syncMeta or {}) else " This week's is done.")), 1)
+        row.addWidget(_btn("Download backup now", self.download_backup, primary=True))
+        v.addLayout(row)
         v.addWidget(_section("Settings"))
         row = QHBoxLayout()
         row.addWidget(_muted("USD → CAD exchange rate for totals (stock value, project value, reorder cost)."), 1)

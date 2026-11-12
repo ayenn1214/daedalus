@@ -83,6 +83,8 @@ class MainWindow(QMainWindow):
         self.inventory_page.status.connect(lambda t: self.statusBar().showMessage(t, 8000))
         self.inventory_page.send_bom_requested.connect(self.send_bom_to_inventory)
         self.inventory_page.insert_std_requested.connect(self.insert_std_from_inventory)
+        self.inventory_page.backup_due.connect(self._backup_reminder)
+        QTimer.singleShot(0, lambda: self._backup_reminder(self.inventory_page._backup_on))
         self.stack.addWidget(self.inventory_page)        # index 4
         from .home import HomePage
         from .recent import Autosave, Recent
@@ -2993,6 +2995,19 @@ class MainWindow(QMainWindow):
                                                      not self.isMinimized() and self.asm.set_mode(None)))
             self._mdock = d
         return self._mdock
+
+    def _backup_reminder(self, due):
+        """Weekly inventory backup due → a status-bar button (clears for everyone once someone downloads it)."""
+        if not hasattr(self, "_backup_btn"):
+            from PySide6.QtWidgets import QPushButton
+            b = QPushButton("📦 Weekly inventory backup due")
+            b.setFlat(True)
+            b.setToolTip("Download this week's Excel backup of the inventory — one download clears the reminder for "
+                         "everyone")
+            b.clicked.connect(lambda: (self.show_inventory(), self.inventory_page.download_backup()))
+            self.statusBar().addPermanentWidget(b)
+            self._backup_btn = b
+        self._backup_btn.setVisible(bool(due) and "inventory" in self.mods)
 
     def _module_on(self, key) -> bool:
         """False (with a note) when that module isn't part of this workspace."""
