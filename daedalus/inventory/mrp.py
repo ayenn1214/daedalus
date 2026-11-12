@@ -428,11 +428,17 @@ def order_history(inv: Inventory, pid):
 
 
 VENDOR_FIELDS = {"name": ("vendor", "company", "name", "supplier", "vendor name", "company name"),
-                 "category": ("category", "type"), "contactName": ("contact", "contact name", "attention"),
-                 "phone": ("phone", "telephone", "tel", "phone number"), "email": ("email", "e-mail", "email address"),
+                 "category": ("category", "type", "category description"),
+                 "status": ("status", "vendor status"),
+                 "contactName": ("contact", "contact name", "attention", "contact [1]", "contact 1", "primary contact"),
+                 "contactName2": ("contact [2]", "contact 2", "secondary contact"),
+                 "phone": ("phone", "telephone", "tel", "phone number", "phone [1]", "phone 1"),
+                 "phone2": ("phone [2]", "phone 2", "cell", "mobile"),
+                 "email": ("email", "e-mail", "email address", "email [1]"),
                  "website": ("website", "web", "url", "site"),
-                 "address": ("address", "street", "address 1", "address line 1"),
-                 "address2": ("address 2", "address line 2", "suite"), "city": ("city", "town"),
+                 "address": ("address", "street", "address 1", "address line 1", "ship from address"),
+                 "address2": ("address 2", "address line 2", "suite"), "city": ("city", "town", "ship from city"),
+                 "area": ("location", "area", "region"),
                  "province": ("province", "state", "prov", "province/state", "state/province"),
                  "postalCode": ("postal code", "postal", "zip", "zip code", "postcode"), "country": ("country",),
                  "accountNumber": ("account", "account #", "account number", "acct", "customer #"),
@@ -441,8 +447,31 @@ VENDOR_FIELDS = {"name": ("vendor", "company", "name", "supplier", "vendor name"
                  "leadTimeMaxDays": ("lead time max", "max lead", "lead max", "lead time", "lead time (days)")}
 
 
-def import_vendors(inv: Inventory, rows: list[dict]) -> tuple[int, int]:
-    """Vendor directory from a spreadsheet (column names matched loosely). Returns (added, updated)."""
+_CO_WORDS = {"ltd", "ltd.", "inc", "inc.", "lp", "corp", "corporation", "co", "co.", "llc", "the", "&", "and",
+             "limited", "company"}
+
+
+def _same_company(inv: Inventory, name: str):
+    """An existing vendor that's the same company under a shorter name ('Sabre' ↔ 'SABRE INDUSTRIAL SUPPLIES',
+    'IOS CNC' ↔ 'IOS ENTERPRISES LTD'): same first word, and that word isn't generic."""
+    def words(t):
+        return [w for w in re.findall(r"[a-z0-9&]+", t.lower()) if w not in _CO_WORDS]
+    w = words(name)
+    if not w:
+        return None
+    hits = []
+    for v in inv.vendors:
+        vw = words(v["name"])
+        if vw and (w[:len(vw)] == vw or vw[:len(w)] == w or (len(w[0]) >= 3 and vw[0] == w[0])):
+            hits.append(v)                       # '3 Amigos' ⊂ '3 AMIGOS MANUFACTURING'; 'IOS CNC' ~ 'IOS …'
+    return hits[0] if len(hits) == 1 else None
+
+
+def import_vendors(inv: Inventory, rows: list[dict], overwrite: bool = False, report: list | None = None):
+    """Vendor directory from a spreadsheet (column names matched loosely). New vendors are added; an existing one
+    (same name, or the same company under a shorter name) gets the sheet's empty-here fields filled in. Contact
+    details that differ are kept as they are unless overwrite=True — each such difference goes to `report` as
+    (vendor, field, kept, sheet). Category and status always follow the sheet. Returns (added, updated)."""
     def pick(r, names):
         low = {str(k).strip().lower(): v for k, v in r.items()}
         for n in names:
@@ -454,15 +483,26 @@ def import_vendors(inv: Inventory, rows: list[dict]) -> tuple[int, int]:
         name = pick(r, VENDOR_FIELDS["name"])
         if not name or not str(name).strip():
             continue
-        v = vendor_record(inv, str(name)) or inv.ensure_vendor(str(name).strip())
-        was_new = all(not v.get(k) for k in ("phone", "email", "address", "contactName"))
+        name = str(name).strip()
+        v = vendor_record(inv, name) or _same_company(inv, name)
+        was_new = v is None
+        if v is None:
+            v = inv.ensure_vendor(name)
+        elif v["name"].strip().lower() != name.lower():
+            v["legalName"] = name                # keep the short name parts already use; record the full one
         for key, names in VENDOR_FIELDS.items():
             val = pick(r, names)
             if val is None or key == "name":
                 continue
             if key in ("leadTimeMinDays", "leadTimeMaxDays"):
                 val = int(num(val)) if num(val) else None
-            v[key] = str(val).strip() if isinstance(val, str) else val
+            val = str(val).strip() if isinstance(val, str) else val
+            cur = v.get(key)
+            if was_new or overwrite or key in ("category", "status") or cur in (None, "", 0) or \
+                    str(cur).strip().lower() == str(val).strip().lower():
+                v[key] = val
+            elif report is not None:
+                report.append((v["name"], key, cur, val))
         added += was_new
         updated += not was_new
     return added, updated

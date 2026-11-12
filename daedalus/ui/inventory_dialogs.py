@@ -707,6 +707,11 @@ class VendorDialog(_Base):
         if self.cat.findText(cat) < 0:
             self.cat.addItem(cat)
         self.cat.setCurrentText(cat)
+        self.status = QComboBox()
+        self.status.addItems(["", *M.VENDOR_STATUSES])
+        if r.get("status") and self.status.findText(r["status"]) < 0:
+            self.status.addItem(r["status"])
+        self.status.setCurrentText(r.get("status") or "")
         self.contact = QLineEdit(r.get("contactName") or "")
         self.phone = QLineEdit(r.get("phone") or "")
         self.email = QLineEdit(r.get("email") or "")
@@ -720,12 +725,16 @@ class VendorDialog(_Base):
             s.setValue(int(M.num(val, -1)) if val not in (None, "") else -1)
         self.notes = QPlainTextEdit(r.get("notes") or "")
         self.notes.setFixedHeight(60)
-        self.extra = {k: QLineEdit(r.get(k) or "") for k in ("address", "address2", "city", "province", "postalCode",
+        self.extra = {k: QLineEdit(r.get(k) or "") for k in ("legalName", "contactName2", "phone2", "address",
+                                                             "address2", "city", "area", "province", "postalCode",
                                                              "country", "accountNumber", "terms")}
-        for lab, w in (("Vendor name", self.name), ("Category", self.cat), ("Contact name", self.contact),
-                       ("Phone", self.phone), ("Email", self.email), ("Website", self.web),
+        for lab, w in (("Vendor name", self.name), ("Legal / full name", self.extra["legalName"]),
+                       ("Category", self.cat), ("Status", self.status), ("Contact name", self.contact),
+                       ("Phone", self.phone), ("Contact 2", self.extra["contactName2"]),
+                       ("Phone 2", self.extra["phone2"]), ("Email", self.email), ("Website", self.web),
                        ("Address", self.extra["address"]), ("Address 2", self.extra["address2"]),
-                       ("City", self.extra["city"]), ("Province / state", self.extra["province"]),
+                       ("City", self.extra["city"]), ("Area", self.extra["area"]),
+                       ("Province / state", self.extra["province"]),
                        ("Postal code", self.extra["postalCode"]), ("Country", self.extra["country"]),
                        ("Our account #", self.extra["accountNumber"]), ("Terms", self.extra["terms"]),
                        ("Lead time min (days)", self.lo), ("Lead time max (days)", self.hi), ("Notes", self.notes)):
@@ -739,6 +748,7 @@ class VendorDialog(_Base):
 
     def values(self):
         return {"name": self.name.text().strip(), "category": self.cat.currentText(),
+                "status": self.status.currentText(),
                 "contactName": self.contact.text().strip(), "phone": self.phone.text().strip(),
                 "email": self.email.text().strip(), "website": self.web.text().strip(),
                 "leadTimeMinDays": self.lo.value() if self.lo.value() >= 0 else None,

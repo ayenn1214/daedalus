@@ -41,7 +41,9 @@ RACKS = ["Rack A", "Rack B"]
 SHELVES = [1, 2, 3, 4, 5, 6]
 BIN_SIZES = [{"id": "small", "label": 'Small Bin (3 x 9 x 4.5")', "sku": "S-16264", "maxPos": 12},
              {"id": "large", "label": 'Large Bin (6 x 9 x 4.5")', "sku": "S-2332", "maxPos": 6}]
-VENDOR_CATEGORIES = ["Fabrication", "Fastener", "Finishing", "Other"]
+VENDOR_CATEGORIES = ["Fabrication", "Laser/Bend/Weld", "Manufacturing/Machining", "One-Stop", "Finishing",
+                     "Raw Material", "Fastener", "Hardware Supplier", "Parts Supplier", "Other"]
+VENDOR_STATUSES = ["Active", "Prospective", "Inactive"]
 ORDER_STATUSES = ["Not Started", "In Fab", "In Finishing", "Complete"]
 CLIENT_ORDER_STATUSES = ["Requested", "Confirmed", "In Production", "Shipped", "Complete"]
 PART_ORDER_STATUSES = ["Ordered", "Received", "Cancelled"]

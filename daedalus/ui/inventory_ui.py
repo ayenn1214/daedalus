@@ -1129,7 +1129,8 @@ class InventoryPage(QWidget):
         w, v = self._page()
         vs = inv.sorted_vendors()
         row = QHBoxLayout()
-        row.addWidget(_muted(f"{len(vs)} vendor{'s' if len(vs) != 1 else ''} across fab, fastener and finishing."), 1)
+        row.addWidget(_muted(f"{len(vs)} vendor{'s' if len(vs) != 1 else ''} · "
+                             f"{sum(1 for x in vs if x.get('status') == 'Prospective')} prospective."), 1)
         from .inventory_mrp_ui import import_prices_ui, import_vendors_ui
         row.addWidget(_btn("Import vendors…", lambda: import_vendors_ui(self), "Vendor list from Excel / CSV: company, "
                                                                             "address, contact, phone, email, terms …"))
@@ -1137,7 +1138,9 @@ class InventoryPage(QWidget):
                                                                           "pricing Google Sheet downloaded as .xlsx)"))
         row.addWidget(_btn("+ Add Vendor", lambda: self.edit_vendor(None), primary=True))
         v.addLayout(row)
-        for cat in M.VENDOR_CATEGORIES:
+        cats = list(M.VENDOR_CATEGORIES)
+        cats[-1:-1] = sorted({x.get("category") for x in vs if x.get("category") and x["category"] not in cats})
+        for cat in cats:
             lst = [x for x in vs if (x.get("category") or "Other") == cat]
             if not lst:
                 continue
@@ -1147,9 +1150,11 @@ class InventoryPage(QWidget):
                 email = _small(x["email"], lambda _=False, e=x["email"]: _open_link("mailto:" + e)) if x.get("email") \
                     else "—"
                 web = _small("Visit", lambda _=False, u=x["website"]: _open_link(u)) if x.get("website") else "—"
-                addr = ", ".join(y for y in (x.get("city"), x.get("province")) if y)
-                rows.append([x["name"] + (f"\n{addr}" if addr else ""), x.get("contactName") or "—",
-                             x.get("phone") or "—", email, web,
+                addr = ", ".join(y for y in (x.get("address"), x.get("city"), x.get("area") or x.get("province")) if y)
+                tag = f"  ({x['status']})" if x.get("status") and x["status"] != "Active" else ""
+                contact = " / ".join(y for y in (x.get("contactName"), x.get("contactName2")) if y) or "—"
+                phone = "\n".join(y for y in (x.get("phone"), x.get("phone2")) if y) or "—"
+                rows.append([x["name"] + tag + (f"\n{addr}" if addr else ""), contact, phone, email, web,
                              inv.lead_label(inv.lead_time_range(x["name"])) or "—", x.get("notes") or "",
                              _actions(_small("Edit", lambda _=False, vv=x: self.edit_vendor(vv)),
                                       _small("Delete", lambda _=False, vv=x: self.delete_vendor(vv), danger=True))])

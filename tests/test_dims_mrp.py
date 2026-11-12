@@ -145,7 +145,7 @@ def test_vendor_and_price_import():
     a, u = R.import_vendors(inv, [{"Company": "Coast Steel", "Address": "9 Dock Rd", "City": "Surrey",
                                    "Phone": "604-555-0199", "Contact": "Brian", "Terms": "Net 30"},
                                   {"Vendor Name": "New Co", "E-mail": "x@new.co", "Lead time": 7}])
-    assert (a, u) == (2, 0)                                              # Coast Steel had no details yet
+    assert (a, u) == (1, 1)                                              # Coast Steel existed, New Co is new
     cs = R.vendor_record(inv, "coast steel")
     assert cs["city"] == "Surrey" and cs["terms"] == "Net 30" and cs["contactName"] == "Brian"
     assert R.vendor_record(inv, "New Co")["leadTimeMaxDays"] == 7
@@ -237,3 +237,24 @@ def test_screens(tmp_path, monkeypatch):
     v2 = d.values()
     assert v2["isAssembly"] and not v2["isWeldment"] and len(v2["components"]) == 2
     page.close()
+
+
+def test_vendor_list_with_shop_headers():
+    inv = M.Inventory()
+    inv.vendors = [{"id": "a", "name": "Sabre", "contactName": "Dan Thomson", "email": "dan@x.com", "category": "Fastener"},
+                   {"id": "b", "name": "3 Amigos", "contactName": "", "category": "Fabrication"}]
+    rows = [{"Vendor Name": "SABRE INDUSTRIAL SUPPLIES", "Status": "Active", "Category Description": "Hardware Supplier",
+             "Contact [1]": "ALLEN TANG", "Contact [2]": "DAN T", "Phone [1]": "236-268-0857", "Phone [2]": "604-679-1913",
+             "Email": "atang@x.com", "Ship From Address": "12-19272 96th Ave", "Ship From City": "SURREY",
+             "Location": "PORT KELLS"},
+            {"Vendor Name": "3 AMIGOS MANUFACTURING", "Category Description": "Manufacturing/Machining",
+             "Contact [1]": "BRIAN"},
+            {"Vendor Name": "SUMMIT INDUSTRIAL FINISHING", "Status": "Prospective", "Category Description": "Finishing"}]
+    rep = []
+    assert R.import_vendors(inv, rows, report=rep) == (1, 2)
+    s = next(v for v in inv.vendors if v["id"] == "a")
+    assert s["name"] == "Sabre" and s["legalName"] == "SABRE INDUSTRIAL SUPPLIES" and s["contactName"] == "Dan Thomson"
+    assert s["phone"] == "236-268-0857" and s["contactName2"] == "DAN T" and s["area"] == "PORT KELLS"
+    assert s["category"] == "Hardware Supplier" and ("Sabre", "email", "dan@x.com", "atang@x.com") in rep
+    assert next(v for v in inv.vendors if v["id"] == "b")["contactName"] == "BRIAN"
+    assert next(v for v in inv.vendors if v["name"].startswith("SUMMIT"))["status"] == "Prospective"
