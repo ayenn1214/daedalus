@@ -1,7 +1,7 @@
 """SolidWorks ⇄ Daedalus subsystems.
 
 SolidWorks keeps the 3D modelling. Link adds, on the open SolidWorks document:
-  BOM & inventory   the assembly's BOM → Holocron (project allocation, stock check, shortfalls); inventory ids and
+  BOM & inventory   the assembly's BOM → DIMS (project allocation, stock check, shortfalls); inventory ids and
                     part numbers written back to SolidWorks custom properties
   library           your Daedalus standard parts and the ISO/ASME fastener library inserted into the SolidWorks
                     assembly (converted to native parts once, cached), mated to the selected hole/face;
@@ -17,7 +17,7 @@ import tempfile
 from pathlib import Path
 from types import SimpleNamespace
 
-from .backend import (ASSEMBLY, DESC_KEYS, HOLOCRON_KEY, PART, PN_KEYS, STD_KEY, Backend, SWError,
+from .backend import (ASSEMBLY, DESC_KEYS, INVENTORY_KEY, LEGACY_INVENTORY_KEYS, PART, PN_KEYS, STD_KEY, Backend, SWError,
                       first_prop)
 
 COST_KEYS = ("Cost", "UnitCost", "Unit Cost", "Price")
@@ -129,7 +129,7 @@ class SWLink:
                 std = first_prop(props, (STD_KEY,))
                 if std:
                     r["standard"] = {"id": std, "name": r["description"], "kind": None}
-                inv = first_prop(props, (HOLOCRON_KEY,))
+                inv = first_prop(props, (INVENTORY_KEY, *LEGACY_INVENTORY_KEYS))
                 if inv:
                     r["inventory_id"] = inv
             r["qty"] += 1
@@ -150,7 +150,7 @@ class SWLink:
         return stock_report(self.store.inv, self._bomdoc(), units)
 
     def send_bom(self, project: str, units: float | None = None, write_back: bool = True) -> dict:
-        """BOM → Holocron project (new parts created, existing ones linked); then HolocronId (+ PartNo when the
+        """BOM → DIMS project (new parts created, existing ones linked); then DIMSId (+ PartNo when the
         SolidWorks part has none) written back to each part's custom properties."""
         from ..inventory.cad import send_bom
         doc = self._bomdoc()
@@ -162,7 +162,7 @@ class SWLink:
             inv = self.store.inv
             for row, r in zip(rows, rep["rows"]):
                 p = inv.part(r["id"])
-                props = {HOLOCRON_KEY: r["id"]}
+                props = {INVENTORY_KEY: r["id"]}
                 if not row.get("part_no") and p and p.get("partNumber"):
                     props["PartNo"] = p["partNumber"]
                 try:

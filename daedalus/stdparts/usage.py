@@ -1,4 +1,4 @@
-"""Where standard parts are used, and their link to the Holocron inventory.
+"""Where standard parts are used, and their link to DIMS (the Daedalus Inventory Management System).
 
 Daedalus files   <library>/.usage.json maps each saved project file to the standard parts in it
                  (updated whenever a file is saved), so a part lists the files that use it.

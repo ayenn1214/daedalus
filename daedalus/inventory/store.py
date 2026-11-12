@@ -21,7 +21,7 @@ def default_path() -> Path:
         base = Path.home() / "Library" / "Application Support"
     else:
         base = Path(os.environ.get("XDG_DATA_HOME") or Path.home() / ".local" / "share")
-    return base / "Daedalus" / "holocron-inventory.json"
+    return base / "Daedalus" / "dims-inventory.json"
 
 
 class InventoryStore:
@@ -96,7 +96,7 @@ class InventoryStore:
                 self.inv.userName = user
         except (OSError, ValueError):
             pass
-        data = {"format": "holocron-inventory", "version": 1, "savedAt": int(time.time() * 1000),
+        data = {"format": "dims-inventory", "version": 1, "savedAt": int(time.time() * 1000),
                 "savedBy": self.inv.userName or "", "values": values}
         tmp = self.path.with_suffix(self.path.suffix + ".tmp")
         tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")

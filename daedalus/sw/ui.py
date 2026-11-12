@@ -530,7 +530,7 @@ class LinkWindow(QMainWindow):
         rep = self._guard(self.link.send_bom, name.strip(), self.units.value())
         if rep:
             msg = (f"Project {rep['project']}: {len(rep['added'])} new parts, {len(rep['linked'])} linked; "
-                   f"HolocronId written to {rep['written_back']} {self.app_name()} part(s)")
+                   f"DIMSId written to {rep['written_back']} {self.app_name()} part(s)")
             if rep["write_failed"]:
                 msg += f" — {len(rep['write_failed'])} failed"
             self.statusBar().showMessage(msg, 12000)
@@ -773,7 +773,7 @@ class LinkWindow(QMainWindow):
             ("Inventory", [("Send BOM", "⇢", "BOM → inventory project", lambda: (self._front(), self.send_bom())),
                            ("Stock check", "☑", "BOM vs stock", lambda: (self._front(), self.tabs.setCurrentIndex(1),
                                                                          self.refresh_bom())),
-                           ("Inventory", "⬡", "Open Holocron inventory", self.open_inventory)]),
+                           ("Inventory", "⬡", "Open DIMS inventory", self.open_inventory)]),
             ("Library", [("Std parts", "▦", "Insert a standard part",
                           lambda: (self._front(), self.tabs.setCurrentIndex(2), self.lib_src.setCurrentIndex(0))),
                          ("Fasteners", "⚙", "Insert a fastener into the selected hole",

@@ -5,7 +5,7 @@ Sources
   project    other Daedalus projects (recent files and project folders)
   std        the standard-parts library (your saved parts)
   fastener   the ISO / ASME fastener and bearing library
-  inventory  Holocron inventory parts that have CAD: a standard part, a fastener spec, or a CAD file in
+  inventory  DIMS inventory parts that have CAD: a standard part, a fastener spec, or a CAD file in
              the part's drawing link
 
 Connected means:

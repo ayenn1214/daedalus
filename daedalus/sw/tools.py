@@ -9,7 +9,7 @@ SW_SYSTEM = """You are the Daedalus copilot working alongside a CAD program — 
 says which; the sw_* tools work on whichever is active). The CAD program does the 3D modelling; you handle
 everything around it through tools:
 - sw_status / sw_bom / sw_get_properties: what is open, the parts list, custom properties (PartNo,
-  Description, Material, HolocronId, DaedalusStdId…).
+  Description, Material, DIMSId, DaedalusStdId…).
 - sw_set_properties: fill or fix custom properties (part numbers, descriptions, vendor, cost). Only change
   what the user asked for.
 - Fasteners and standard parts: fastener_sizes lists kinds/sizes; sw_insert_fastener puts an ISO/ASME screw,
@@ -17,8 +17,8 @@ everything around it through tools:
   user's own standard parts. With mate=true they mate to the face/hole the user selected in SolidWorks —
   tell the user to select the hole first if nothing is selected.
 - sw_save_part_to_library saves the active SolidWorks part as a Daedalus standard part (only when asked).
-- Inventory (the shop's Holocron system): inventory_stock_check (BOM vs stock for N builds, shortfalls,
-  locations), send_bom_to_inventory (BOM → project, writes HolocronId back to SolidWorks), inventory_search.
+- Inventory (the shop's DIMS — Daedalus Inventory Management System): inventory_stock_check (BOM vs stock for N builds, shortfalls,
+  locations), send_bom_to_inventory (BOM → project, writes DIMSId back to SolidWorks), inventory_search.
 - sw_command: views (Isometric, Front, Top, Right…), fit, rebuild, save, export (step, stl, pdf, dxf),
   macro (path to .swp), command (SolidWorks command id).
 - send_to_other_cad moves the active document to the other connected CAD program (SolidWorks ⇄ Fusion) as
@@ -40,7 +40,7 @@ SW_TOOLS = [
     _t("sw_status", "Connection, SolidWorks version and the active document (type, configuration, properties, "
                     "material, mass)."),
     _t("sw_bom", "Parts list of the active assembly: part number, description, qty, material, mass, cost, "
-                 "file, HolocronId / DaedalusStdId."),
+                 "file, DIMSId / DaedalusStdId."),
     _t("sw_get_properties", "Custom properties of the active document or of an open file.",
        {"path": {"type": "string"}}),
     _t("sw_set_properties", "Set custom properties on the active document or an open file.",
@@ -62,7 +62,7 @@ SW_TOOLS = [
     _t("inventory_stock_check", "Active assembly's BOM against inventory stock for N builds.",
        {"units": {"type": "number"}}),
     _t("send_bom_to_inventory", "Send the active assembly's BOM to an inventory project (creates/links parts, "
-                                "allocates quantities, writes HolocronId back to SolidWorks).",
+                                "allocates quantities, writes DIMSId back to SolidWorks).",
        {"project": {"type": "string"}, "units": {"type": "number"}}, ["project"]),
     _t("inventory_search", "Search inventory parts (name, part number, category, size).",
        {"query": {"type": "string"}, "low_stock_only": {"type": "boolean"}}),

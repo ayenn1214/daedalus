@@ -19,15 +19,21 @@ def migrate_settings() -> int:
     return len(keys)
 
 
+LEGACY_INVENTORY_FILE = "holocron-inventory.json"      # name used before the inventory became DIMS
+
+
 def migrate_inventory(new_path) -> bool:
-    """Copy %APPDATA%/StrataCAD/holocron-inventory.json to the new default location if that is still empty."""
+    """First run after an upgrade: copy the inventory data from its older names / folders (Daedalus or StrataCAD,
+    under the previous file name) to the new default location if that is still empty."""
     from pathlib import Path
     new_path = Path(new_path)
     if new_path.exists():
         return False
-    old = new_path.parent.parent / "StrataCAD" / new_path.name
-    if not old.exists():
-        return False
-    new_path.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(old, new_path)
-    return True
+    for old in (new_path.with_name(LEGACY_INVENTORY_FILE),
+                new_path.parent.parent / "StrataCAD" / new_path.name,
+                new_path.parent.parent / "StrataCAD" / LEGACY_INVENTORY_FILE):
+        if old.exists():
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(old, new_path)
+            return True
+    return False

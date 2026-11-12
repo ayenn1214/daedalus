@@ -1,4 +1,4 @@
-"""Team inventory on Supabase — the same project and `app_storage` table the Holocron web app used, so the
+"""Team inventory on Supabase — the same project and `app_storage` table the original web app used, so the
 desktop app and the old web page can share data while you switch over. No Netlify: Daedalus talks to Supabase
 directly over HTTPS.
 
@@ -51,7 +51,14 @@ class SupabaseStore:
         self.session = dict(session or {})
         self.on_session = on_session              # called with the session dict when it changes (to persist it)
         self.timeout = timeout
-        self.cache = Path(cache) if cache else default_path().with_name("holocron-team-cache.json")
+        self.cache = Path(cache) if cache else default_path().with_name("dims-team-cache.json")
+        if not cache:
+            old = self.cache.with_name("holocron-team-cache.json")      # cache from before the rename
+            if old.exists() and not self.cache.exists():
+                try:
+                    old.replace(self.cache)
+                except OSError:
+                    pass
         self.inv = Inventory()
         self.listeners = []
         self.base: dict = {}                       # values as last synced
@@ -366,7 +373,7 @@ def _iso_now() -> str:
     return time.strftime("%Y-%m-%dT%H:%M:%S", time.gmtime(t)) + f".{int(t % 1 * 1e6):06d}+00:00"
 
 
-SETUP_SQL = """-- Holocron team inventory: run once in Supabase ▸ SQL Editor (skip if your project already has it).
+SETUP_SQL = """-- DIMS (Daedalus Inventory Management System) team inventory: run once in Supabase ▸ SQL Editor (skip if your project already has it).
 create table if not exists public.app_storage (
   key        text primary key,
   value      text,

@@ -1,6 +1,6 @@
-"""Holocron inventory — data model and business logic (Qt-free).
+"""DIMS (Daedalus Inventory Management System) — data model and business logic (Qt-free).
 
-A Python port of the Holocron Inventory System web app. Records are plain dicts with the same field names and
+A Python port of the original inventory web app. Records are plain dicts with the same field names and
 the data is stored under the same keys ("parts", "projects", …) as JSON strings, so a Daedalus install and the
 web version can share one Supabase table or exchange files.
 """
@@ -169,7 +169,7 @@ def new_part(**kw) -> dict:
 
 
 class Inventory:
-    """All Holocron data plus the operations the web app performs on it."""
+    """All DIMS data plus the operations the web app performs on it."""
 
     def __init__(self):
         self.parts: list = []

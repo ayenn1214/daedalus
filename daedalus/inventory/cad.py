@@ -6,7 +6,7 @@ from pathlib import Path
 
 from .model import Inventory, fastener_name, new_part, now_ms, num
 
-# Daedalus library designation → Holocron fastener spec
+# Daedalus library designation → DIMS fastener spec
 _KIND = {"SHCS": ("Screw", "Socket Head"), "Hex bolt": ("Bolt", "Hex"), "FHCS": ("Screw", "Flat Head"),
          "Hex nut": ("Nut", "Reg"), "Washer": ("Washer", "Flat")}
 _DESIG = re.compile(r'^(SHCS|Hex bolt|FHCS|Hex nut|Washer) (\S+)(?: x ([\d.]+)("?))? \((ISO|ASME)\)$')

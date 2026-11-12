@@ -35,7 +35,7 @@ def is_due(meta: dict, now: dt.datetime | None = None) -> bool:
 
 
 def default_name(now: dt.datetime | None = None) -> str:
-    return f"Holocron-weekly-backup-{(now or dt.datetime.now()):%Y-%m-%d}.xlsx"
+    return f"DIMS-weekly-backup-{(now or dt.datetime.now()):%Y-%m-%d}.xlsx"
 
 
 SHEETS = [("Projects", "projects"), ("Production", "productionOrders"), ("Locations", "locations"),

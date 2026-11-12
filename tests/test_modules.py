@@ -17,7 +17,7 @@ HEAVY = ("build123d", "OCP", "vtkmodules", "mujoco", "gmsh", "skfem", "numba")
 
 def test_parse_and_flags():
     assert MOD.parse("drawing,inventory") == {"drawing", "inventory"}
-    assert MOD.parse("Simulation") == {"sim"} and MOD.parse("holocron 2d") == {"inventory", "drawing"}
+    assert MOD.parse("Simulation") == {"sim"} and MOD.parse("dims 2d") == {"inventory", "drawing"}
     assert MOD.parse("all") == MOD.ALL and MOD.parse("") == MOD.ALL
     with pytest.raises(MOD.ModuleError):
         MOD.parse("cam")
@@ -138,7 +138,7 @@ def test_main_window_simulation_only(qapp):
     assert {"physics", "studies"} <= set(w.sidebar.keys) and not {"mates", "cam"} & set(w.sidebar.keys)
     assert {g for g, _ in w.tool_groups}.isdisjoint({"Model", "Drawing", "Inventory"})
     w.show_inventory()
-    assert w.stack.currentIndex() != 4 and "Inventory isn't loaded" in w.statusBar().currentMessage()
+    assert w.stack.currentIndex() != 4 and "Inventory (DIMS) isn't loaded" in w.statusBar().currentMessage()
     assert "Simulation" in w.windowTitle()
     w.doc.dirty = False
     w.close()

@@ -600,7 +600,7 @@ class MainWindow(QMainWindow):
             ("Export opts", "⚙", "STEP schema, units, mesh quality, neutral copies on save", self.export_options),
         ]), "Drawing")
         tabs.addTab(tab([
-            ("Inventory", "⬡", "Holocron inventory: parts, stock, projects, reorder, vendors", self.show_inventory),
+            ("Inventory", "⬡", "DIMS (Daedalus Inventory Management System): parts, stock, projects, reorder, vendors", self.show_inventory),
             ("Send BOM", "⇢", "Add this design's BOM to an inventory project", self.send_bom_to_inventory),
             ("Stock check", "☑", "BOM with stock, bin locations and shortfalls", self.bom),
             (None, None, None, None),

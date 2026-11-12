@@ -36,7 +36,7 @@ settings are migrated on first launch.
 | 🛠️ **Shop-floor ready** | Auto CAM builds the whole program and writes G-code (Fanuc, Haas, Siemens, LinuxCNC, GRBL). Also a backplot, quoting and a machine schedule. |
 | 📏 **Units for engineering and construction** | SI, US customary and ft-in fractions. Type any unit into any field (`3' 4-1/2"`, `25 mm`, `4/12`). The Measure panel works in your units. |
 | 🔗 **Works with your CAD** | Links with SolidWorks, Fusion, Rhino, Inventor and Solid Edge. Opens STEP assemblies of 1,600+ parts in seconds. |
-| 📦 **BOM and inventory** | Standard parts library with duplicate detection; Holocron inventory; Send BOM turns a design into a project with stock and shortfalls. |
+| 📦 **BOM and inventory** | Standard parts library with duplicate detection; DIMS (Daedalus Inventory Management System); Send BOM turns a design into a project with stock and shortfalls. |
 | 📘 **Design data** | 27 machine-design calculators (shafts, gears, keys, brakes, fatigue…) and search across your own handbooks. |
 
 <table>
@@ -101,7 +101,7 @@ python -m daedalus                  # or: python -m daedalus part.daedalus
 | `--only 3d` | Modelling, assemblies, CAM, Icarus | Yes |
 | `--only sim` | 3D view with the Simulation and Evaluate tools; modelling tools hidden | Yes |
 | `--only drawing` | 2D drawings: DXF/DWG/SVG/HPGL editing, blank sheets, title blocks, export | No (~1 s start) |
-| `--only inventory` | Holocron inventory | No (~1 s start) |
+| `--only inventory` | DIMS inventory | No (~1 s start) |
 | `--only drawing,inventory` | Both, as tabs | No |
 
 - **Saving a choice:** Help ▸ Startup modules… saves the set to use when no flag is given.
@@ -230,7 +230,7 @@ python -m daedalus                  # or: python -m daedalus part.daedalus
   - Your own reusable parts with versions and thumbnails; a team library on a shared drive.
   - Duplicate detection by geometry fingerprint; where-used.
   - Built-in ISO/ANSI fasteners and bearings.
-- **Holocron inventory** (native):
+- **DIMS — Daedalus Inventory Management System** (native):
   - Projects, production Gantt, locations, parts, vendors, reorder and shortages.
   - Excel import/export.
   - **Send BOM** turns a design into a project.
@@ -340,7 +340,7 @@ daedalus/
   design/      machine-design calculators, reference library (BM25 search)
   io/          importers/exporters, background STEP reader, SolidWorks bridge
   stdparts/    standard parts library, metadata, similarity, where-used
-  inventory/   Holocron model, store, CAD sync
+  inventory/   DIMS model, store, CAD sync
   sw/ fusion/ rhino/   CAD Link backends and add-ins
   ai/          tool schemas + executor, Claude and Ollama agent loops
   ui/          main window, viewport, sketchers, panels, dialogs

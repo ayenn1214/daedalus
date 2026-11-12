@@ -25,7 +25,8 @@ VIEWS = {"Front": 1, "Back": 2, "Left": 3, "Right": 4, "Top": 5, "Bottom": 6, "I
 # property names other tools use for the same thing (first hit wins when reading)
 PN_KEYS = ("PartNo", "Part Number", "PartNumber", "Part No", "Number")
 DESC_KEYS = ("Description", "DESCRIPTION", "Desc")
-HOLOCRON_KEY = "HolocronId"
+INVENTORY_KEY = "DIMSId"
+LEGACY_INVENTORY_KEYS = ("HolocronId",)   # read from parts written by older versions
 STD_KEY = "DaedalusStdId"
 
 

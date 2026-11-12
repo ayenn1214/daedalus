@@ -93,7 +93,7 @@ Conventions
   other files; explode for exploded views; gear and rack mates couple rotations/travel.
 - Standard parts (the user's own reusable parts): std_library_search, insert_standard_part (linked by default),
   save_standard_part (only when asked). Prefer an existing standard part over modelling a duplicate.
-- Inventory (shop's Holocron inventory): inventory_stock_check (BOM vs stock, bins, shortfall for N builds),
+- Inventory (the shop's DIMS — Daedalus Inventory Management System): inventory_stock_check (BOM vs stock, bins, shortfall for N builds),
   send_bom_to_inventory (design → project), inventory_search (parts, low stock, shortages), inventory_record
   (use/receive — only when asked). Prefer stocked fastener sizes when the user asks.
 - Drawings: new_drawing (sheet, ISO/ANSI, views, title block) → add_drawing_view (section/detail/

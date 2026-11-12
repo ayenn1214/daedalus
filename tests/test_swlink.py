@@ -43,11 +43,14 @@ def test_send_bom_writes_back_and_matches_again(link):
     assert rep["written_back"] == 4 and not rep["write_failed"]
     assert "M8 x 25 SHCS" in rep["linked"]                         # stocked fastener recognised from the PartNo
     plate = next(c for c in link.b.components() if c.name == "Caster Plate-1")
-    hid = plate.properties["HolocronId"]
+    hid = plate.properties["DIMSId"]
     assert inv.part(hid)["name"]
-    # second send: same parts (matched by HolocronId), nothing new
+    # second send: same parts (matched by DIMSId), nothing new
     rep2 = link.send_bom("P25605 Lift cart", units=2)
     assert rep2["added"] == []
+    # parts written by older versions carry the id as HolocronId — still matched
+    plate.properties["HolocronId"] = plate.properties.pop("DIMSId")
+    assert link.send_bom("P25605 Lift cart", units=2)["added"] == []
     stock = {r["part"]: r for r in link.stock_report(units=2)}
     assert stock["SHCS M8 x 25 (ISO)"]["needed"] == 32 and stock["SHCS M8 x 25 (ISO)"]["short"] == 22
 

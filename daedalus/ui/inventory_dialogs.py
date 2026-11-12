@@ -903,7 +903,7 @@ class SendBomDialog(_Base):
             raise ValueError("Enter a project name")
 
 
-GUIDE = """<h3>Holocron inventory in Daedalus</h3>
+GUIDE = """<h3>DIMS — Daedalus Inventory Management System</h3>
 <p><b>Parts</b> — fasteners, purchased and manufactured parts with stock, reorder point/qty, unit cost (CAD/USD),
 up to three suppliers, bin location, drawing link. Fastener names fill in from the spec. Manufactured parts can be
 weldments made of other parts. <b>Use</b> deducts stock, <b>Receive</b> adds it — every move is logged, and the

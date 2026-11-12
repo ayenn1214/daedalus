@@ -1,4 +1,4 @@
-"""Holocron inventory page — native Qt (dashboard, projects, production, locations, parts, vendors, clients,
+"""DIMS (Daedalus Inventory Management System) page — native Qt (dashboard, projects, production, locations, parts, vendors, clients,
 reorder, shortages, activity log, import / export)."""
 from __future__ import annotations
 
@@ -267,7 +267,7 @@ class InventoryPage(QWidget):
         h.setContentsMargins(8, 6, 8, 6)
         if not lite:
             h.addWidget(_btn("◀ 3D model", self.closed.emit))
-        title = QLabel("⬡  Holocron Inventory")
+        title = QLabel("⬡  DIMS · Daedalus Inventory Management System")
         title.setObjectName("h1")
         h.addWidget(title)
         h.addWidget(_muted("Fasteners · Purchased · Manufactured", False))
@@ -1278,7 +1278,7 @@ class InventoryPage(QWidget):
             return self.toast.show_msg("Nothing to export with the current filters")
         need = (lambda p: inv.needed_for_project(p, f["project"])) if f["project"] != "all" else inv.total_needed
         rows = inv.reorder_rows(lst, need, f["vendor"] if f["vendor"] != "all" else None)
-        path = self._save_path(f"holocron-reorder-{M.today()}.xlsx", "Excel (*.xlsx)")
+        path = self._save_path(f"dims-reorder-{M.today()}.xlsx", "Excel (*.xlsx)")
         if path:
             name = (inv.project_name(f["project"]) or "Reorder") if f["project"] != "all" else "Reorder List"
             M.write_xlsx(path, [(name, rows)])
@@ -1289,7 +1289,7 @@ class InventoryPage(QWidget):
         low = inv.low_stock()
         if not low:
             return self.toast.show_msg("Nothing to export — everything is above its reorder point")
-        path = self._save_path(f"holocron-reorder-by-project-{M.today()}.xlsx", "Excel (*.xlsx)")
+        path = self._save_path(f"dims-reorder-by-project-{M.today()}.xlsx", "Excel (*.xlsx)")
         if not path:
             return
         sheets = []
@@ -1407,7 +1407,7 @@ class InventoryPage(QWidget):
                                                                             "from anywhere", primary=True))
             v.addLayout(row)
             v.addWidget(_muted("Saved to this file as you work. For a team, either put the file on a shared drive and "
-                               "point each PC at it, or connect to a team server (Supabase — the same one the Holocron "
+                               "point each PC at it, or connect to a team server (Supabase — the same one the original "
                                "web app used) so everyone signs in with their own account from anywhere."))
         v.addWidget(_section("Weekly backup"))
         from ..inventory import backup as BK
@@ -1529,7 +1529,7 @@ class InventoryPage(QWidget):
     def export(self, kind):
         if not self.inv.parts:
             return self.toast.show_msg("No parts to export")
-        p = self._save_path(f"holocron-inventory-{M.today()}.{kind}", "Excel (*.xlsx)" if kind == "xlsx" else "CSV (*.csv)")
+        p = self._save_path(f"dims-inventory-{M.today()}.{kind}", "Excel (*.xlsx)" if kind == "xlsx" else "CSV (*.csv)")
         if p:
             self.inv.export_file(p)
             self.commit(f"Exported {len(self.inv.parts)} part(s)")
@@ -1544,7 +1544,7 @@ class InventoryPage(QWidget):
             self.refresh()
 
     def guide(self):
-        QMessageBox.information(self, "Holocron inventory", D.GUIDE)
+        QMessageBox.information(self, "DIMS", D.GUIDE)
 
     def keyPressEvent(self, e):
         if e.text() == "/" and not isinstance(QApplication.focusWidget(), (QLineEdit,)):

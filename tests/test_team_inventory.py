@@ -1,4 +1,4 @@
-"""Holocron team inventory: three-way merge, Supabase store (against a local stand-in for Supabase's auth + REST
+"""DIMS team inventory: three-way merge, Supabase store (against a local stand-in for Supabase's auth + REST
 API), shared-file merge, offline edits."""
 import json
 import re

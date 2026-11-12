@@ -1,4 +1,4 @@
-"""Holocron team server (Supabase): connect + sign in. The anon key and URL are kept in this PC's settings, the
+"""DIMS team server (Supabase): connect + sign in. The anon key and URL are kept in this PC's settings, the
 session as a refresh token — never the password."""
 from __future__ import annotations
 
@@ -19,7 +19,7 @@ class TeamServerDialog(QDialog):
         self.setWindowTitle("Team server (Supabase)")
         self.resize(520, 0)
         v = QVBoxLayout(self)
-        intro = QLabel("Use the Supabase project the Holocron web app used (same data), or a new free one. "
+        intro = QLabel("Use the Supabase project the original web app used (same data), or a new free one. "
                        "Each person signs in with their own account — add accounts in Supabase ▸ Authentication ▸ "
                        "Users. No web hosting is needed.")
         intro.setWordWrap(True)
@@ -83,7 +83,7 @@ class SignInDialog(QDialog):
     def __init__(self, store, parent=None, reason=None):
         super().__init__(parent)
         self.store = store
-        self.setWindowTitle("Sign in — Holocron team server")
+        self.setWindowTitle("Sign in — DIMS team server")
         v = QVBoxLayout(self)
         if reason:
             lab = QLabel(reason)

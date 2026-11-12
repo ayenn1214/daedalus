@@ -4,7 +4,7 @@
   sim        simulation: FEA, CFD, physics, design studies (needs the 3D view — loads it, modelling tools hidden
              unless 3d is on too)
   drawing    drawings and DXF / DWG / SVG / HPGL editing
-  inventory  Holocron inventory: parts, stock, projects, vendors, reorder
+  inventory  DIMS (Daedalus Inventory Management System): parts, stock, projects, vendors, reorder
 
 Without 3d and sim, Daedalus opens a light window (no CAD kernel, no 3D view) that boots in about a second;
 the 3D workspace can still be opened from it later.
@@ -18,12 +18,12 @@ MODULES: dict[str, tuple[str, str]] = {
     "3d": ("3D modelling", "Sketches, features, surfaces, sheet metal, assemblies, CAM, Icarus"),
     "sim": ("Simulation", "FEA, CFD, physics, design studies, topology"),
     "drawing": ("Drawings", "2D drawings from the model; DXF / DWG / SVG / HPGL editing"),
-    "inventory": ("Inventory", "Holocron: parts, stock, projects, vendors, reorder, shortages"),
+    "inventory": ("Inventory (DIMS)", "Parts, stock, projects, vendors, reorder, shortages"),
 }
 ALL = frozenset(MODULES)
 ALIASES = {"3D": "3d", "model": "3d", "modelling": "3d", "modeling": "3d", "cad": "3d", "simulation": "sim",
            "fea": "sim", "drawings": "drawing", "2d": "drawing", "dxf": "drawing", "inv": "inventory",
-           "holocron": "inventory", "all": "all", "full": "all"}
+           "dims": "inventory", "all": "all", "full": "all"}
 SETTINGS_KEY = "modules/enabled"
 
 # ribbon tabs and sidebar islands owned by each module (everything else is shared)

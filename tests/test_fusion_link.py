@@ -139,9 +139,9 @@ def test_addin_round_trip(addin, tmp_path):
     comps = b.components()
     assert [c.name for c in comps] == ["Base Plate:1", "Cam Lever:1", "Cam Lever:2"]
     assert comps[0].fixed and comps[0].properties["PartNo"] == "RG-5101"
-    b.set_properties({"PartNo": "RG-5102", "HolocronId": "inv-7"}, path=comps[1].path)
+    b.set_properties({"PartNo": "RG-5102", "DIMSId": "inv-7"}, path=comps[1].path)
     lever = design.allComponents[2]
-    assert lever.partNumber == "RG-5102" and b.get_properties(comps[1].path)["HolocronId"] == "inv-7"
+    assert lever.partNumber == "RG-5102" and b.get_properties(comps[1].path)["DIMSId"] == "inv-7"
     with pytest.raises(SWError, match="Unknown operation"):
         b._call("launch")
     with pytest.raises(SWError, match="Fusion scripts"):

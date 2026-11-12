@@ -1,4 +1,4 @@
-"""Holocron inventory: model rules, local store, xlsx round-trip, CAD sync, copilot tools, UI smoke."""
+"""DIMS inventory: model rules, local store, xlsx round-trip, CAD sync, copilot tools, UI smoke."""
 import json
 import os
 
@@ -75,7 +75,7 @@ def test_store_roundtrip_and_external_change(tmp_path):
     st.inv.parts.append(M.new_part(name="Spacer", currentStock=3))
     st.save()
     raw = json.loads(f.read_text())
-    assert raw["format"] == "holocron-inventory" and "parts" in raw["values"]
+    assert raw["format"] == "dims-inventory" and "parts" in raw["values"]
     other = InventoryStore(f)
     assert other.inv.parts[0]["name"] == "Spacer"
     other.inv.parts[0]["currentStock"] = 99
@@ -185,6 +185,10 @@ def test_legacy_strata_files_and_migration(tmp_path):
     old = tmp_path / "StrataCAD" / "holocron-inventory.json"
     old.parent.mkdir()
     old.write_text('{"format": "holocron-inventory", "values": {"parts": "[]"}}')
-    new = tmp_path / "Daedalus" / "holocron-inventory.json"
+    new = tmp_path / "Daedalus" / "dims-inventory.json"
     assert migrate_inventory(new) and new.exists()
     assert not migrate_inventory(new)          # never overwrites
+    same = tmp_path / "Daedalus2" / "dims-inventory.json"    # pre-rename file in the same folder
+    (same.parent).mkdir()
+    (same.parent / "holocron-inventory.json").write_text('{"values": {"parts": "[]"}}')
+    assert migrate_inventory(same) and same.exists()
