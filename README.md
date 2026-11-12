@@ -125,6 +125,23 @@ into Supabase ▸ SQL Editor (or click *Copy DIMS setup SQL*) — one row per re
 roles (admin / editor / floor / viewer, first sign-in is admin), audit trail, row-level security. Old web-app data
 imports with one click; servers without the tables keep working in the old single-table mode.
 
+**DIMS extras**
+- **Analytics tab:** usage trends (months of stock left, run-out date, suggested reorder point), cost analysis
+  (stock value by type / vendor / category / rack, project cost per unit), vendor price cross-reference (cheapest
+  quote, savings per year), production history (date range; completion dates from the team server's audit trail),
+  discontinued parts. Every report exports to Excel.
+- **Parts:** sort and filter by vendor, part pictures and wireframe thumbnails of 3D models (STL / STEP /
+  .daedalus; SolidWorks files show their saved preview), discontinued parts with a replacement (never reordered).
+- **MFG revisions…** checks manufactured parts against their model and drawing files: a higher "Rev" file in the
+  folder, a file saved since it was checked in, or a revision letter that doesn't match.
+- **Locations ▸ Print binning list:** every bin with its parts and stock, with a blank Count column — print, PDF
+  or Excel.
+- **Icarus in DIMS:** the ✦ Icarus button opens a chat that reads the inventory and, when asked, records stock,
+  counts, orders, projects, production orders, revisions and discontinued parts (each change can be undone). The
+  3D workspace's Icarus has the same inventory tools.
+- **Report bug** (also Help ▸ Report a bug…): a short form plus system details, sent as an email to the team
+  contact, a GitHub issue, or copied / saved with a screenshot.
+
 **Optional extras**
 - **DWG:** install the free ODA File Converter; Daedalus finds it automatically. DXF, PDF, SVG and STEP need nothing extra.
 - **Scanned handbooks:** install Tesseract OCR to add them to the Design Data reference library.

@@ -452,6 +452,22 @@ class SupabaseRowStore(SupabaseStore):
         self.load()
         return res or {}
 
+    def status_history(self, collection: str, field: str, value) -> dict:
+        """{record id: 'YYYY-MM-DD'} — the first time each record's `field` became `value`, from the audit trail
+        (admins and editors can read it). Empty when the trail can't be read."""
+        q = (f"/rest/v1/dims_audit?select=record_id,at,old,new&collection=eq.{_q(collection)}"
+             f"&new->>{_q(field)}=eq.{_q(str(value))}&order=at.asc")
+        try:
+            rows = self._rows(q)
+        except SyncError:
+            return {}
+        out = {}
+        for r in rows:
+            old = (r.get("old") or {}).get(field)
+            if old != value and r.get("record_id") not in out:
+                out[r["record_id"]] = str(r.get("at") or "")[:10]
+        return out
+
     def people(self) -> list[dict]:
         code, rows = self._rest("GET", "/rest/v1/dims_profiles?select=user_id,email,display_name,role&order=email.asc")
         if code != 200:

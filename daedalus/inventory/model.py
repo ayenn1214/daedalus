@@ -274,7 +274,9 @@ class Inventory:
         return " · ".join(bits)
 
     def low_stock(self):
-        return [p for p in self.parts if num(p.get("currentStock")) <= num(p.get("reorderPoint"))]
+        """Parts at or below their reorder point — discontinued parts are never reordered."""
+        return [p for p in self.parts if num(p.get("currentStock")) <= num(p.get("reorderPoint"))
+                and not p.get("discontinued")]
 
     def component_ids(self) -> set:
         ids = set()
@@ -755,6 +757,9 @@ class Inventory:
             r["Bin Position"] = loc.get("binPosition") if loc else ""
             r["Bin Section"] = p["locationId"].split("::")[1] if "::" in (p.get("locationId") or "") else ""
             r["Weldment"] = "Yes" if p.get("isWeldment") else ""
+            r["Revision"] = p.get("revision") or ""
+            r["CAD File"] = p.get("cadFile") or ""
+            r["Discontinued"] = "Yes" if p.get("discontinued") else ""
             r["Components"] = "; ".join(f"{self.part(c['partId'])['name']} x{c.get('qty')}"
                                         for c in p.get("components") or [] if self.part(c.get("partId")))
             rows.append(r)
@@ -865,6 +870,13 @@ class Inventory:
             p = next((x for x in self.parts if x["name"].lower() == name.lower() and x.get("type") == typ), None)
             if not p:
                 continue
+            for col, key in (("Revision", "revision"), ("CAD File", "cadFile")):
+                v = str(g(r, col)).strip()
+                if v:
+                    p[key] = v.upper() if key == "revision" else v
+            disc = str(g(r, "Discontinued")).strip().lower()
+            if disc:
+                p["discontinued"] = disc in ("yes", "true", "1")
             flag = str(g(r, "Weldment")).strip().lower()
             if flag:
                 p["isWeldment"] = flag in ("yes", "true", "1")

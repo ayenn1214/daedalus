@@ -237,7 +237,8 @@ class InventoryPage(QWidget):
 
     TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
             ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Clients"),
-            ("reorder", "Reorder"), ("shortages", "Shortages"), ("log", "Activity Log"), ("sync", "Import / Export")]
+            ("reorder", "Reorder"), ("shortages", "Shortages"), ("analytics", "Analytics"), ("log", "Activity Log"),
+            ("sync", "Import / Export")]
 
     def __init__(self, store: InventoryStore | None = None, parent=None, lite: bool = False):
         super().__init__(parent)
@@ -250,7 +251,12 @@ class InventoryPage(QWidget):
         self.store = store
         self.store.inv.userName = self.settings.value("inventory/user") or os.environ.get("USERNAME") or \
             os.environ.get("USER") or ""
-        self.parts_filter = {"type": "all", "project": "all", "q": ""}
+        self.parts_filter = {"type": "all", "project": "all", "q": "", "vendor": "all", "sort": "name",
+                             "discontinued": False}
+        self.analytics_state: dict = {}
+        from .inventory_extras_ui import ThumbLoader
+        self.thumbs = ThumbLoader(self)
+        self.thumbs.ready.connect(lambda _src: self._thumb_refresh())
         self.reorder_filter = {"project": "all", "vendor": "all"}
         self.sel_parts: set = set()
         self.sel_reorder: set = set()
@@ -278,7 +284,12 @@ class InventoryPage(QWidget):
         self.low_btn.setStyleSheet(f"color:{theme.ERROR}; border-color:{theme.ERROR}")
         h.addWidget(self.low_btn)
         h.addWidget(_btn("Send BOM ⇢", self.send_bom_requested.emit, "Add the open design's BOM to a project"))
+        self.icarus_btn = _btn("✦ Icarus", self.toggle_icarus, "Ask Icarus about the inventory — stock, costs, "
+                               "trends, orders — or have it record changes for you")
+        self.icarus_btn.setCheckable(True)
+        h.addWidget(self.icarus_btn)
         h.addWidget(_btn("?", self.guide, "User guide"))
+        h.addWidget(_btn("Report bug", self.report_bug, "Report a bug or ask for a feature"))
         self.who = _btn("", self.set_name, "Your name on the activity log")
         h.addWidget(self.who)
         lay.addWidget(top)
@@ -306,7 +317,13 @@ class InventoryPage(QWidget):
             self.tabs.addTab(sc, label)
             self.pages[key] = sc
         self.tabs.currentChanged.connect(lambda _i: self.refresh_current())
-        lay.addWidget(self.tabs, 1)
+        from PySide6.QtWidgets import QSplitter
+        self.split = QSplitter(Qt.Horizontal)
+        self.split.addWidget(self.tabs)
+        self.icarus = None
+        lay.addWidget(self.split, 1)
+        if self.settings.value("dims/icarus_visible", False, type=bool):
+            QTimer.singleShot(0, lambda: self.toggle_icarus(True))
         self.toast = Toast(self)
         self.timer = QTimer(self)
         self.timer.timeout.connect(self._poll)
@@ -515,13 +532,15 @@ class InventoryPage(QWidget):
     def parts_tree(self, parts, actions=True, selectable=False, max_h=None):
         inv = self.inv
         comp = inv.component_ids()
-        cols = (["", ] if selectable else []) + ["Part", "Type", "Project", "Stock", "Level", "Reorder Pt",
+        cols = (["", ] if selectable else []) + ["Part", "Type", "Project", "Vendor", "Stock", "Level", "Reorder Pt",
                                                   "Unit Cost"] + (["Actions"] if actions else [])
         t = QTreeWidget()
         t.setColumnCount(len(cols))
         t.setHeaderLabels(cols)
         t.setRootIsDecorated(True)
         t.setAlternatingRowColors(True)
+        from PySide6.QtCore import QSize
+        t.setIconSize(QSize(36, 36))
         off = 1 if selectable else 0
 
         def add(parent, p, depth, qty_label, stock_override):
@@ -530,28 +549,39 @@ class InventoryPage(QWidget):
             stock = stock_override if emb else M.num(p.get("currentStock"))
             name = ("× " + str(qty_label) + "  " if qty_label is not None else "") + p["name"] + \
                 ("  (weldment)" if p.get("isWeldment") and p.get("components") else "") + \
-                ("  [std]" if p.get("stdPartId") else "")
+                ("  [std]" if p.get("stdPartId") else "") + \
+                ("  (discontinued)" if p.get("discontinued") else "") + \
+                (f"  Rev {p['revision']}" if p.get("revision") else "")
             it.setText(off + 0, name)
+            it.setIcon(off + 0, self.thumbs.icon_for(p))
             f = it.font(off)
             f.setBold(depth == 0)
+            f.setStrikeOut(bool(p.get("discontinued")))
             it.setFont(off, f)
+            if p.get("discontinued"):
+                it.setForeground(off, QBrush(QColor(theme.MUTED)))
             spec = inv.spec_line(p)
             if p.get("stdPartId"):
                 spec = (spec + "\n" if spec else "") + "[std] Daedalus standard part — Insert in model puts it in the open model"
             it.setToolTip(off, spec)
             it.setText(off + 1, M.TYPE_LABEL.get(p.get("type"), ""))
             it.setText(off + 2, ", ".join(inv.project_chips(p)) or "—")
-            it.setText(off + 3, f"{stock:g}{' *' if emb else ''} {p.get('unit') or ''}")
-            it.setTextAlignment(off + 3, Qt.AlignRight | Qt.AlignVCenter)
+            best = inv.best_supplier(p) or (inv.suppliers(p)[0] if inv.suppliers(p) else None)
+            it.setText(off + 3, best["name"] if best else "—")
+            if best and len(inv.suppliers(p)) > 1:
+                it.setToolTip(off + 3, "\n".join(f"{x['name']}: {M.fmt_money(x.get('price'))} {x.get('currency') or ''}"
+                                                 for x in inv.suppliers(p)))
+            it.setText(off + 4, f"{stock:g}{' *' if emb else ''} {p.get('unit') or ''}")
+            it.setTextAlignment(off + 4, Qt.AlignRight | Qt.AlignVCenter)
             if emb:
-                it.setToolTip(off + 3, "Embedded in assembled stock — already welded in, not separate on-hand inventory")
-            it.setText(off + 5, f"{M.num(p.get('reorderPoint')):g}")
-            it.setText(off + 6, M.fmt_money(p.get("unitCost")))
+                it.setToolTip(off + 4, "Embedded in assembled stock — already welded in, not separate on-hand inventory")
+            it.setText(off + 6, f"{M.num(p.get('reorderPoint')):g}")
+            it.setText(off + 7, M.fmt_money(p.get("unitCost")))
             it.setData(0, Qt.UserRole, p["id"])
             if selectable and depth == 0:
                 it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
                 it.setCheckState(0, Qt.Checked if p["id"] in self.sel_parts else Qt.Unchecked)
-            t.setItemWidget(it, off + 4, Gauge(inv.stock_ratio(p, stock), inv.level(p, stock)))
+            t.setItemWidget(it, off + 5, Gauge(inv.stock_ratio(p, stock), inv.level(p, stock)))
             if actions:
                 btns = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
                         _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
@@ -562,7 +592,7 @@ class InventoryPage(QWidget):
                 if p.get("stdPartId"):
                     btns.append(_small("Insert in model", lambda _=False, i=p["stdPartId"]: self.insert_std_requested.emit(i),
                                        "Insert this standard part into the open model"))
-                t.setItemWidget(it, off + 7, _actions(*btns))
+                t.setItemWidget(it, off + 8, _actions(*btns))
             if p.get("type") == "manufactured" and p.get("isWeldment"):
                 for c in p.get("components") or []:
                     child = inv.part(c.get("partId"))
@@ -586,7 +616,7 @@ class InventoryPage(QWidget):
                 hdr.setSectionResizeMode(c, QHeaderView.ResizeToContents)
         rows = t.topLevelItemCount() + sum(t.topLevelItem(i).childCount() for i in range(t.topLevelItemCount())
                                            if t.topLevelItem(i).isExpanded())
-        t.setMinimumHeight(min(max_h or 10_000, 34 + 30 * max(rows, 1)))
+        t.setMinimumHeight(min(max_h or 10_000, 34 + 40 * max(rows, 1)))
         return t
 
     def _sel_changed(self, it, col):
@@ -896,6 +926,8 @@ class InventoryPage(QWidget):
         row = QHBoxLayout()
         row.addWidget(_muted(f"{len(locs)} bin location{'s' if len(locs) != 1 else ''} · assign parts from their "
                              "Edit form."), 1)
+        row.addWidget(_btn("Print binning list…", self.print_binning, "Every bin with its parts and stock — "
+                                                                       "print, PDF or Excel, with a column to count"))
         row.addWidget(_btn("+ Add Location", lambda: self.edit_location(None), primary=True))
         v.addLayout(row)
         if locs:
@@ -966,9 +998,33 @@ class InventoryPage(QWidget):
         self.q.setPlaceholderText("Search name, #, supplier, size, project…")
         self.q.setClearButtonEnabled(True)
         self.q.textChanged.connect(self._search)
+        vsel = QComboBox()
+        vsel.addItem("All vendors", "all")
+        for name in sorted({s["name"] for p in inv.parts for s in inv.suppliers(p)}, key=str.lower):
+            vsel.addItem(name, name)
+        vsel.addItem("No vendor", "none")
+        vsel.setCurrentIndex(max(0, vsel.findData(f["vendor"])))
+        vsel.currentIndexChanged.connect(lambda _i: (f.__setitem__("vendor", vsel.currentData()),
+                                                     self.refresh_current()))
+        ssel = QComboBox()
+        for k, lab in (("name", "Sort: Name"), ("vendor", "Sort: Vendor"), ("stock", "Sort: Stock level"),
+                       ("location", "Sort: Location"), ("value", "Sort: Stock value"), ("type", "Sort: Type")):
+            ssel.addItem(lab, k)
+        ssel.setCurrentIndex(max(0, ssel.findData(f["sort"])))
+        ssel.currentIndexChanged.connect(lambda _i: (f.__setitem__("sort", ssel.currentData()),
+                                                     self.refresh_current()))
+        disc = QCheckBox("Discontinued")
+        disc.setToolTip("Show discontinued parts")
+        disc.setChecked(f["discontinued"])
+        disc.toggled.connect(lambda on: (f.__setitem__("discontinued", on), self.refresh_current()))
         row.addWidget(tsel)
         row.addWidget(psel)
+        row.addWidget(vsel)
+        row.addWidget(ssel)
         row.addWidget(self.q, 1)
+        row.addWidget(disc)
+        row.addWidget(_btn("MFG revisions…", self.revision_check, "Check manufactured parts against their model / "
+                                                                  "drawing files for newer revisions"))
         row.addWidget(_btn("+ Add Part", lambda: self.edit_part(None), primary=True))
         v.addLayout(row)
         if self.sel_parts:
@@ -990,7 +1046,23 @@ class InventoryPage(QWidget):
                 p.get("name"), p.get("partNumber"), p.get("qbPartNumber"), *[s["name"] for s in inv.suppliers(p)],
                 p.get("size"), p.get("headStyle"), p.get("threadStandard"), *inv.project_chips(p),
                 inv.location_label_for(p.get("locationId")))).lower()]
-        lst.sort(key=lambda p: p["name"].lower())
+        if f["vendor"] == "none":
+            lst = [p for p in lst if not inv.suppliers(p)]
+        elif f["vendor"] != "all":
+            lst = [p for p in lst if any(s["name"] == f["vendor"] for s in inv.suppliers(p))]
+        if not f["discontinued"]:
+            lst = [p for p in lst if not p.get("discontinued")]
+
+        def vendor_key(p):
+            b = inv.best_supplier(p) or (inv.suppliers(p)[0] if inv.suppliers(p) else None)
+            return ((b["name"].lower() if b else "~~~"), p["name"].lower())
+        keys = {"name": lambda p: p["name"].lower(), "vendor": vendor_key,
+                "stock": lambda p: (inv.stock_ratio(p), p["name"].lower()),
+                "location": lambda p: (inv.location_label_for(p.get("locationId")) or "~~~", p["name"].lower()),
+                "value": lambda p: -M.num(p.get("currentStock")) * inv.to_cad(p.get("unitCost"),
+                                                                            p.get("unitCostCurrency")),
+                "type": lambda p: (p.get("type") or "", p["name"].lower())}
+        lst.sort(key=keys.get(f["sort"], keys["name"]))
         v.addWidget(self.parts_tree(lst, actions=True, selectable=True) if lst
                     else _muted("No parts match. Add one, or clear the filters."))
         v.addStretch(1)
@@ -1328,7 +1400,11 @@ class InventoryPage(QWidget):
             t = []
             for r in rows:
                 p = r["part"]
-                name = QTableWidgetItem(p["name"])
+                rp = inv.part(p.get("replacementId")) if p.get("discontinued") else None
+                name = QTableWidgetItem(p["name"] + ("  (discontinued" + (f" → use {rp['name']}" if rp else "") + ")"
+                                                     if p.get("discontinued") else ""))
+                if p.get("discontinued"):
+                    name.setForeground(QBrush(QColor(theme.WARN)))
                 name.setToolTip(inv.spec_line(p))
                 comp = "\n".join(f"{inv.project_name(c['projectId']) or '(deleted project)'} needs {c['needed']:g}"
                                  for c in r["contributing"])
@@ -1575,6 +1651,65 @@ class InventoryPage(QWidget):
             self.inv.userName = name.strip()
             self.settings.setValue("inventory/user", name.strip())
             self.refresh()
+
+    # ============================================================ analytics
+    def build_analytics(self):
+        from .inventory_extras_ui import AnalyticsView
+        w = AnalyticsView(self)
+        w.edit_part.connect(self.edit_part)
+        return w
+
+    def print_binning(self):
+        from .inventory_extras_ui import BinningDialog
+        BinningDialog(self.inv, self).exec()
+
+    def revision_check(self):
+        from .inventory_extras_ui import VersionCheckDialog
+        VersionCheckDialog(self.inv, lambda msg: self.commit(msg), self).exec()
+
+    def _thumb_refresh(self):
+        """A thumbnail finished: redraw the visible list once things settle."""
+        if not hasattr(self, "_thumb_timer"):
+            self._thumb_timer = QTimer(self)
+            self._thumb_timer.setSingleShot(True)
+            self._thumb_timer.timeout.connect(lambda: self.current_key() in ("parts", "dashboard", "projects")
+                                              and self.refresh_current())
+        self._thumb_timer.start(600)
+
+    # ============================================================== Icarus
+    def toggle_icarus(self, on=None):
+        """on: the button's new checked state (clicked passes it); None flips."""
+        if on is None:
+            on = self.icarus is None or not self.icarus.isVisible()
+        on = bool(on)
+        if on and self.icarus is None:
+            from ..ai.dims_tools import DIMS_EXAMPLES, DIMS_SYSTEM, DIMS_TOOLS, DimsToolExecutor
+            from .copilot_panel import CopilotPanel
+            ex = DimsToolExecutor(lambda: self.store, lambda msg, undo=None: self.commit(msg, undo))
+            self.icarus = CopilotPanel(None, executor=ex, tools=DIMS_TOOLS, system=DIMS_SYSTEM,
+                                       examples=DIMS_EXAMPLES,
+                                       welcome=("Ask about the inventory",
+                                                "Icarus ({who}) reads DIMS — stock, bins, projects, orders, costs, "
+                                                "trends — and records changes when you ask (each one can be undone). "
+                                                "Try one:"))
+            self.icarus.setMinimumWidth(320)
+            self.split.addWidget(self.icarus)
+            self.split.setStretchFactor(0, 3)
+            self.split.setStretchFactor(1, 1)
+            tot = max(self.split.width(), 1200)
+            self.split.setSizes([tot - 420, 420])
+        if self.icarus is not None:
+            self.icarus.setVisible(on)
+        self.icarus_btn.setChecked(on)
+        self.settings.setValue("dims/icarus_visible", on)
+
+    def report_bug(self):
+        from .bug_report import BugReportDialog
+        BugReportDialog(self.window(), context={"Area": f"DIMS · {self.tabs.tabText(self.tabs.currentIndex())}",
+                                                "Data": self.store.location(),
+                                                "Role": getattr(self.store, "role", None) or "file",
+                                                "Last sync problem": getattr(self.store, "last_error", None) or "—"},
+                        inv=self.inv, commit=lambda msg: self.commit(msg)).exec()
 
     def guide(self):
         QMessageBox.information(self, "DIMS", D.GUIDE)

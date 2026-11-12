@@ -256,3 +256,17 @@ def test_connect_detects_layout_and_ui(env, monkeypatch):
     st2 = B.connect_team(s, shim.url, ANON, "mike@shop.ca", "pw")
     assert st2.layout == "blobs" and s.value("inventory/supabase_layout") == "blobs"
     monkeypatch.setattr(QMessageBox, "warning", staticmethod(lambda *a, **k: None))
+
+
+def test_production_completion_dates_from_audit(env):
+    import datetime as dt
+    a = client(env, "ankur")
+    pid = a.inv.find_or_create_project("Cart")
+    a.inv.productionOrders.append({"id": "po1", "projectId": pid, "qty": 2, "status": "In Fab"})
+    a.save()
+    next(o for o in a.inv.productionOrders if o["id"] == "po1")["status"] = "Complete"
+    a.save()
+    done = a.status_history("production-orders", "status", "Complete")
+    assert done == {"po1": dt.date.today().isoformat()}
+    f = client(env, "floor")                                   # floor can't read the audit trail: no dates, no error
+    assert f.status_history("production-orders", "status", "Complete") == {}

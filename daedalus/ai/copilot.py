@@ -6,7 +6,6 @@ import json
 import os
 from typing import Callable
 
-from .tools import TOOLS
 
 DEFAULT_MODEL = os.environ.get("DAEDALUS_MODEL", "claude-opus-5-5")
 
@@ -143,7 +142,9 @@ class Copilot:
         self.max_steps = max_steps
         self.messages: list[dict] = []
         self._stop = False
-        self.tools = tools if tools is not None else TOOLS
+        if tools is None:
+            from .tools import TOOLS as tools
+        self.tools = tools
         self.system = system or SYSTEM
 
     def stop(self):

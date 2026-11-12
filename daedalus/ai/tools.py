@@ -637,6 +637,10 @@ NEW_TOOLS += [
 
 TOOLS += NEW_TOOLS
 
+from .dims_tools import DIMS_NAMES, DIMS_TOOLS, DimsToolExecutor  # noqa: E402
+
+TOOLS += [t for t in DIMS_TOOLS if t["name"] not in {x["name"] for x in TOOLS}]
+
 from .tools28 import NAMES as _NAMES28, TOOLS28, run28  # noqa: E402
 
 TOOLS += TOOLS28
@@ -1044,7 +1048,37 @@ class ToolExecutor:
                       "similar": brief([m for m in sim if m["id"] != r["id"]])})
         if name.startswith("inventory_") or name == "send_bom_to_inventory":
             return self._inventory(name, args, J)
+        if name in DIMS_NAMES:
+            text, err = self._dims().run(name, args)
+            if err:
+                raise ValueError(text)
+            return text
         return None
+
+    def _inv_store(self):
+        page = getattr(self, "dims_page", None)          # the main window's inventory page, when there is one
+        if page is not None:
+            return page.store
+        st = getattr(self, "inventory_store", None)
+        if st is None:
+            try:
+                from PySide6.QtCore import QSettings
+
+                from ..inventory.backends import open_store
+                st = open_store(QSettings("Daedalus", "Daedalus"))
+            except Exception:  # noqa: BLE001
+                from ..inventory.store import get_store
+                st = get_store()
+            self.inventory_store = st
+        return st
+
+    def _dims(self):
+        """dims_* tools; the main window sets dims_page (its inventory page) so changes save and refresh there."""
+        if getattr(self, "_dims_x", None) is None:
+            self._dims_x = DimsToolExecutor(self._inv_store, lambda msg, undo=None: (
+                self.dims_page.commit(msg, undo) if getattr(self, "dims_page", None) is not None
+                else self._inv_store().save()))
+        return self._dims_x
 
     def _inventory(self, name, args, J):
         from ..inventory import cad as IC
@@ -1100,7 +1134,7 @@ class ToolExecutor:
                 out = run28(self.doc, name, args)
                 if out is not None:
                     return out, False
-            if name in {t["name"] for t in NEW_TOOLS}:
+            if name in DIMS_NAMES or name in {t["name"] for t in NEW_TOOLS}:
                 out = self._new(name, args)
                 if out is not None:
                     return out, False

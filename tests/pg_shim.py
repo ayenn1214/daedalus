@@ -142,6 +142,13 @@ class Shim:
             v = vals[0]
             op, _, val = v.partition(".")
             ident = sql.Identifier(col)
+            if "->>" in col:                                    # json path: new->>status=eq.Complete
+                c, _, key = col.partition("->>")
+                if op != "eq":
+                    raise ValueError(op)
+                parts.append(sql.SQL("{}->>%s = %s").format(sql.Identifier(c)))
+                args += [key, val]
+                continue
             if op == "eq":
                 parts.append(sql.SQL("{}::text = %s").format(ident) if col != "updated_at"
                              else sql.SQL("{} = %s::timestamptz").format(ident))

@@ -150,6 +150,54 @@ class PartDialog(_Base):
         dr.addWidget(self.drawing)
         dr.addWidget(browse)
         f.addRow("Drawing / datasheet", dr)
+        # model + revision (manufactured), picture (any part) — thumbnails and the MFG revision check use these
+        def file_row(value, placeholder, filt):
+            w = QWidget()
+            h = QHBoxLayout(w)
+            h.setContentsMargins(0, 0, 0, 0)
+            e = QLineEdit(value or "")
+            e.setPlaceholderText(placeholder)
+            b = QPushButton("…")
+            b.setFixedWidth(28)
+
+            def pick():
+                from PySide6.QtWidgets import QFileDialog
+                fn, _ = QFileDialog.getOpenFileName(self, placeholder, e.text(), filt)
+                if fn:
+                    e.setText(fn)
+            b.clicked.connect(pick)
+            h.addWidget(e)
+            h.addWidget(b)
+            return w, e
+        self.cad_row, self.cad = file_row(p.get("cadFile"), "3D model: SolidWorks, STEP, STL, .daedalus …",
+                                          "3D models (*.sldprt *.sldasm *.step *.stp *.stl *.obj *.iges *.igs "
+                                          "*.daedalus);;All files (*)")
+        self.rev = QLineEdit(p.get("revision") or "")
+        self.rev.setPlaceholderText("e.g. C")
+        self.rev.setMaximumWidth(80)
+        self.rev_note = QLabel()
+        self.rev_note.setObjectName("muted")
+        rr = QHBoxLayout()
+        rr.addWidget(self.rev)
+        rr.addWidget(self.rev_note, 1)
+        self.rev_row = QWidget()
+        self.rev_row.setLayout(rr)
+        rr.setContentsMargins(0, 0, 0, 0)
+        f.addRow("3D model", self.cad_row)
+        f.addRow("Revision", self.rev_row)
+        self._cad_label = f.labelForField(self.cad_row)
+        self._rev_label = f.labelForField(self.rev_row)
+        if part and p.get("type") == "manufactured":
+            from ..inventory import analytics as A
+            st = A.version_status(p)
+            if st["status"] not in ("ok", "no-file"):
+                self.rev_note.setText("⚠ " + st["detail"])
+                self.rev_note.setStyleSheet(f"color:{theme.WARN}")
+            elif p.get("revisionCheckedAt"):
+                self.rev_note.setText(f"checked in {p['revisionCheckedAt']}")
+        self.img_row, self.img = file_row(p.get("imageFile"), "Picture for the parts list (optional)",
+                                          "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)")
+        f.addRow("Picture", self.img_row)
         if p.get("stdPartId"):
             try:
                 from ..stdparts import get_library
@@ -261,6 +309,26 @@ class PartDialog(_Base):
             sg.addWidget(web, i * 2 + 1, 1, 1, 4)
             self.sups.append((nm, pr, cur, spn, web))
         f.addRow(sup_box)
+        # discontinued
+        self.disc_box = QGroupBox("Discontinued")
+        self.disc_box.setCheckable(True)
+        self.disc_box.setChecked(bool(p.get("discontinued")))
+        self.disc_box.setToolTip("Discontinued parts are never put on the reorder list; projects that still need "
+                                 "them show the replacement")
+        dg = QFormLayout(self.disc_box)
+        self.repl = QComboBox()
+        self.repl.addItem("— none —", None)
+        for x in sorted(inv.parts, key=lambda x: x["name"].lower()):
+            if not part or x["id"] != part["id"]:
+                self.repl.addItem(x["name"], x["id"])
+        self.repl.setCurrentIndex(max(0, self.repl.findData(p.get("replacementId"))))
+        self.disc_note = QLineEdit(p.get("discontinuedNote") or "")
+        self.disc_note.setPlaceholderText("Why / what to use instead")
+        dg.addRow("Replacement", self.repl)
+        dg.addRow("Note", self.disc_note)
+        if p.get("discontinuedDate"):
+            dg.addRow("Since", QLabel(M.fmt_date(p["discontinuedDate"])))
+        f.addRow(self.disc_box)
         sc = QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(body)
@@ -324,6 +392,9 @@ class PartDialog(_Base):
         self.cat_custom.setVisible(fast and self.cat_combo.currentData() == "Other")
         self.cat_text.setVisible(not fast)
         manu = self.type.currentData() == "manufactured"
+        for w in (self.rev_row, self._rev_label):
+            if w is not None:
+                w.setVisible(manu)
         self.weld.setVisible(manu)
         self.comp_box.setVisible(manu and self.weld.isChecked())
 
@@ -384,7 +455,13 @@ class PartDialog(_Base):
                "currentStock": self.stock.value(), "unit": self.unit.text().strip() or "ea",
                "reorderPoint": self.rp.value(), "reorderQty": self.rq.value(), "unitCost": self.cost.value(),
                "unitCostCurrency": self.cost_cur.currentText(), "locationId": self.loc.currentData(),
-               "suppliers": sups, "updatedAt": M.now_ms()}
+               "suppliers": sups, "updatedAt": M.now_ms(), "cadFile": self.cad.text().strip(),
+               "imageFile": self.img.text().strip(), "discontinued": self.disc_box.isChecked()}
+        if self.disc_box.isChecked():
+            out.update(replacementId=self.repl.currentData(), discontinuedNote=self.disc_note.text().strip(),
+                       discontinuedDate=(self.part or {}).get("discontinuedDate") or M.today())
+        if typ == "manufactured":
+            out["revision"] = self.rev.text().strip().upper()
         if typ == "fastener":
             out.update(headStyle=self.head.currentText(), threadType=self.thread_type.currentText(),
                        threadStandard=self.std.currentText(), size=self.size.currentText().strip(),

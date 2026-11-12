@@ -149,6 +149,7 @@ class MainWindow(QMainWindow):
 
         # right: copilot
         self.copilot = CopilotPanel(self.doc)
+        self.copilot.executor.dims_page = self.inventory_page     # dims_* tools save + refresh through DIMS
         right = QDockWidget("Icarus", self)
         right.setObjectName("copilot")
         from .islands import scrolled
@@ -1744,6 +1745,9 @@ class MainWindow(QMainWindow):
         h = mb.addMenu("&Help")
         act(h, "Startup modules…", self.startup_modules)
         act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
+        act(h, "Report a bug…", lambda: __import__("daedalus.ui.bug_report", fromlist=["x"]).BugReportDialog(
+            self, context={"Area": "3D workspace", "Document": str(getattr(self.doc, "path", "") or "unsaved")},
+            inv=self.inventory_page.inv, commit=lambda m: self.inventory_page.commit(m)).exec())
         act(h, "Setup check (Python + Icarus)…", self.show_setup_check)
         act(h, "Design data calculators…", lambda: self.design_data(0))
         act(h, "Reference library (your handbooks)…", lambda: self.design_data(1))

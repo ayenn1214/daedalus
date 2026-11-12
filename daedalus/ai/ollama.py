@@ -14,7 +14,6 @@ import urllib.request
 from typing import Callable
 
 from .copilot import SYSTEM
-from .tools import TOOLS
 
 DEFAULT_HOST = "http://127.0.0.1:11434"   # not "localhost": on Windows that can try IPv6 ::1 first
 DEFAULT_MODEL = "qwen2.5:14b"
@@ -34,6 +33,12 @@ def normalize_host(h: str | None) -> str:
         host = "127.0.0.1"
     return f"{scheme}://{host}:{port or '11434'}"
 DEFAULT_CTX = 32768
+
+
+def _all_tools():
+    from .tools import TOOLS
+    return TOOLS
+
 
 CORE_TOOLS = [
     "get_model", "add_sketch", "add_extrude", "add_revolve", "add_sweep", "add_fillet", "add_chamfer", "add_shell",
@@ -124,7 +129,7 @@ def tool_schemas(names: list[str] | None = None, tools: list[dict] | None = None
     keep = set(names) if names else None
     return [{"type": "function", "function": {"name": t["name"], "description": t.get("description", ""),
                                               "parameters": t.get("input_schema") or {"type": "object"}}}
-            for t in (tools if tools is not None else TOOLS) if keep is None or t["name"] in keep]
+            for t in (tools if tools is not None else _all_tools()) if keep is None or t["name"] in keep]
 
 
 _THINK = re.compile(r"<think>.*?</think>", re.S)

@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
 
 from ..ai import ollama
 from ..ai.copilot import DEFAULT_MODEL, Copilot
-from ..ai.tools import ToolExecutor
 from . import theme
 
 MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
@@ -82,7 +81,10 @@ class CopilotPanel(QWidget):
         """doc=None + executor/tools/system: a copilot for another host (SolidWorks Link)."""
         super().__init__(parent)
         self.doc = doc
-        self.executor = executor or ToolExecutor(doc)
+        if executor is None:
+            from ..ai.tools import ToolExecutor
+            executor = ToolExecutor(doc)
+        self.executor = executor
         self.custom_tools, self.custom_system = tools, system
         self.examples = examples or EXAMPLES
         self.welcome = welcome
@@ -177,6 +179,7 @@ class CopilotPanel(QWidget):
         att.addWidget(self.attach_lbl, 1)
         att.addWidget(self.clear_att_btn)
         att.addWidget(self.verify_cb)
+        self.verify_cb.setVisible(doc is not None)        # only a 3D model can be rendered back for checking
         lay.addLayout(att)
 
         row = QHBoxLayout()

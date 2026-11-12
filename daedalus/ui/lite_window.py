@@ -70,6 +70,13 @@ class LiteWindow(QMainWindow):
         h = mb.addMenu("&Help")
         act(h, "Startup modules…", self.startup_modules)
         act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
+        act(h, "Report a bug…", self.report_bug)
+
+    def report_bug(self):
+        if self.inventory_page is not None:
+            return self.inventory_page.report_bug()
+        from .bug_report import BugReportDialog
+        BugReportDialog(self, context={"Area": MOD.describe(self.mods)}).exec()
 
     def _needs_3d(self, what):
         if QMessageBox.question(self, what, f"{what} needs the 3D workspace. Open it now?") == QMessageBox.Yes:
