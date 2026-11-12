@@ -99,6 +99,8 @@ class FakeSupabase:
                 if not self._authed():
                     return
                 u = urllib.parse.urlparse(self.path)
+                if u.path != "/rest/v1/app_storage":
+                    return self._send(404, {"code": "PGRST205", "message": "table not found"})
                 q = urllib.parse.parse_qs(u.query)
                 cols = q.get("select", ["key,value,updated_at"])[0].split(",")
                 keys = None

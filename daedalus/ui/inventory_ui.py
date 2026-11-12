@@ -341,7 +341,14 @@ class InventoryPage(QWidget):
         except AuthError:
             self._committing = False
             self.team_sign_in(reason="Your session ended — sign in again to send your changes.")
-        except SyncError:
+        except SyncError as e:
+            if type(e).__name__ == "PermissionDenied":
+                QMessageBox.warning(self, "DIMS", f"{e}.\nYour change was not saved.")
+                if hasattr(self.store, "discard_pending"):
+                    self.store.discard_pending()
+                self._committing = False
+                self.refresh()
+                return
             msg = (msg + " — " if msg else "") + "saved on this PC, will sync when the team server is back"
         except OSError as e:
             QMessageBox.warning(self, "Inventory", f"Couldn't save the inventory file:\n{e}")
@@ -1387,6 +1394,19 @@ class InventoryPage(QWidget):
             row.addWidget(_btn("Server settings…", self.team_connect))
             row.addWidget(_btn("Use a file instead…", self.choose_file))
             v.addLayout(row)
+            if getattr(st, "layout", "") == "rows":
+                row = QHBoxLayout()
+                row.addWidget(_muted(f"DIMS database · your role: {st.role or '—'}. Stock changes are applied by "
+                                     "the database, every change is recorded in the audit trail.", False), 1)
+                row.addWidget(_btn("People & roles…", self.team_people))
+                if st.role == "admin":
+                    row.addWidget(_btn("Import old web-app data", self.team_import, "Copy the old app_storage data "
+                                       "into DIMS (existing records are left alone)"))
+                v.addLayout(row)
+            elif st.signed_in:
+                v.addWidget(_muted("This project still uses the original single-table layout. Run the DIMS setup SQL "
+                                   "(Server settings… ▸ Copy DIMS setup SQL) and reconnect for per-record saving, "
+                                   "database-applied stock, roles and an audit trail.", True))
             pend = st.pending()
             v.addWidget(_muted(
                 (f"Signed in as {st.email}. " if st.signed_in else "Not signed in. ") +
@@ -1505,6 +1525,19 @@ class InventoryPage(QWidget):
             except SyncError as e:
                 QMessageBox.warning(self, "Team server", str(e))
             self.refresh()
+
+    def team_people(self):
+        from .inventory_team_ui import PeopleDialog
+        PeopleDialog(self.store, self).exec()
+
+    def team_import(self):
+        from ..inventory.supabase import SyncError
+        try:
+            got = self.store.import_old_data()
+        except SyncError as e:
+            return QMessageBox.warning(self, "Import", str(e))
+        self.toast.show_msg("Imported: " + ", ".join(f"{v} {k}" for k, v in got.items() if isinstance(v, int)))
+        self.refresh()
 
     def team_sign_out(self):
         self.store.sign_out()

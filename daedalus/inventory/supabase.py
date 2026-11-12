@@ -41,6 +41,7 @@ class SupabaseStore:
     """Same interface as InventoryStore (inv, load, save, check_external, listeners) plus sign-in."""
 
     kind = "supabase"
+    layout = "blobs"
 
     def __init__(self, url: str, anon_key: str, session: dict | None = None, cache: str | Path | None = None,
                  on_session=None, timeout: float = 15.0):
@@ -344,18 +345,24 @@ class SupabaseStore:
             return
         if d.get("url") != self.url:
             return
+        if getattr(self, "layout", "blobs") != d.get("layout", "blobs"):
+            return
         self.base = d.get("base") or {}
         self.versions = d.get("versions") or {}
         self.inv.load_values(d.get("values") or {})
         self.last_sync = d.get("last_sync")
+        if hasattr(self, "_load_cache_extra"):
+            self._load_cache_extra(d)
 
     def _save_cache(self):
         try:
             self.cache.parent.mkdir(parents=True, exist_ok=True)
             tmp = self.cache.with_suffix(".tmp")
-            tmp.write_text(json.dumps({"url": self.url, "base": self.base, "versions": self.versions,
-                                       "values": self.inv.dump_values(), "last_sync": self.last_sync}),
-                           encoding="utf-8")
+            d = {"url": self.url, "base": self.base, "versions": self.versions,
+                 "values": self.inv.dump_values(), "last_sync": self.last_sync}
+            if hasattr(self, "_cache_extra"):
+                d.update(self._cache_extra())
+            tmp.write_text(json.dumps(d), encoding="utf-8")
             os.replace(tmp, self.cache)
         except OSError:
             pass

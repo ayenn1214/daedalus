@@ -8,7 +8,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..inventory import backends as B
-from ..inventory.supabase import SETUP_SQL, AuthError, SyncError
+from ..inventory.supabase import AuthError, SyncError
 
 
 class TeamServerDialog(QDialog):
@@ -42,11 +42,13 @@ class TeamServerDialog(QDialog):
         self.upload.setChecked(False)
         self.upload.setVisible(getattr(current_store, "kind", "file") == "file")
         v.addWidget(self.upload)
-        sql = QPushButton("Copy setup SQL (new project only)")
-        sql.setToolTip("Creates the app_storage table and sign-in-only access rules — paste into Supabase ▸ SQL "
-                       "Editor ▸ Run")
-        sql.clicked.connect(lambda: (QGuiApplication.clipboard().setText(SETUP_SQL),
-                                     self.note.setText("Setup SQL copied — paste it into Supabase ▸ SQL Editor.")))
+        sql = QPushButton("Copy DIMS setup SQL")
+        sql.setToolTip("Creates the DIMS tables, stock rules, roles, audit trail and access rules — paste into "
+                       "Supabase ▸ SQL Editor ▸ Run. Safe to run again; leaves the old app_storage table alone.")
+        sql.clicked.connect(lambda: (QGuiApplication.clipboard().setText(B.setup_sql()),
+                                     self.note.setText("Setup SQL copied — paste it into Supabase ▸ SQL Editor and "
+                                                       "Run, then sign in here. An admin can then import the old "
+                                                       "data from Inventory ▸ Import / Export.")))
         v.addWidget(sql)
         self.note = QLabel()
         self.note.setObjectName("muted")
@@ -63,11 +65,8 @@ class TeamServerDialog(QDialog):
         if not url.startswith("http") or not key:
             self.note.setText("Enter the project URL (https://….supabase.co) and the anon key.")
             return
-        B.save_team_config(self.settings, url, key)
         try:
-            st = B.open_team(self.settings, url, key)
-            st.sign_in(self.email.text().strip(), self.pw.text())
-            st.load()
+            st = B.connect_team(self.settings, url, key, self.email.text().strip(), self.pw.text())
         except AuthError as e:
             self.note.setText(f"Sign-in failed: {e}")
             return
@@ -109,3 +108,48 @@ class SignInDialog(QDialog):
             QMessageBox.warning(self, "Sign in", str(e))
             return
         self.accept()
+
+
+class PeopleDialog(QDialog):
+    """Admins: who has access, and what each person may do."""
+
+    ROLES = [("admin", "Admin — everything, incl. roles"), ("editor", "Editor — add / edit / delete"),
+             ("floor", "Floor — record stock in / out only"), ("viewer", "Viewer — read only")]
+
+    def __init__(self, store, parent=None):
+        super().__init__(parent)
+        from PySide6.QtWidgets import QComboBox, QHeaderView, QTableWidget, QTableWidgetItem
+        self.store = store
+        self.setWindowTitle("DIMS — people & roles")
+        self.resize(560, 360)
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("Add people in Supabase ▸ Authentication ▸ Users; they appear here as editors."))
+        try:
+            people = store.people()
+        except SyncError as e:
+            people = []
+            v.addWidget(QLabel(str(e)))
+        t = QTableWidget(len(people), 3)
+        t.setHorizontalHeaderLabels(["Email", "Name", "Role"])
+        t.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        t.verticalHeader().setVisible(False)
+        for r, p in enumerate(people):
+            t.setItem(r, 0, QTableWidgetItem(p.get("email") or ""))
+            t.setItem(r, 1, QTableWidgetItem(p.get("display_name") or ""))
+            cb = QComboBox()
+            for key, lab in self.ROLES:
+                cb.addItem(lab, key)
+            cb.setCurrentIndex(max(0, cb.findData(p.get("role"))))
+            cb.setEnabled(store.role == "admin")
+            cb.activated.connect(lambda _i, uid=p["user_id"], c=cb: self.change(uid, c.currentData()))
+            t.setCellWidget(r, 2, cb)
+        v.addWidget(t, 1)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def change(self, uid, role):
+        try:
+            self.store.set_role(uid, role)
+        except SyncError as e:
+            QMessageBox.warning(self, "Roles", str(e))
