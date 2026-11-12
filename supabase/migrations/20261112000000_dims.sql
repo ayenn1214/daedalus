@@ -113,8 +113,12 @@ where user_id = (select p.user_id from public.dims_profiles p join auth.users u 
 create or replace function public.dims_touch() returns trigger
 language plpgsql set search_path = public as $$
 begin
-  if tg_table_name = 'dims_records' and (new.collection <> old.collection or new.id <> old.id) then
-    raise exception 'collection and id cannot change';
+  -- through jsonb: dims_settings has no collection / id, and plpgsql may evaluate both sides of an AND
+  if tg_table_name = 'dims_records' then
+    if (to_jsonb(new) ->> 'collection') <> (to_jsonb(old) ->> 'collection')
+       or (to_jsonb(new) ->> 'id') <> (to_jsonb(old) ->> 'id') then
+      raise exception 'collection and id cannot change';
+    end if;
   end if;
   new.version    := old.version + 1;
   new.updated_at := clock_timestamp();

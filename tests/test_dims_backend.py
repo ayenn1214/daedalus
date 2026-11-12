@@ -156,6 +156,12 @@ def test_weekly_backup_marker_by_anyone_and_audit(env):
     _shim, dsn, ids, _ = env
     acts = sql(dsn, "select action, collection, user_id::text from dims_audit order by id")
     assert ("insert", "settings", ids["floor"]) in acts
+    a.inv.exchangeRate = 1.5                                   # second save = UPDATE of an existing settings row
+    a.save()
+    BK.mark_done(a.inv, "DIMS-weekly-backup-2026-11-20.xlsx")
+    a.save()
+    assert sql(dsn, "select version from dims_settings where key = 'exchange-rate'")[0][0] == 2
+    assert f.check_external() and f.inv.exchangeRate == 1.5
 
 
 def test_import_old_web_app_data(env):
