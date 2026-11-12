@@ -19,7 +19,8 @@ from .merge import merge_record
 from .model import KEYS, num
 from .supabase import AuthError, SupabaseStore, SyncError
 
-COLLECTIONS = list(KEYS)                       # storage keys == dims_records.collection values
+COLLECTIONS = list(KEYS)
+MRP_COLLECTIONS = {"part-numbers"}             # need the server's MRP update (schema 2)                       # storage keys == dims_records.collection values
 SETTINGS = ("exchange-rate", "sync-meta")
 PAGE = 1000                                    # Supabase's default max rows per request
 
@@ -45,6 +46,7 @@ class SupabaseRowStore(SupabaseStore):
         self.set_ver: dict = {}
         self.cursor: str | None = None         # newest updated_at seen
         self.role = ""
+        self.schema = 1                        # 2 = the MRP update (part-number registry) is on the server
         super().__init__(*a, **kw)
 
     # ------------------------------------------------------------ display
@@ -55,6 +57,8 @@ class SupabaseRowStore(SupabaseStore):
     def _local(self) -> dict:
         out = {}
         for coll, attr in KEYS.items():
+            if coll in MRP_COLLECTIONS and self.schema < 2:
+                continue                       # server without the MRP update: these stay on this PC
             for r in getattr(self.inv, attr) or []:
                 if isinstance(r, dict) and r.get("id"):
                     out[(coll, str(r["id"]))] = r
@@ -109,6 +113,33 @@ class SupabaseRowStore(SupabaseStore):
             q += f"&collection=eq.{_q(coll)}&id=in.(" + ",".join(_q(f'"{i}"') for i in idl) + ")"
         return self._rows(q)
 
+    def _fetch_schema(self):
+        code, res = self._rest("POST", "/rest/v1/rpc/dims_schema_version", {})
+        self.schema = int(res) if code == 200 and isinstance(res, (int, float)) else 1
+
+    def reserve_part_numbers(self, prefix: str, count: int, project_id=None, note: str = "") -> list[dict]:
+        """Numbers handed out by the database (a lock per prefix), so two people never get the same one."""
+        from .mrp import norm_prefix
+        if self.schema < 2:
+            raise SyncError("The team server needs the DIMS part-number update — an admin pastes the setup SQL "
+                            "(Import / Export ▸ Server settings ▸ Copy DIMS setup SQL) into Supabase")
+        code, res = self._rest("POST", "/rest/v1/rpc/dims_reserve_part_numbers",
+                               {"p_prefix": norm_prefix(prefix), "p_count": int(count), "p_project": project_id,
+                                "p_note": note or "", "p_by": self.inv.userName or self.email or "unknown"})
+        self._check_write(code, res, "part numbers")
+        if code != 200 or not isinstance(res, list):
+            raise SyncError(f"Server answered {code}: {res}")
+        out = []
+        for row in res:
+            k = (row["collection"], str(row["id"]))
+            self.rec_ver[k] = row["version"]           # not _done_row: the fetch cursor must not skip past rows
+            self.rec_base[k] = copy.deepcopy(row["data"])   # teammates wrote since this PC last fetched
+            rec = copy.deepcopy(row["data"])
+            self._set_local(row["collection"], str(row["id"]), rec)
+            out.append(rec)
+        self._save_cache()
+        return out
+
     def _fetch_settings(self) -> list:
         return self._rows("/rest/v1/dims_settings?select=key,value,version,updated_at&order=key.asc")
 
@@ -138,6 +169,7 @@ class SupabaseRowStore(SupabaseStore):
         rows = self._fetch_records()
         settings = self._fetch_settings()
         self._fetch_role()
+        self._fetch_schema()
         mine = self._local()
         mine_set = self._local_settings()
         had_base = bool(self.rec_base or self.set_base)

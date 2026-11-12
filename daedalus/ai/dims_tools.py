@@ -151,6 +151,54 @@ DIMS_TOOLS = [
      "input_schema": {"type": "object", "properties": {"part": _S, "revision": _S, "newest": _B},
                       "required": ["part"]}},
 ]
+DIMS_TOOLS += [
+    {"name": "dims_part_numbers",
+     "description": "Part-number registry. Shop structure: product-line letter + level for made parts (C30 top "
+                    "assembly, C20 sub-assembly / weldment, C10 machined part), P + category for purchased (P00 "
+                    "fasteners, P01 transmission, P02 hydraulics, P03 pneumatics, P04 electrical), numeric for "
+                    "purchased material (1000-001). Lists numbers in use (filter prefix / status reserved|assigned|"
+                    "released / created_by / query) and the next free number for a prefix.",
+     "input_schema": {"type": "object", "properties": {"prefix": _S, "status": _S, "created_by": _S, "query": _S}}},
+    {"name": "dims_reserve_part_numbers",
+     "description": "Reserve the next `count` numbers for a prefix (optionally for a project, with a note) — only "
+                    "when the user asks. The team server hands them out so nobody else gets the same ones.",
+     "input_schema": {"type": "object", "properties": {"prefix": _S, "count": _N, "project": _S, "note": _S},
+                      "required": ["prefix"]}},
+    {"name": "dims_bom",
+     "description": "A part's bill of materials (levels: 1 or 0 = all), rolled-up cost, and where the part itself is "
+                    "used (parents, top assemblies, projects, shared or unique).",
+     "input_schema": {"type": "object", "properties": {"part": _S, "levels": _N}, "required": ["part"]}},
+    {"name": "dims_set_bom",
+     "description": "Replace a part's BOM — only when the user asks. kind assembly (kit of stocked parts) | "
+                    "weldment (welded in). lines = [{part, qty}].",
+     "input_schema": {"type": "object", "properties": {
+         "part": _S, "kind": {"type": "string", "enum": ["assembly", "weldment"]},
+         "lines": {"type": "array", "items": {"type": "object", "properties": {"part": _S, "qty": _N}}}},
+         "required": ["part", "lines"]}},
+    {"name": "dims_job_order",
+     "description": "What it takes to build qty of an assembly: BOM exploded through every level, net of stock "
+                    "(net=false for gross), routed to who supplies it — purchased parts by primary vendor, fabricated "
+                    "parts by fab / machine shop, raw material by material vendor, finishing by finisher — with "
+                    "cost per vendor and the kit / pick list. log=true records the lines as part orders (only when "
+                    "asked); po_folder writes one Excel PO draft per vendor.",
+     "input_schema": {"type": "object", "properties": {"part": _S, "qty": _N, "net": _B, "project": _S, "log": _B,
+                                                       "po_folder": _S}, "required": ["part", "qty"]}},
+    {"name": "dims_material_needs",
+     "description": "Raw material needed (by shape / grade / size, total length or area, bar lengths) for open "
+                    "production orders (source=orders) or active projects (source=projects) — for buying / bulk buys.",
+     "input_schema": {"type": "object", "properties": {"source": {"type": "string", "enum": ["orders", "projects"]}}}},
+    {"name": "dims_time_phased",
+     "description": "Time-phased view: incoming orders by week (what, qty, vendor, PO, for which project, late), "
+                    "projected stock per part over `horizon_days` (on hand + incoming − production demand; the date it "
+                    "runs short), and the order log (ordered / received / binned / shipped).",
+     "input_schema": {"type": "object", "properties": {"horizon_days": _N, "part": _S,
+                                                       "section": {"type": "string",
+                                                                   "enum": ["incoming", "projected", "log", "all"]}}}},
+    {"name": "dims_vendor",
+     "description": "One vendor's details (address, contact, phone, email, account #, terms, lead time, on-time "
+                    "record) and the parts it supplies with its price and part number.",
+     "input_schema": {"type": "object", "properties": {"vendor": _S}, "required": ["vendor"]}},
+]
 DIMS_NAMES = {t["name"] for t in DIMS_TOOLS}
 
 DIMS_SYSTEM = """You are Icarus, the assistant inside DIMS — the Daedalus Inventory Management System a fabrication
@@ -168,6 +216,12 @@ orders, part orders, vendors and clients.
 - Reports (trends, cost analysis, vendor prices, production history, binning list, revision check) can be exported
   to Excel with dims_export — offer it when a table is long.
 - Fastener names follow the shop format, e.g. '5/8-11 UNC x 2" HHCS FT', 'M8 Hex Nut'.
+- Part numbers: product-line letter + level for made parts (C30-0001 top assembly ▸ C20 sub-assembly / weldment ▸
+  C10 machined part), P + category for purchased (P00 fasteners, P01 transmission, P02 hydraulics, P03 pneumatics,
+  P04 electrical), numeric for purchased material (1000-001). Descriptions are NOUN, MODIFIER, … (ASSY, FRAME, 32.21).
+  Children sit at a lower level than their parent.
+- MRP: dims_job_order routes an assembly's needs to vendors (PO drafts, kit list); dims_time_phased shows what's
+  coming, when, for which project, and when stock runs short.
 - Answer briefly: the figure or list the user needs, then one useful next step if there is one. Use short tables for
   lists of parts. No preamble."""
 
@@ -178,6 +232,8 @@ DIMS_EXAMPLES = [
     "Compare vendor prices: where are we overpaying?",
     "Production history for the last 6 months, by project",
     "Any manufactured parts with a newer drawing revision?",
+    "Next C10 number? Reserve 3 for the Lift Cart project",
+    "What do we need to buy to build 4 × C30-0001, split by vendor?",
 ]
 
 
@@ -561,6 +617,114 @@ class DimsToolExecutor:
         M.write_xlsx(path, sheets)
         return _j({"ok": True, "path": path, "rows": sum(len(r) for _n, r in sheets)})
 
+    # ------------------------------------------------------------ MRP
+    def _dims_part_numbers(self, a):
+        from ..inventory import mrp as R
+        rows = R.registry_rows(self.inv, a.get("prefix"), a.get("status"), a.get("query") or "", a.get("created_by"))
+        out = {"count": len(rows), "numbers": [{k: v for k, v in r.items() if k != "partId"} for r in rows[:150]]}
+        if a.get("prefix"):
+            out["next"] = R.next_numbers(self.inv, a["prefix"])[0]
+            out["prefix_meaning"] = R.describe_prefix(self.inv, a["prefix"])
+        else:
+            out["prefixes"] = {p: R.describe_prefix(self.inv, p)["label"] for p in R.all_prefixes(self.inv)}
+        return _j(out)
+
+    def _dims_reserve_part_numbers(self, a):
+        from ..inventory import mrp as R
+        pid = self.find_project(a["project"])["id"] if a.get("project") else None
+        st = self.store
+        n = int(a.get("count") or 1)
+        if hasattr(st, "reserve_part_numbers"):
+            got = st.reserve_part_numbers(a["prefix"], n, pid, a.get("note") or "")
+            if self.commit_fn:
+                self.commit_fn(None, None)
+        else:
+            got = R.reserve(self.inv, a["prefix"], n, pid, a.get("note") or "")
+            self._commit(f"Reserved {got[0]['id']}" + (f" … {got[-1]['id']}" if len(got) > 1 else ""))
+        return _j({"ok": True, "numbers": [r["id"] for r in got]})
+
+    def _dims_bom(self, a):
+        from ..inventory import mrp as R
+        p = self.find_part(a["part"])
+        rows = R.bom_rows(self.inv, p["id"], int(a.get("levels") or 0))
+        return _j({"part": p["name"], "partNumber": p.get("partNumber"), "kind": R.bom_kind(p),
+                   "rolledUpCostCAD": round(R.bom_cost(self.inv, p["id"]), 2),
+                   "lines": [{k: v for k, v in r.items() if k != "id"} for r in rows],
+                   "whereUsed": R.where_used(self.inv, p["id"])})
+
+    def _dims_set_bom(self, a):
+        from ..inventory import mrp as R
+        p = self.find_part(a["part"])
+        before = {k: p.get(k) for k in ("components", "isAssembly", "isWeldment")}
+        lines = [(self.find_part(x["part"])["id"], float(x.get("qty") or 1)) for x in a.get("lines") or []]
+        warns = [w for w in (R.level_warning(p.get("partNumber"), (self.inv.part(c) or {}).get("partNumber"))
+                             for c, _q in lines) if w]
+        R.set_bom(self.inv, p["id"], lines, a.get("kind") or R.bom_kind(p) or "assembly")
+        self._commit(f"BOM of {p['name']} set", lambda: (p.update(before), self._commit("Undone")))
+        return _j({"ok": True, "lines": len(lines), "warnings": warns,
+                   "rolledUpCostCAD": round(R.bom_cost(self.inv, p["id"]), 2)})
+
+    def _dims_job_order(self, a):
+        from ..inventory import mrp as R
+        p = self.find_part(a["part"])
+        pid = self.find_project(a["project"])["id"] if a.get("project") else None
+        job = R.job_order(self.inv, p["id"], float(a["qty"]), a.get("net", True), pid)
+        out = {"build": f"{job['qty']:g} × {part_label_txt(p)}", "net_of_stock": job["net"],
+               "vendors": {v: {"lines": [{k: x for k, x in ln.items() if k != "partId"} for ln in lines],
+                               "totalCAD": round(job["totals"][v], 2)} for v, lines in job["groups"].items()},
+               "pick_list": job["pick"]}
+        if a.get("po_folder"):
+            out["po_drafts"] = R.write_po_drafts(self.inv, job, a["po_folder"])
+        if a.get("log"):
+            made = R.log_job_orders(self.inv, job)
+            self._commit(f"Logged {len(made)} order line(s) for {p['name']}")
+            out["logged_orders"] = len(made)
+        return _j(out)
+
+    def _dims_material_needs(self, a):
+        from ..inventory import mrp as R
+        inv = self.inv
+        if (a.get("source") or "orders") == "orders":
+            dem = R.open_demands(inv)
+        else:
+            dem = [(p["id"], inv.needed_for_project(p, pr["id"])) for pr in inv.active_projects()
+                   for p in inv.parts_for_project(pr["id"])]
+        return _j(R.material_needs(inv, dem))
+
+    def _dims_time_phased(self, a):
+        from ..inventory import mrp as R
+        sec = a.get("section") or "all"
+        out = {}
+        if sec in ("incoming", "all"):
+            out["incoming"] = [{k: v for k, v in r.items() if k != "id"} for r in R.incoming(self.inv)]
+        if sec in ("projected", "all"):
+            rows = R.projected(self.inv, int(a.get("horizon_days") or 120))
+            if a.get("part"):
+                pid = self.find_part(a["part"])["id"]
+                rows = [r for r in rows if r["id"] == pid]
+            out["projected"] = [{k: v for k, v in r.items() if k != "id"} for r in rows[:60]]
+        if sec in ("log", "all"):
+            out["log"] = R.order_log(self.inv, 60)
+        return _j(out)
+
+    def _dims_vendor(self, a):
+        from ..inventory import mrp as R
+        inv = self.inv
+        v = R.vendor_record(inv, a["vendor"]) or next((x for x in inv.vendors if a["vendor"].lower() in
+                                                      x["name"].lower()), None)
+        if v is None:
+            raise LookupError(f"No vendor '{a['vendor']}'")
+        sc = next((x for x in inv.scorecard() if x["vendorName"] == v["name"]), None)
+        parts = []
+        for p in inv.parts:
+            for i, s_ in enumerate(inv.suppliers(p)):
+                if s_["name"].lower() == v["name"].lower():
+                    parts.append({"part": part_label_txt(p), "role": ["Primary", "Secondary", "Alternate"][min(i, 2)],
+                                  "price": s_.get("price"), "currency": s_.get("currency"),
+                                  "vendorPartNumber": s_.get("partNumber"), "leadDays": s_.get("leadDays")})
+        return _j({"vendor": v, "leadTime": M.Inventory.lead_label(inv.lead_time_range(v["name"])),
+                   "scorecard": sc, "parts": parts})
+
     # ------------------------------------------------------------ write
     def _dims_record(self, a):
         p = self.find_part(a["part"])
@@ -733,3 +897,7 @@ def _out_dir() -> Path:
     d = Path(os.path.expanduser("~")) / "Documents" / "DIMS"
     d.mkdir(parents=True, exist_ok=True)
     return d
+
+
+def part_label_txt(p) -> str:
+    return (f"{p['partNumber']} " if p.get("partNumber") else "") + p["name"]

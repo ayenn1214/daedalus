@@ -26,7 +26,7 @@ from .store import default_path
 
 TABLE = "app_storage"
 SHARED_KEYS = ("parts", "transactions", "projects", "locations", "vendors", "production-orders", "clients",
-               "client-orders", "part-orders", "exchange-rate", "sync-meta")
+               "client-orders", "part-orders", "part-numbers", "exchange-rate", "sync-meta")
 
 
 class SyncError(OSError):

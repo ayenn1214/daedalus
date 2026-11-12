@@ -123,7 +123,7 @@ class ThumbLoader(QObject):
 
 
 # ------------------------------------------------------------------ small widgets
-def _table(headers, rows, stretch=0, money=(), pct=()):
+def _table(headers, rows, stretch=0, money=(), pct=(), sortable=True):
     t = QTableWidget(len(rows), len(headers))
     t.setHorizontalHeaderLabels(headers)
     t.verticalHeader().hide()
@@ -154,7 +154,8 @@ def _table(headers, rows, stretch=0, money=(), pct=()):
     hdr = t.horizontalHeader()
     for c in range(len(headers)):
         hdr.setSectionResizeMode(c, QHeaderView.Stretch if c == stretch else QHeaderView.ResizeToContents)
-    t.setSortingEnabled(True)
+    t.horizontalHeader().setSortIndicator(-1, Qt.AscendingOrder)     # keep the given order until a header is clicked
+    t.setSortingEnabled(sortable)
     t.setMinimumHeight(min(520, 34 + 30 * max(len(rows), 1)))
     return t
 

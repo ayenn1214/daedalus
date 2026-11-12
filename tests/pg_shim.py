@@ -6,6 +6,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+from pathlib import Path
 import secrets
 import threading
 import time
@@ -169,8 +170,14 @@ class Shim:
         q = urllib.parse.parse_qs(u.query, keep_blank_values=True)
         if path.startswith("rpc/"):
             fn = path[4:]
-            row = con.execute(sql.SQL("select {}()").format(sql.Identifier(fn))).fetchone()
-            return 200, row[0]
+            body = body or {}
+            named = sql.SQL(", ").join(sql.SQL("{} => %s").format(sql.Identifier(k)) for k in body)
+            cur = con.cursor(row_factory=psycopg.rows.dict_row)
+            rows = cur.execute(sql.SQL("select * from {}(").format(sql.Identifier(fn)) + named + sql.SQL(")"),
+                               list(body.values())).fetchall()
+            if len(rows) == 1 and list(rows[0]) == [fn]:
+                return 200, rows[0][fn]                           # scalar function
+            return 200, rows
         if path not in TABLES:
             con.execute(sql.SQL("select * from {}").format(sql.Identifier(path)))
         table = sql.Identifier(path)
@@ -224,5 +231,6 @@ def ready_db(admin_dsn: str, name: str, migration: str, stub: str) -> str:
     dsn = re.sub(r"dbname=\w+", f"dbname={name}", admin_dsn)
     with psycopg.connect(dsn, autocommit=True) as con:
         con.execute(open(stub).read())
-        con.execute(open(migration).read())
+        for f in sorted(Path(migration).parent.glob("*_dims*.sql")):   # base schema + every update, in order
+            con.execute(f.read_text())
     return dsn

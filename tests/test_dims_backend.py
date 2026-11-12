@@ -270,3 +270,36 @@ def test_production_completion_dates_from_audit(env):
     assert done == {"po1": dt.date.today().isoformat()}
     f = client(env, "floor")                                   # floor can't read the audit trail: no dates, no error
     assert f.status_history("production-orders", "status", "Complete") == {}
+
+
+def test_part_numbers_handed_out_by_the_database(env):
+    import threading
+    a, m = client(env, "ankur"), client(env, "mike")
+    assert a.schema == 2
+    a.inv.parts.append({"id": "x1", "name": "TUBE", "type": "manufactured", "partNumber": "C10-0007"})
+    a.save()
+    got = a.reserve_part_numbers("c10", 2, None, "post")
+    assert [r["id"] for r in got] == ["C10-0008", "C10-0009"] and a.inv.partNumbers[0]["createdBy"]
+    assert not a.pending()                                    # came from the server: nothing left to send
+    res = {}
+
+    def grab(st, key):
+        res[key] = [r["id"] for r in st.reserve_part_numbers("C10", 5)]
+    ts = [threading.Thread(target=grab, args=(s, k)) for s, k in ((a, "a"), (m, "m"))]
+    for t in ts:
+        t.start()
+    for t in ts:
+        t.join()
+    allnums = res["a"] + res["m"]
+    assert len(set(allnums)) == 10 and min(allnums) == "C10-0010" and max(allnums) == "C10-0019"
+    m.check_external()
+    rec = next(r for r in m.inv.partNumbers if r["id"] == "C10-0008")
+    rec["status"] = "released"                                # editors update registry rows like any record
+    m.save()
+    assert a.check_external() and next(r for r in a.inv.partNumbers if r["id"] == "C10-0008")["status"] == "released"
+    from daedalus.inventory.supabase_rows import PermissionDenied
+    import pytest as _pt
+    with _pt.raises(PermissionDenied):
+        client(env, "view").reserve_part_numbers("C10", 1)
+    with _pt.raises(PermissionDenied):
+        client(env, "floor").reserve_part_numbers("P00", 1)

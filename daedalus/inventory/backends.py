@@ -59,8 +59,9 @@ def connect_team(settings, url, key, email, password):
 def setup_sql() -> str:
     """The DIMS backend migration (paste into Supabase ▸ SQL Editor, or `supabase db push`)."""
     from pathlib import Path
-    for p in sorted((Path(__file__).resolve().parents[2] / "supabase" / "migrations").glob("*_dims.sql")):
-        return p.read_text(encoding="utf-8")
+    files = sorted((Path(__file__).resolve().parents[2] / "supabase" / "migrations").glob("*_dims*.sql"))
+    if files:                                        # base schema, then each update — all safe to run again
+        return "\n\n".join(f"-- ===== {p.name}\n" + p.read_text(encoding="utf-8") for p in files)
     from .supabase import SETUP_SQL
     return SETUP_SQL
 

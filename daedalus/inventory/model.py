@@ -49,7 +49,7 @@ PART_ORDER_STATUSES = ["Ordered", "Received", "Cancelled"]
 # storage keys (same as the web app) → state attribute
 KEYS = {"parts": "parts", "transactions": "transactions", "projects": "projects", "locations": "locations",
         "vendors": "vendors", "production-orders": "productionOrders", "clients": "clients",
-        "client-orders": "clientOrders", "part-orders": "partOrders"}
+        "client-orders": "clientOrders", "part-orders": "partOrders", "part-numbers": "partNumbers"}
 
 
 def uid() -> str:
@@ -163,7 +163,7 @@ def new_part(**kw) -> dict:
          "notes": "", "category": "", "headStyle": "", "threadType": "", "threadStandard": "", "size": "",
          "length": "", "unit": "ea", "currentStock": 0, "reorderPoint": 0, "reorderQty": 0,
          "suppliers": [{}, {}, {}], "projectAllocations": [], "unitCost": 0, "unitCostCurrency": "CAD",
-         "locationId": None, "updatedAt": now_ms()}
+         "locationId": None, "updatedAt": now_ms(), "createdAt": now_ms()}
     p.update(kw)
     return p
 
@@ -181,6 +181,7 @@ class Inventory:
         self.clients: list = []
         self.clientOrders: list = []
         self.partOrders: list = []
+        self.partNumbers: list = []                 # part-number registry (mrp.py)
         self.exchangeRate = 1.35
         self.syncMeta: dict = {}
         self.userName = ""
@@ -279,8 +280,11 @@ class Inventory:
                 and not p.get("discontinued")]
 
     def component_ids(self) -> set:
+        """Parts welded into a weldment (not separate stock). Assembly components are stocked parts of their own."""
         ids = set()
         for p in self.parts:
+            if p.get("isAssembly") and not p.get("isWeldment"):
+                continue
             for c in p.get("components") or []:
                 ids.add(c.get("partId"))
         return ids
@@ -567,11 +571,12 @@ class Inventory:
         self.transactions = [t for t in self.transactions if t["id"] != tx_id]
         return True
 
-    def place_order(self, pid, qty, order_date, expected_date):
+    def place_order(self, pid, qty, order_date, expected_date, vendor=None, project_id=None, po_number=""):
         p = self.part(pid)
         best = self.best_supplier(p) if p else None
         o = {"id": uid(), "partId": pid, "qty": qty, "orderDate": order_date, "expectedDate": expected_date,
-             "status": "Ordered", "vendorName": best["name"] if best else ""}
+             "status": "Ordered", "vendorName": vendor or (best["name"] if best else ""), "projectId": project_id,
+             "poNumber": po_number, "events": [{"what": "ordered", "at": now_ms(), "by": self.userName or "unknown"}]}
         self.partOrders.append(o)
         return o
 
@@ -583,6 +588,7 @@ class Inventory:
             self.record(o["partId"], "receiving", num(o.get("qty")), "From part order")
         o["status"] = "Received"
         o["receivedDate"] = today()
+        o.setdefault("events", []).append({"what": "received", "at": now_ms(), "by": self.userName or "unknown"})
 
     # ----------------------------------------------------------- vendors
     def ensure_vendor(self, name):

@@ -125,6 +125,25 @@ into Supabase ▸ SQL Editor (or click *Copy DIMS setup SQL*) — one row per re
 roles (admin / editor / floor / viewer, first sign-in is admin), audit trail, row-level security. Old web-app data
 imports with one click; servers without the tables keep working in the old single-table mode.
 
+**DIMS as an MRP-lite**
+- **Part numbers** (Engineering ▸ Part Numbers): the shop structure — `C10` machined part, `C20` sub-assembly /
+  weldment, `C30` top-level assembly (letter = product line), `P00`–`P04`… purchased by category, `1000-001`
+  purchased material. Type a prefix, get the next free number, reserve a block for a project, then create the
+  profile or assign it to a part. Lists every number in use with who created it and when. On the team server the
+  database hands numbers out, so two people never get the same one (needs `20261113000000_dims_mrp.sql`).
+- **Item profile:** number, description, revision, primary / secondary / alternate vendor with vendor part #,
+  price, quoted / last / average lead time, bin, stock, thumbnail, creator, order history, where used.
+- **BOM workbench:** build multi-level BOMs from profiled parts (assembly or weldment), level checks
+  (a C20 can't sit inside a C10), rolled-up cost; raw material and surface finish per fabricated part.
+- **Job order & kit:** explode a build quantity, net of stock, and route each line to who supplies it — one PO
+  draft per vendor (Excel with vendor address / contact), logged as part orders, plus a pick list by bin.
+- **Material needs:** raw material for open production orders or active projects, for buying and bulk-buy
+  comparisons. **Where used:** what each part goes into, shared vs unique.
+- **Vendors:** full directory (address, contact, account, terms) — import from Excel; vendor prices import from a
+  spreadsheet (e.g. the pricing Google Sheet saved as .xlsx).
+- **Time-Phased:** incoming orders by week and where they're going, projected stock with the date each part runs
+  short, and the order log (ordered / received / binned / shipped).
+
 **DIMS extras**
 - **Analytics tab:** usage trends (months of stock left, run-out date, suggested reorder point), cost analysis
   (stock value by type / vendor / category / rack, project cost per unit), vendor price cross-reference (cheapest

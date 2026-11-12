@@ -83,10 +83,10 @@ class _Base(QDialog):
 # ------------------------------------------------------------------ part ---
 
 class PartDialog(_Base):
-    def __init__(self, inv: M.Inventory, part=None, parent=None):
+    def __init__(self, inv: M.Inventory, part=None, parent=None, preset: dict | None = None):
         super().__init__("Edit Part" if part else "Add Part", parent, "Save Changes" if part else "Add Part")
         self.inv, self.part = inv, part
-        p = part or M.new_part()
+        p = part or M.new_part(**(preset or {}))
         self.resize(640, 760)
         body = QWidget()
         f = QFormLayout(body)
@@ -139,7 +139,19 @@ class PartDialog(_Base):
         self.pn = QLineEdit(p.get("partNumber") or "")
         self.qb = QLineEdit(p.get("qbPartNumber") or "")
         self.qb.setPlaceholderText("QuickBooks item number")
-        f.addRow("Part number", self.pn)
+        pnr = QHBoxLayout()
+        pnr.addWidget(self.pn)
+        getn = QPushButton("Next number…")
+        getn.setToolTip("Reserve the next number for a prefix (C10, C20, C30, P00 …) and use it")
+        getn.clicked.connect(self._next_number)
+        pnr.addWidget(getn)
+        f.addRow("Part number", pnr)
+        self.desc = QLineEdit(p.get("description") or "")
+        self.desc.setPlaceholderText("NOUN, MODIFIER, … e.g. ASSY, FRAME, 32.21 · SCREW,HHCS,1/4-20,UNC,SS,2 3/4")
+        f.addRow("Description", self.desc)
+        if part and (p.get("createdBy") or p.get("createdAt")):
+            from ..inventory.mrp import _d
+            f.addRow("Created", QLabel(f"{p.get('createdBy') or '—'} · {_d(p.get('createdAt')) or '—'}"))
         f.addRow("QuickBooks part #", self.qb)
         dr = QHBoxLayout()
         self.drawing = QLineEdit(p.get("drawingUrl") or "")
@@ -198,6 +210,52 @@ class PartDialog(_Base):
         self.img_row, self.img = file_row(p.get("imageFile"), "Picture for the parts list (optional)",
                                           "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)")
         f.addRow("Picture", self.img_row)
+        from ..inventory import mrp as R
+        m, fin = p.get("material") or {}, p.get("finish") or {}
+        self.mat_box = QGroupBox("Raw material (per part)")
+        mg = QGridLayout(self.mat_box)
+        self.m_shape, self.m_grade = QComboBox(), QComboBox()
+        for cb, items, val in ((self.m_shape, R.MATERIAL_SHAPES, m.get("shape")),
+                               (self.m_grade, R.MATERIAL_GRADES, m.get("grade"))):
+            cb.setEditable(True)
+            cb.addItems(["", *items])
+            cb.setCurrentText(val or "")
+        self.m_size = QLineEdit(m.get("size") or "")
+        self.m_size.setPlaceholderText('e.g. 1/4 x 2, 2 x 2 x 3/16, Ø1.25')
+        self.m_qty = QDoubleSpinBox()
+        self.m_qty.setRange(0, 1e6)
+        self.m_qty.setDecimals(3)
+        self.m_qty.setValue(M.num(m.get("qty")))
+        self.m_unit = QComboBox()
+        self.m_unit.addItems(R.MATERIAL_UNITS)
+        self.m_unit.setCurrentText(m.get("unit") or "in")
+        self.m_len = QDoubleSpinBox()
+        self.m_len.setRange(0, 1e6)
+        self.m_len.setSpecialValueText("—")
+        self.m_len.setValue(M.num(m.get("stockLength")))
+        self.m_vendor = QLineEdit(m.get("vendor") or "")
+        self.m_vendor.setPlaceholderText("Material supplier")
+        self.m_vendor.setCompleter(QCompleter([v["name"] for v in inv.sorted_vendors()]))
+        for i, (lab, w) in enumerate((("Shape", self.m_shape), ("Grade", self.m_grade), ("Size", self.m_size),
+                                      ("Qty / part", self.m_qty), ("Unit", self.m_unit), ("Stock length", self.m_len),
+                                      ("Vendor", self.m_vendor))):
+            mg.addWidget(QLabel(lab), i // 2, (i % 2) * 2)
+            mg.addWidget(w, i // 2, (i % 2) * 2 + 1)
+        f.addRow(self.mat_box)
+        self.fin_box = QGroupBox("Surface finish (a separate job / PO)")
+        fg = QHBoxLayout(self.fin_box)
+        self.f_proc = QComboBox()
+        self.f_proc.setEditable(True)
+        self.f_proc.addItems(["", *R.FINISHES])
+        self.f_proc.setCurrentText(fin.get("process") or "")
+        self.f_spec = QLineEdit(fin.get("spec") or "")
+        self.f_spec.setPlaceholderText("Colour / spec")
+        self.f_vendor = QLineEdit(fin.get("vendor") or "")
+        self.f_vendor.setPlaceholderText("Finisher")
+        self.f_vendor.setCompleter(QCompleter([v["name"] for v in inv.sorted_vendors()]))
+        for w in (self.f_proc, self.f_spec, self.f_vendor):
+            fg.addWidget(w)
+        f.addRow(self.fin_box)
         if p.get("stdPartId"):
             try:
                 from ..stdparts import get_library
@@ -212,9 +270,16 @@ class PartDialog(_Base):
         self.notes.setFixedHeight(54)
         f.addRow("Notes", self.notes)
         # weldment
-        self.weld = QCheckBox("This is a weldment (assembly of other parts)")
-        self.weld.setChecked(bool(p.get("isWeldment")))
-        f.addRow(self.weld)
+        self.weld = QCheckBox("Has a bill of materials")
+        self.weld.setChecked(bool(p.get("isWeldment") or p.get("isAssembly")))
+        self.bom_kind = QComboBox()
+        self.bom_kind.addItem("Weldment — parts welded in (not stocked separately)", "weldment")
+        self.bom_kind.addItem("Assembly — kit of separately stocked parts", "assembly")
+        self.bom_kind.setCurrentIndex(1 if p.get("isAssembly") and not p.get("isWeldment") else 0)
+        wr = QHBoxLayout()
+        wr.addWidget(self.weld)
+        wr.addWidget(self.bom_kind, 1)
+        f.addRow(wr)
         self.comp_box = QGroupBox("Components")
         cl = QVBoxLayout(self.comp_box)
         self.comps = QTableWidget(0, 2)
@@ -286,7 +351,7 @@ class PartDialog(_Base):
         for i, L in enumerate("ABC"):
             s = ((p.get("suppliers") or []) + [{}, {}, {}])[i] or {}
             nm = QLineEdit(s.get("name") or "")
-            nm.setPlaceholderText(f"Supplier {L} (autocompletes vendors)")
+            nm.setPlaceholderText(f"{['Primary', 'Secondary', 'Alternate'][i]} vendor (autocompletes)")
             nm.setCompleter(QCompleter(names))
             pr = QDoubleSpinBox()
             pr.setRange(-1, 1_000_000)
@@ -301,13 +366,20 @@ class PartDialog(_Base):
             spn.setPlaceholderText("Supplier part #")
             web = QLineEdit(s.get("website") or "")
             web.setPlaceholderText("https://")
+            lead = QSpinBox()
+            lead.setRange(0, 3650)
+            lead.setSpecialValueText("lead —")
+            lead.setSuffix(" d lead")
+            lead.setValue(int(M.num(s.get("leadDays"))))
+            lead.setToolTip("Quoted lead time (days) from this vendor")
             sg.addWidget(nm, i * 2, 0, 1, 2)
             sg.addWidget(pr, i * 2, 2)
             sg.addWidget(cur, i * 2, 3)
             sg.addWidget(use, i * 2, 4)
             sg.addWidget(spn, i * 2 + 1, 0)
-            sg.addWidget(web, i * 2 + 1, 1, 1, 4)
-            self.sups.append((nm, pr, cur, spn, web))
+            sg.addWidget(web, i * 2 + 1, 1, 1, 3)
+            sg.addWidget(lead, i * 2 + 1, 4)
+            self.sups.append((nm, pr, cur, spn, web, lead, s))
         f.addRow(sup_box)
         # discontinued
         self.disc_box = QGroupBox("Discontinued")
@@ -397,6 +469,9 @@ class PartDialog(_Base):
                 w.setVisible(manu)
         self.weld.setVisible(manu)
         self.comp_box.setVisible(manu and self.weld.isChecked())
+        self.bom_kind.setVisible(manu and self.weld.isChecked())
+        self.mat_box.setVisible(manu and not self.weld.isChecked())
+        self.fin_box.setVisible(manu)
 
     def _autoname(self, *_):
         if self.type.currentData() != "fastener":
@@ -429,6 +504,39 @@ class PartDialog(_Base):
         if pid:
             self._comp_row(self.inv.part(pid), self.comp_qty.value())
 
+    def _next_number(self):
+        """Reserve the next number for a prefix and put it in the Part number box."""
+        from ..inventory import mrp as R
+        items = []
+        for pre in R.all_prefixes(self.inv):
+            lab = R.describe_prefix(self.inv, pre)["label"]
+            items.append(f"{pre} — {lab}" if lab else pre)
+        guess = R.split_number(self.pn.text())[0]
+        cur = next((i for i, t in enumerate(items) if guess and t.startswith(guess + " ")), 0)
+        from PySide6.QtWidgets import QInputDialog
+        text, ok = QInputDialog.getItem(self, "Next part number", "Prefix (or type a new one):", items, cur, True)
+        if not ok or not text.strip():
+            return
+        pre = text.split(" — ")[0].strip()
+        page = self.parent()
+        try:
+            st = getattr(page, "store", None)
+            if st is not None and hasattr(st, "reserve_part_numbers"):
+                got = st.reserve_part_numbers(pre, 1, None, f"for {self.name.text().strip() or 'a new part'}")
+            else:
+                got = R.reserve(self.inv, pre, 1, None, f"for {self.name.text().strip() or 'a new part'}")
+                if st is not None:
+                    st.save()
+        except Exception as e:  # noqa: BLE001
+            return QMessageBox.warning(self, "Part number", str(e))
+        self.pn.setText(got[0]["id"])
+        d = R.describe_prefix(self.inv, pre)
+        if not self.part and d["type"]:
+            self.type.setCurrentIndex(max(0, self.type.findData(d["type"])))
+            if d["bom"]:
+                self.weld.setChecked(True)
+                self.bom_kind.setCurrentIndex(max(0, self.bom_kind.findData(d["bom"])))
+
     def _delete(self):
         if QMessageBox.question(self, "Delete", f"Delete {self.part['name']}? This cannot be undone.") == \
                 QMessageBox.Yes:
@@ -443,9 +551,12 @@ class PartDialog(_Base):
     def values(self) -> dict:
         typ = self.type.currentData()
         sups = []
-        for nm, pr, cur, spn, web in self.sups:
-            sups.append({"name": nm.text().strip(), "price": pr.value() if pr.value() >= 0 else "",
-                         "currency": cur.currentText(), "partNumber": spn.text().strip(), "website": web.text().strip()})
+        for nm, pr, cur, spn, web, lead, old in self.sups:
+            price = pr.value() if pr.value() >= 0 else ""
+            sups.append({**{k: v for k, v in old.items() if k in ("priceDate",)}, "name": nm.text().strip(),
+                         "price": price, "currency": cur.currentText(), "partNumber": spn.text().strip(),
+                         "website": web.text().strip(), "leadDays": lead.value() or None,
+                         **({"priceDate": M.today()} if price != old.get("price", "") and price != "" else {})})
         for s in sups:
             if s["name"]:
                 self.inv.ensure_vendor(s["name"])
@@ -456,7 +567,8 @@ class PartDialog(_Base):
                "reorderPoint": self.rp.value(), "reorderQty": self.rq.value(), "unitCost": self.cost.value(),
                "unitCostCurrency": self.cost_cur.currentText(), "locationId": self.loc.currentData(),
                "suppliers": sups, "updatedAt": M.now_ms(), "cadFile": self.cad.text().strip(),
-               "imageFile": self.img.text().strip(), "discontinued": self.disc_box.isChecked()}
+               "imageFile": self.img.text().strip(), "discontinued": self.disc_box.isChecked(),
+               "description": self.desc.text().strip()}
         if self.disc_box.isChecked():
             out.update(replacementId=self.repl.currentData(), discontinuedNote=self.disc_note.text().strip(),
                        discontinuedDate=(self.part or {}).get("discontinuedDate") or M.today())
@@ -467,7 +579,18 @@ class PartDialog(_Base):
                        threadStandard=self.std.currentText(), size=self.size.currentText().strip(),
                        length=self.length.text().strip())
         if typ == "manufactured":
-            out["isWeldment"] = self.weld.isChecked()
+            out["material"] = {"shape": self.m_shape.currentText().strip(), "grade": self.m_grade.currentText().strip(),
+                               "size": self.m_size.text().strip(), "qty": self.m_qty.value(),
+                               "unit": self.m_unit.currentText(), "stockLength": self.m_len.value() or None,
+                               "vendor": self.m_vendor.text().strip()} if (self.m_shape.currentText().strip() or
+                                                                           self.m_size.text().strip()) else {}
+            out["finish"] = {"process": self.f_proc.currentText().strip(), "spec": self.f_spec.text().strip(),
+                             "vendor": self.f_vendor.text().strip()} if self.f_proc.currentText().strip() else {}
+            for v_ in (out["material"].get("vendor"), out["finish"].get("vendor")):
+                if v_:
+                    self.inv.ensure_vendor(v_)
+            out["isAssembly"] = self.weld.isChecked() and self.bom_kind.currentData() == "assembly"
+            out["isWeldment"] = self.weld.isChecked() and self.bom_kind.currentData() == "weldment"
             out["components"] = [{"partId": self.comps.item(r, 0).data(Qt.UserRole),
                                   "qty": self.comps.cellWidget(r, 1).value()} for r in range(self.comps.rowCount())] \
                 if self.weld.isChecked() else []
@@ -597,8 +720,14 @@ class VendorDialog(_Base):
             s.setValue(int(M.num(val, -1)) if val not in (None, "") else -1)
         self.notes = QPlainTextEdit(r.get("notes") or "")
         self.notes.setFixedHeight(60)
+        self.extra = {k: QLineEdit(r.get(k) or "") for k in ("address", "address2", "city", "province", "postalCode",
+                                                             "country", "accountNumber", "terms")}
         for lab, w in (("Vendor name", self.name), ("Category", self.cat), ("Contact name", self.contact),
                        ("Phone", self.phone), ("Email", self.email), ("Website", self.web),
+                       ("Address", self.extra["address"]), ("Address 2", self.extra["address2"]),
+                       ("City", self.extra["city"]), ("Province / state", self.extra["province"]),
+                       ("Postal code", self.extra["postalCode"]), ("Country", self.extra["country"]),
+                       ("Our account #", self.extra["accountNumber"]), ("Terms", self.extra["terms"]),
                        ("Lead time min (days)", self.lo), ("Lead time max (days)", self.hi), ("Notes", self.notes)):
             f.addRow(lab, w)
         self.lay.addLayout(f)
@@ -614,7 +743,7 @@ class VendorDialog(_Base):
                 "email": self.email.text().strip(), "website": self.web.text().strip(),
                 "leadTimeMinDays": self.lo.value() if self.lo.value() >= 0 else None,
                 "leadTimeMaxDays": self.hi.value() if self.hi.value() >= 0 else None,
-                "notes": self.notes.toPlainText().strip()}
+                "notes": self.notes.toPlainText().strip(), **{k: w.text().strip() for k, w in self.extra.items()}}
 
 
 class OrderDialog(_Base):

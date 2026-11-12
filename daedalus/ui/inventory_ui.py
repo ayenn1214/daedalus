@@ -237,7 +237,8 @@ class InventoryPage(QWidget):
 
     TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
             ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Clients"),
-            ("reorder", "Reorder"), ("shortages", "Shortages"), ("analytics", "Analytics"), ("log", "Activity Log"),
+            ("reorder", "Reorder"), ("shortages", "Shortages"), ("engineering", "Engineering"),
+            ("timephased", "Time-Phased"), ("analytics", "Analytics"), ("log", "Activity Log"),
             ("sync", "Import / Export")]
 
     def __init__(self, store: InventoryStore | None = None, parent=None, lite: bool = False):
@@ -254,6 +255,7 @@ class InventoryPage(QWidget):
         self.parts_filter = {"type": "all", "project": "all", "q": "", "vendor": "all", "sort": "name",
                              "discontinued": False}
         self.analytics_state: dict = {}
+        self.mrp_state: dict = {}
         from .inventory_extras_ui import ThumbLoader
         self.thumbs = ThumbLoader(self)
         self.thumbs.ready.connect(lambda _src: self._thumb_refresh())
@@ -583,7 +585,8 @@ class InventoryPage(QWidget):
                 it.setCheckState(0, Qt.Checked if p["id"] in self.sel_parts else Qt.Unchecked)
             t.setItemWidget(it, off + 5, Gauge(inv.stock_ratio(p, stock), inv.level(p, stock)))
             if actions:
-                btns = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
+                btns = [_small("Profile", lambda _=False, i=p["id"]: self.profile(i), "Everything about this part"),
+                        _small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
                         _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
                         _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i)),
                         _small("History", lambda _=False, i=p["id"]: D.HistoryDialog(self.inv, i, self).exec())]
@@ -1087,12 +1090,13 @@ class InventoryPage(QWidget):
             self.inv.delete_part(part["id"])
             return self.commit("Part deleted")
         vals = d.values()
+        from ..inventory import mrp as R
         if part:
             part.update(vals)
-            self.commit("Part saved")
         else:
-            self.inv.parts.append(M.new_part(**vals))
-            self.commit(f"Added {vals['name']}")
+            self.inv.parts.append(M.new_part(**vals, createdBy=self.inv.userName or "unknown"))
+        R.sync_assignments(self.inv)
+        self.commit("Part saved" if part else f"Added {vals['name']}")
 
     def move(self, pid, mode):
         p = self.inv.part(pid)
@@ -1126,6 +1130,11 @@ class InventoryPage(QWidget):
         vs = inv.sorted_vendors()
         row = QHBoxLayout()
         row.addWidget(_muted(f"{len(vs)} vendor{'s' if len(vs) != 1 else ''} across fab, fastener and finishing."), 1)
+        from .inventory_mrp_ui import import_prices_ui, import_vendors_ui
+        row.addWidget(_btn("Import vendors…", lambda: import_vendors_ui(self), "Vendor list from Excel / CSV: company, "
+                                                                            "address, contact, phone, email, terms …"))
+        row.addWidget(_btn("Import prices…", lambda: import_prices_ui(self), "Vendor prices by part number (e.g. the "
+                                                                          "pricing Google Sheet downloaded as .xlsx)"))
         row.addWidget(_btn("+ Add Vendor", lambda: self.edit_vendor(None), primary=True))
         v.addLayout(row)
         for cat in M.VENDOR_CATEGORIES:
@@ -1138,7 +1147,9 @@ class InventoryPage(QWidget):
                 email = _small(x["email"], lambda _=False, e=x["email"]: _open_link("mailto:" + e)) if x.get("email") \
                     else "—"
                 web = _small("Visit", lambda _=False, u=x["website"]: _open_link(u)) if x.get("website") else "—"
-                rows.append([x["name"], x.get("contactName") or "—", x.get("phone") or "—", email, web,
+                addr = ", ".join(y for y in (x.get("city"), x.get("province")) if y)
+                rows.append([x["name"] + (f"\n{addr}" if addr else ""), x.get("contactName") or "—",
+                             x.get("phone") or "—", email, web,
                              inv.lead_label(inv.lead_time_range(x["name"])) or "—", x.get("notes") or "",
                              _actions(_small("Edit", lambda _=False, vv=x: self.edit_vendor(vv)),
                                       _small("Delete", lambda _=False, vv=x: self.delete_vendor(vv), danger=True))])
@@ -1658,6 +1669,42 @@ class InventoryPage(QWidget):
         w = AnalyticsView(self)
         w.edit_part.connect(self.edit_part)
         return w
+
+    def build_engineering(self):
+        from .inventory_mrp_ui import EngineeringView
+        w = EngineeringView(self)
+        w.edit_part.connect(self.edit_part)
+        w.new_part.connect(self.new_part_from)
+        return w
+
+    def build_timephased(self):
+        from .inventory_mrp_ui import TimePhasedView
+        return TimePhasedView(self)
+
+    def new_part_from(self, preset: dict):
+        """Add Part, starting from a reserved number (type from its prefix) or as a new line of a BOM."""
+        from ..inventory import mrp as R
+        parent = preset.pop("_bom_parent", None)
+        d = D.PartDialog(self.inv, None, self, preset=preset)
+        if not d.exec():
+            return
+        vals = d.values()
+        p = M.new_part(**vals, createdBy=self.inv.userName or "unknown")
+        self.inv.parts.append(p)
+        if p.get("partNumber"):
+            try:
+                R.assign(self.inv, p["partNumber"], p)
+            except ValueError:
+                pass
+        if parent and self.inv.part(parent):
+            par = self.inv.part(parent)
+            R.set_bom(self.inv, parent, [(c["partId"], c["qty"]) for c in par.get("components") or []] + [(p["id"], 1)],
+                      R.bom_kind(par) or "assembly")
+        self.commit(f"Added {p['name']}")
+
+    def profile(self, pid):
+        from .inventory_mrp_ui import PartProfileDialog
+        PartProfileDialog(self, pid).exec()
 
     def print_binning(self):
         from .inventory_extras_ui import BinningDialog
