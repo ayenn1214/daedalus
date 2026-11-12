@@ -1743,6 +1743,7 @@ class MainWindow(QMainWindow):
 
         h = mb.addMenu("&Help")
         act(h, "Startup modules…", self.startup_modules)
+        act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
         act(h, "Setup check (Python + Icarus)…", self.show_setup_check)
         act(h, "Design data calculators…", lambda: self.design_data(0))
         act(h, "Reference library (your handbooks)…", lambda: self.design_data(1))

@@ -73,6 +73,7 @@ def main():
         if splash is not None:
             splash.finish(w)
         _startup_lite(w, args)
+        _auto_update(w)
         sys.exit(app.exec())
     step("Loading geometry kernel…")
     from .ui.main_window import MainWindow
@@ -83,7 +84,21 @@ def main():
     if splash is not None:
         splash.finish(w)
     _startup(w, args)
+    _auto_update(w)
     sys.exit(app.exec())
+
+
+def _auto_update(w):
+    """Quiet daily check of the GitHub repo; a status-bar button when a newer Daedalus is out."""
+    from PySide6.QtCore import QTimer
+
+    def go():
+        try:
+            from .ui.update_ui import start_auto_check
+            start_auto_check(w)
+        except Exception:  # noqa: BLE001
+            pass
+    QTimer.singleShot(3000, go)
 
 
 def _startup_lite(w, args):

@@ -112,6 +112,19 @@ python -m daedalus                  # or: python -m daedalus part.daedalus
 **Setup check:** run `python -m daedalus --check` (add `--json` for machine-readable output), or open
 **Help ▸ Setup check**. It installs missing packages, starts Ollama and downloads models.
 
+**Updates:** each start checks GitHub (`ayenn1214/daedalus`) at most once a day; a status-bar button appears when a
+newer version is out. **Help ▸ Check for updates…** checks now.
+- **Channels:** *Releases* (default, follows GitHub Releases / `v*` tags) or *Every commit on main* (testing).
+- **Git checkout:** updates with `git pull` (refused if you have local edits). **Zip / installer copy:** downloads,
+  closes, swaps the files (settings, data and `.venv` untouched), runs `pip install` if requirements changed,
+  restarts. Replaced files go to `.update/backup-<version>` — Help ▸ Check for updates ▸ Roll back.
+- **Private fork:** set `DAEDALUS_GITHUB_TOKEN`. Skip a version or turn the start check off in the update dialog.
+
+**DIMS team server:** Inventory ▸ Where the data lives ▸ Team server. Paste `supabase/migrations/20261112000000_dims.sql`
+into Supabase ▸ SQL Editor (or click *Copy DIMS setup SQL*) — one row per record, stock moved by a database trigger,
+roles (admin / editor / floor / viewer, first sign-in is admin), audit trail, row-level security. Old web-app data
+imports with one click; servers without the tables keep working in the old single-table mode.
+
 **Optional extras**
 - **DWG:** install the free ODA File Converter; Daedalus finds it automatically. DXF, PDF, SVG and STEP need nothing extra.
 - **Scanned handbooks:** install Tesseract OCR to add them to the Design Data reference library.

@@ -25,3 +25,6 @@ Thumbs.db
 desktop.ini
 .vscode/
 .idea/
+
+# Updater staging / backups
+.update/

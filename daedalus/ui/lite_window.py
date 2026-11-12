@@ -69,6 +69,7 @@ class LiteWindow(QMainWindow):
             act(e, "Redo", lambda: self.doc.redo() and self.drawing_page.refresh(), QKeySequence.Redo)
         h = mb.addMenu("&Help")
         act(h, "Startup modules…", self.startup_modules)
+        act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
 
     def _needs_3d(self, what):
         if QMessageBox.question(self, what, f"{what} needs the 3D workspace. Open it now?") == QMessageBox.Yes:

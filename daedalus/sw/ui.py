@@ -845,4 +845,12 @@ def run(demo=False, app="solidworks"):
         backend = connect(demo=True, app=app)
     w = LinkWindow(SWLink(backend))
     w.show()
+    try:
+        from PySide6.QtCore import QTimer
+
+        from ..ui.update_ui import start_auto_check
+        if hasattr(w, "statusBar"):
+            QTimer.singleShot(3000, lambda: start_auto_check(w))
+    except Exception:  # noqa: BLE001
+        pass
     return qapp.exec()
