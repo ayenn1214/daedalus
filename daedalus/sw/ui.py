@@ -38,6 +38,7 @@ EXAMPLES = [
     "Add an M8 x 25 socket head screw in the selected hole",
     "Fill in missing part numbers and descriptions",
     "Send this BOM to inventory as project P25605",
+    "Review this assembly's BOM and help me add the new parts to DIMS",
 ]
 
 
@@ -489,6 +490,11 @@ class LinkWindow(QMainWindow):
         b.clicked.connect(self.open_inventory)
         row.addWidget(b)
         row.addStretch(1)
+        b = QPushButton("Review for DIMS…")
+        b.setToolTip("Every level of this assembly against DIMS: new / matched / changed lines, part numbers for "
+                     "unnumbered parts, then add the new profiles and BOMs")
+        b.clicked.connect(self.review_for_dims)
+        row.addWidget(b)
         b = QPushButton("Send BOM to inventory…")
         b.setIcon(icons.icon("Send BOM", theme.ON_ACCENT))
         b.setObjectName("primary")
@@ -534,6 +540,16 @@ class LinkWindow(QMainWindow):
             if rep["write_failed"]:
                 msg += f" — {len(rep['write_failed'])} failed"
             self.statusBar().showMessage(msg, 12000)
+            self.refresh_bom()
+
+    def review_for_dims(self):
+        from .bom_review_ui import BomReviewDialog
+        try:
+            d = BomReviewDialog(self.link, self)
+        except Exception as e:  # noqa: BLE001
+            return QMessageBox.warning(self, "Review for DIMS", str(e))
+        if d.exec():
+            self.statusBar().showMessage(d.summary, 15000)
             self.refresh_bom()
 
     def open_inventory(self):

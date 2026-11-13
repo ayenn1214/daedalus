@@ -19,6 +19,14 @@ everything around it through tools:
 - sw_save_part_to_library saves the active SolidWorks part as a Daedalus standard part (only when asked).
 - Inventory (the shop's DIMS — Daedalus Inventory Management System): inventory_stock_check (BOM vs stock for N builds, shortfalls,
   locations), send_bom_to_inventory (BOM → project, writes DIMSId back to SolidWorks), inventory_search.
+- Adding a design to DIMS: sw_bom_review reads the whole assembly (every level) and says per line whether it's
+  new, matched, linked or changed (revision / description), the DIMS type it would get and the next free part
+  number for unnumbered parts (C10 machined · C20 sub-assembly · C30 top level, letter = product line; P00
+  fasteners; other purchased parts need their P0x category from the user). Show the user a short table, ask
+  about anything unclear (purchased categories, types, which lines), then sw_bom_to_inventory with
+  preview=true, and only after they agree, preview=false. It creates the profiles, builds the BOMs in DIMS,
+  optionally allocates to a project and writes PartNo / DIMSId back to SolidWorks.
+- The dims_* tools work on the whole inventory (stock, reorder, vendors, part numbers, job orders, reports).
 - sw_command: views (Isometric, Front, Top, Right…), fit, rebuild, save, export (step, stl, pdf, dxf),
   macro (path to .swp), command (SolidWorks command id).
 - send_to_other_cad moves the active document to the other connected CAD program (SolidWorks ⇄ Fusion) as
@@ -75,7 +83,26 @@ SW_TOOLS = [
        {"as_component": {"type": "boolean"}}),
     _t("open_in_daedalus", "Send the active SolidWorks model to Daedalus (geometry, mates, properties) for "
                            "simulation, CAM, physics or drawings."),
+    _t("sw_bom_review", "Read the open assembly's full BOM (all levels) and compare it with DIMS: per line status "
+                        "(new / matched / linked / changed), DIMS type, suggested part number, qty per top assembly, "
+                        "vendor, cost, material, finish. Changes nothing."),
+    _t("sw_bom_to_inventory", "Add the reviewed BOM to DIMS: create profiles for new lines (numbering unnumbered "
+                              "ones), link existing ones, build each assembly's BOM in DIMS, optionally allocate to "
+                              "a project, write PartNo / DIMSId back. preview=true first; apply only when the user "
+                              "agrees.",
+       {"items": {"type": "array", "items": {"type": "integer"},
+                  "description": "item numbers from sw_bom_review (default: every new / changed line + assemblies)"},
+        "overrides": {"type": "object", "description": "{item: {part_no, type, description}} — the user's "
+                                                       "corrections, e.g. a P02 number for a hydraulic fitting"},
+        "project": {"type": "string"}, "units": {"type": "number"},
+        "numbers": {"type": "boolean", "description": "number unnumbered parts (default true)"},
+        "update_existing": {"type": "boolean", "description": "also update descriptions of linked parts"},
+        "preview": {"type": "boolean"}}, ["preview"]),
 ]
+
+from ..ai.dims_tools import DIMS_NAMES, DIMS_TOOLS  # noqa: E402
+
+SW_TOOLS += [t for t in DIMS_TOOLS if t["name"] not in {x["name"] for x in SW_TOOLS}]
 
 
 class SWToolExecutor:
@@ -83,6 +110,15 @@ class SWToolExecutor:
         self.link = link
         self.on_open_daedalus = on_open_daedalus
         self.peers = peers or (lambda: [])
+        self.attachments: dict = {}
+        self._dims = None
+
+    def dims(self):
+        if self._dims is None:
+            from ..ai.dims_tools import DimsToolExecutor
+            self._dims = DimsToolExecutor(lambda: self.link.store)
+            self._dims.attachments = self.attachments
+        return self._dims
 
     def model_state(self):
         try:
@@ -94,6 +130,8 @@ class SWToolExecutor:
                                                                                       "configuration")}}
 
     def run(self, name, args):
+        if name in DIMS_NAMES:
+            return self.dims().run(name, args or {})
         try:
             return json.dumps(self._run(name, args or {}), default=str), False
         except (SWError, ValueError, KeyError, FileNotFoundError) as e:
@@ -168,6 +206,18 @@ class SWToolExecutor:
             if not others:
                 raise ValueError("Only one CAD program is connected — connect the other in the CAD selector")
             return L.transfer_to(others[0], as_component=a.get("as_component", True))
+        if name == "sw_bom_review":
+            from . import bom_inventory as BI
+            rv = BI.review(L)
+            rv.pop("_structure", None)
+            for x in rv["lines"]:
+                x.pop("key", None)
+            return rv
+        if name == "sw_bom_to_inventory":
+            from . import bom_inventory as BI
+            return BI.apply(L, items=a.get("items"), project=a.get("project"), units=a.get("units"),
+                            numbers=a.get("numbers", True), update_existing=a.get("update_existing", False),
+                            preview=a.get("preview", True), overrides=a.get("overrides"))
         if name == "open_in_daedalus":
             path = L.to_daedalus()
             if self.on_open_daedalus:
