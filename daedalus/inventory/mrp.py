@@ -683,7 +683,7 @@ def open_demands(inv: Inventory) -> list[tuple]:
     BOMs are exploded later)."""
     out = []
     for o in inv.productionOrders:
-        if o.get("status") == "Complete":
+        if o.get("status") in ("Complete", "Cancelled"):
             continue
         for p in inv.parts_for_project(o.get("projectId")):
             a = inv.allocation(p, o.get("projectId"))
@@ -789,7 +789,7 @@ def projected(inv: Inventory, horizon_days: int = 120) -> list[dict]:
             d = parse_date(o.get("expectedDate")) or t0
             events.setdefault(o["partId"], []).append((max(d, t0), num(o.get("qty")), "in", o))
     for o in inv.productionOrders:
-        if o.get("status") == "Complete":
+        if o.get("status") in ("Complete", "Cancelled"):
             continue
         d = parse_date(o.get("fabStart")) or parse_date(o.get("dueDate")) or t0
         for p in inv.parts_for_project(o.get("projectId")):

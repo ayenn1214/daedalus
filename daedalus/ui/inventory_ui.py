@@ -17,11 +17,15 @@ from PySide6.QtWidgets import (
 from ..inventory import model as M
 from ..inventory.store import InventoryStore, get_store
 from . import inventory_dialogs as D
+from . import orders_ui as OU
 from . import theme
 
 LEVEL = {"red": theme.ERROR, "amber": theme.WARN, "green": theme.OK}
+ORDER_RANK = {"Draft": 0, "Confirmed": 1, "Shipped": 2, "Cancelled": 3}
+ORDER_COL = {"Draft": theme.WARN, "Confirmed": theme.INFO, "Shipped": theme.OK, "Cancelled": theme.MUTED}
 STATUS_COL = {"Not Started": theme.MUTED, "In Fab": theme.INFO, "In Finishing": theme.ACCENT_LINE, "Complete": theme.OK,
-              "Requested": theme.MUTED, "Confirmed": theme.INFO, "In Production": theme.ACCENT_LINE, "Shipped": theme.PURPLE}
+              "Requested": theme.MUTED, "Confirmed": theme.INFO, "In Production": theme.ACCENT_LINE, "Shipped": theme.PURPLE,
+              "Cancelled": theme.MUTED}
 
 
 def _btn(text, fn, tip="", primary=False, danger=False):
@@ -240,7 +244,7 @@ class InventoryPage(QWidget):
     insert_std_requested = Signal(str)        # standard part id → insert into the open model
 
     TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
-            ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Clients"),
+            ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Orders"),
             ("reorder", "Reorder"), ("engineering", "Engineering"),
             ("timephased", "Time-Phased"), ("analytics", "Analytics"), ("log", "Activity Log"),
             ("sync", "Import / Export")]
@@ -451,9 +455,13 @@ class InventoryPage(QWidget):
         self.low_btn.setVisible(low > 0)
         self.who.setText(f"Signed in as {inv.userName or 'unknown'} ⚙")
         comp = inv.component_ids()
-        counts = {"projects": len(inv.projects), "production": len(inv.productionOrders),
+        from ..inventory import orders as O
+        counts = {"projects": len(inv.projects),
+                  "production": sum(O.is_unread(p, inv.userName) for p in inv.productionOrders
+                                    if p.get("status") not in O.CLOSED_PROD),
                   "locations": len(inv.locations), "parts": len([p for p in inv.parts if p["id"] not in comp]),
-                  "vendors": len(inv.vendors), "clients": len(inv.clientOrders), "reorder": low,
+                  "vendors": len(inv.vendors), "clients": sum(O.status(o) in (O.DRAFT, O.CONFIRMED) for o in inv.clientOrders),
+                  "reorder": low,
                   "shortages": len(inv.shortages())}
         for i, (k, lab) in enumerate(self.TABS):
             self.tabs.setTabText(i, f"{lab}  {counts[k]}" if k in counts else lab)
@@ -723,8 +731,9 @@ class InventoryPage(QWidget):
         w, v = self._page()
         projects = inv.active_projects()
         row = QHBoxLayout()
-        row.addWidget(_muted(f"{len(projects)} project{'s' if len(projects) != 1 else ''} · qty per unit × the "
-                             f"project's Total Qty Needed = total needed. Edit Qty/Unit right in the table."), 1)
+        row.addWidget(_muted(f"{len(projects)} project{'s' if len(projects) != 1 else ''} · quantities to make one "
+                             "unit — demand comes from confirmed orders (Orders tab). Edit Qty/Unit right in the "
+                             "table."), 1)
         row.addWidget(_btn("Send BOM from design…", self.send_bom_requested.emit))
         row.addWidget(_btn("+ Add Project", self.add_project, primary=True))
         v.addLayout(row)
@@ -738,7 +747,7 @@ class InventoryPage(QWidget):
             lab = QLabel(f"<b>{pr['name']}</b>  <span style='color:{theme.MUTED}'>· {s['parts']} part"
                          f"{'s' if s['parts'] != 1 else ''} · {M.fmt_money(s['value'])}"
                          + (f" · <span style='color:{theme.ERROR}'>{s['short']} short</span>" if s["short"] else "")
-                         + f" · {s['units']:g} unit{'s' if s['units'] != 1 else ''}</span>")
+                         + self._demand_note(pr["id"]) + "</span>")
             hdr.addWidget(lab, 1)
             if pr.get("folderPath"):
                 hdr.addWidget(_small("📁", lambda _=False, f=pr["folderPath"]: _open_link(f), pr["folderPath"], icon="folder"))
@@ -746,7 +755,12 @@ class InventoryPage(QWidget):
             up.setEnabled(i > 0)
             dn = _small("▼", lambda _=False, i=pr["id"]: (inv.move_project(i, 1), self.commit()), "Move down")
             dn.setEnabled(i < len(projects) - 1)
-            for b in (up, dn, _small("+ Add Parts", lambda _=False, i=pr["id"]: self.add_parts_to_project(i)),
+            extra = []
+            if pr.get("totalQtyNeeded") not in (None, "", 0):
+                extra.append(_small("Clear old plan", lambda _=False, i=pr["id"]: self.clear_old_plan(i),
+                                    "Remove the project's old planned quantity — demand then comes only from "
+                                    "confirmed orders"))
+            for b in (*extra, up, dn, _small("+ Add Parts", lambda _=False, i=pr["id"]: self.add_parts_to_project(i)),
                       _small("Duplicate", lambda _=False, i=pr["id"]: self.duplicate_project(i)),
                       _small("Edit", lambda _=False, i=pr["id"]: self.edit_project(i)),
                       _small("Archive", lambda _=False, i=pr["id"]: self.archive(i, True))):
@@ -754,7 +768,7 @@ class InventoryPage(QWidget):
             v.addLayout(hdr)
             if pr["id"] in self.collapsed:
                 continue
-            rows = inv.project_rows(pr["id"])
+            rows = inv.project_rows(pr["id"], per_unit=True)
             if not rows:
                 v.addWidget(_muted("No parts assigned yet."))
                 continue
@@ -781,8 +795,8 @@ class InventoryPage(QWidget):
                            _num_item(on_hand, None) if not emb else _num_item(f"{on_hand:g} *"),
                            _num_item(f"−{short:g}" if short > 0 else "—", theme.ERROR if short > 0 else None,
                                      short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
-            v.addWidget(self.table(["Part", "Type", "Qty/Unit", "Total Needed", "On Hand", "Short", "Unit Cost", ""],
-                                   tr))
+            v.addWidget(self.table(["Part", "Type", "Qty/Unit", "For 1 Unit", "On Hand", "Short (1 unit)",
+                                    "Unit Cost", ""], tr))
         v.addWidget(_section("Unassigned"))
         un = [p for p in inv.parts if not inv.allocations(p)]
         v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower())) if un
@@ -802,6 +816,15 @@ class InventoryPage(QWidget):
                     v.addLayout(h)
         v.addStretch(1)
         return w
+
+    def _demand_note(self, pid):
+        from ..inventory import orders as O
+        u = O.units_on_order(self.inv, pid)
+        if u is not None:
+            return f" · {u:g} unit{'s' if u != 1 else ''} on open production"
+        old = self.inv.legacy_qty(pid)
+        return (f" · <span style='color:{theme.WARN}'>old plan {old:g} units (until its first order is confirmed)"
+                "</span>" if old else " · no open orders")
 
     def toggle(self, key):
         self.collapsed ^= {key}
@@ -831,6 +854,13 @@ class InventoryPage(QWidget):
         if d.exec():
             pr.update(d.values())
             self.commit("Project saved")
+
+    def clear_old_plan(self, pid):
+        pr = self.inv.project(pid)
+        old = pr.get("totalQtyNeeded")
+        pr.pop("totalQtyNeeded", None)
+        self.commit(f"{pr['name']}: old plan of {old} units removed",
+                    undo=lambda: (pr.__setitem__("totalQtyNeeded", old), self.commit("Undone")))
 
     def duplicate_project(self, pid):
         clone, n = self.inv.duplicate_project(pid)
@@ -872,13 +902,40 @@ class InventoryPage(QWidget):
         row.addWidget(_btn("+ Add Order", lambda: self.edit_order(None), primary=True))
         v.addLayout(row)
         if orders:
-            rows = [[inv.project_name(o.get("projectId")) or "(deleted project)", _num_item(o.get("qty")),
-                     M.fmt_date(o.get("orderDate")), M.fmt_date(o.get("dueDate")),
-                     self.pill(o.get("status") or "Not Started", STATUS_COL.get(o.get("status"), theme.MUTED)),
-                     _actions(_small("Edit", lambda _=False, oo=o: self.edit_order(oo)),
-                              _small("Delete", lambda _=False, oo=o: self.delete_order(oo), danger=True))]
-                    for o in orders]
-            v.addWidget(self.table(["Project", "Qty", "Order Date", "Due Date", "Status", ""], rows))
+            from ..inventory import orders as O
+            me = inv.userName
+            unread = sum(O.is_unread(o, me) for o in orders if o.get("status") not in O.CLOSED_PROD)
+            if unread:
+                v.addWidget(_muted(f"● {unread} unread — open an order to work it", False))
+            inbox = sorted(orders, key=lambda o: (o.get("status") in O.CLOSED_PROD, not O.is_unread(o, me),
+                                                  -(o.get("createdAt") or 0), o.get("dueDate") or ""))
+            rows = []
+            for o in inbox:
+                new = O.is_unread(o, me) and o.get("status") not in O.CLOSED_PROD
+                dot = QTableWidgetItem("●" if new else "")
+                dot.setForeground(QBrush(QColor(theme.INFO)))
+                dot.setTextAlignment(Qt.AlignCenter)
+                cells = [o.get("orderName") or "—", o.get("poNumber") or "—",
+                         inv.project_name(o.get("projectId")) or "(deleted project)", f"{M.num(o.get('qty')):g}",
+                         O.stage(inv, o), M.fmt_date(o.get("finishBy") or o.get("dueDate"))]
+                items = []
+                for c in cells:
+                    it = QTableWidgetItem(c)
+                    if new:
+                        f_ = it.font()
+                        f_.setBold(True)
+                        it.setFont(f_)
+                    if o.get("status") in O.CLOSED_PROD:
+                        it.setForeground(QBrush(QColor(theme.MUTED)))
+                    items.append(it)
+                rows.append([dot, *items, self.pill(o.get("status") or "Not Started",
+                                                    STATUS_COL.get(o.get("status"), theme.MUTED)),
+                             _actions(_small("Open", lambda _=False, oo=o: self.open_production(oo)),
+                                      _small("Edit", lambda _=False, oo=o: self.edit_order(oo)),
+                                      _small("Delete", lambda _=False, oo=o: self.delete_order(oo), danger=True))])
+            t = self.table(["", "Order", "PO", "Project", "Qty", "Stage", "Finish / Due", "Status", ""], rows, 5)
+            t.cellDoubleClicked.connect(lambda r, _c, ib=inbox: self.open_production(ib[r]))
+            v.addWidget(t)
             v.addWidget(_section("Fab & Finishing Timeline — by Project"))
             dated = [o for o in orders if any(o.get(k) for k in ("fabStart", "fabEnd", "finishStart", "finishEnd"))]
             if dated:
@@ -914,6 +971,13 @@ class InventoryPage(QWidget):
             v.addWidget(Gantt(g, [("Ordered → Expected", theme.PURPLE)]))
         v.addStretch(1)
         return w
+
+    def open_production(self, o):
+        from ..inventory import orders as O
+        if O.mark_read(o, self.inv.userName):
+            self.commit()
+        OU.ProductionDialog(self.inv, o, lambda msg: self.commit(), self).exec()
+        self.refresh()
 
     def edit_order(self, o):
         if not self.inv.active_projects() and not o:
@@ -1204,48 +1268,91 @@ class InventoryPage(QWidget):
 
     # ============================================================= clients
     def build_clients(self):
+        """Orders: PO, name, projects. Draft → Confirm (adds the demand, creates production) → Shipped. Editing a
+        confirmed order is a change order — logged and pushed to production."""
+        from ..inventory import orders as O
         inv = self.inv
         w, v = self._page()
-        orders = sorted(inv.clientOrders, key=lambda o: o.get("dueDate") or "")
+        orders = sorted(inv.clientOrders, key=lambda o: (ORDER_RANK.get(O.status(o), 9), -(o.get("createdAt") or 0)))
         row = QHBoxLayout()
-        row.addWidget(_muted(f"{len(orders)} client order{'s' if len(orders) != 1 else ''} · which project each "
-                             "client wants, how many, and by when."), 1)
-        row.addWidget(_btn("+ Add Client Order", lambda: self.edit_client_order(None), primary=True))
+        row.addWidget(_muted(f"{len(orders)} order{'s' if len(orders) != 1 else ''} · confirm an order to add its "
+                             "demand and send it to Production. Changing a confirmed order logs a change order."), 1)
+        row.addWidget(_btn("+ New Order", lambda: self.edit_client_order(None), primary=True))
         v.addLayout(row)
-        if orders:
-            rows = []
-            for o in orders:
-                c = inv.client(o.get("clientId")) or {}
-                lines = "\n".join(f"{inv.project_name(l.get('projectId')) or '(deleted project)'} ×{l.get('qty')}"
-                                  for l in o.get("projectLines") or []) or "—"
-                rows.append([c.get("name") or "(deleted client)",
-                             " · ".join(x for x in (c.get("contactName"), c.get("phone"), c.get("email")) if x) or "—",
-                             lines, M.fmt_date(o.get("orderDate")), M.fmt_date(o.get("dueDate")),
-                             self.pill(o.get("status") or "Requested", STATUS_COL.get(o.get("status"), theme.MUTED)),
-                             _actions(_small("Edit", lambda _=False, oo=o: self.edit_client_order(oo)),
-                                      _small("Delete", lambda _=False, oo=o: self.delete_client_order(oo),
-                                             danger=True))])
-            v.addWidget(self.table(["Client", "Contact", "Projects", "Order Date", "Due Date", "Status", ""], rows, 2))
-        else:
-            v.addWidget(_muted("No client orders yet."))
+        if not orders:
+            v.addWidget(_muted("No orders yet."))
+            v.addStretch(1)
+            return w
+        rows = []
+        for o in orders:
+            st = O.status(o)
+            lines = "\n".join(f"{inv.project_name(l.get('projectId')) or '(deleted project)'} ×{M.num(l.get('qty')):g}"
+                              for l in o.get("projectLines") or []) or "—"
+            prog = O.progress(inv, o)
+            prod = "\n".join(f"{x['project']} ×{x['qty']:g} — {x['stage']}" for x in prog
+                             if x["status"] != "Cancelled" or st == O.CANCELLED) or \
+                ("Not sent — confirm to start" if st == O.DRAFT else "—")
+            acts = [_small("Change" if st == O.CONFIRMED else "Edit", lambda _=False, oo=o: self.edit_client_order(oo))]
+            if st == O.DRAFT:
+                acts.insert(0, _small("Confirm", lambda _=False, oo=o: self.confirm_client_order(oo),
+                                      "Add the demand and create production orders"))
+            if st == O.CONFIRMED and not prog:          # confirmed before orders created production
+                acts.insert(0, _small("Send to production", lambda _=False, oo=o: self.send_to_production(oo),
+                                      "Create its production orders and add the demand"))
+                prod = "Not in production yet"
+            if st == O.CONFIRMED:
+                acts.append(_small("Shipped", lambda _=False, oo=o: self.order_status(oo, O.SHIPPED)))
+            if st in (O.DRAFT, O.CONFIRMED):
+                acts.append(_small("Cancel", lambda _=False, oo=o: self.order_status(oo, O.CANCELLED), danger=True))
+            acts.append(_small(f"Log ({len(o.get('changes') or [])})",
+                               lambda _=False, oo=o: OU.OrderHistoryDialog(self.inv, oo, self).exec()))
+            if st in (O.DRAFT, O.CANCELLED):
+                acts.append(_small("Delete", lambda _=False, oo=o: self.delete_client_order(oo), danger=True))
+            rev = f" · rev {o['rev']}" if o.get("rev") else ""
+            rows.append([o.get("poNumber") or "—", O.order_name(inv, o), lines,
+                         self.pill(st + rev, ORDER_COL.get(st, theme.MUTED)), prod, _actions(*acts)])
+        t = self.table(["PO", "Name", "Projects", "Order", "Production", ""], rows, 4)
+        t.resizeRowsToContents()
+        v.addWidget(t)
         v.addStretch(1)
         return w
 
     def edit_client_order(self, o):
-        if not self.inv.projects and not o:
+        from ..inventory import orders as O
+        if not self.inv.active_projects() and not o:
             return self.toast.show_msg("Add a project first")
-        d = D.ClientOrderDialog(self.inv, o, self)
+        d = OU.OrderEntryDialog(self.inv, o, self)
         if d.exec():
-            if o:
-                o.update(d.values())
-            else:
-                self.inv.clientOrders.append({"id": M.uid(), **d.values()})
-            self.commit("Client order saved")
+            vals = d.values()
+            rev = (o or {}).get("rev", 0)
+            o = O.save_order(self.inv, o, vals["po"], vals["name"], vals["lines"], self.inv.userName)
+            self.commit(f"Change order {o['rev']} saved — production updated" if o.get("rev", 0) > rev
+                        else "Order saved")
+
+    def confirm_client_order(self, o):
+        if OU.confirm_order(self, self.inv, o):
+            self.commit("Order confirmed — demand added, production orders created")
+
+    def send_to_production(self, o):
+        from ..inventory import orders as O
+        O.sync_production(self.inv, o, self.inv.userName, "From confirmed order")
+        self.commit("Production orders created")
+
+    def order_status(self, o, new):
+        from ..inventory import orders as O
+        if new == O.CANCELLED and QMessageBox.question(
+                self, "Cancel order", f"Cancel {O.order_name(self.inv, o)}? Production that hasn't finished is "
+                "cancelled too and its demand removed.") != QMessageBox.Yes:
+            return
+        O.set_status(self.inv, o, new, self.inv.userName)
+        self.commit(f"Order {new.lower()}")
 
     def delete_client_order(self, o):
-        if QMessageBox.question(self, "Delete", "Delete this client order?") == QMessageBox.Yes:
+        from ..inventory import orders as O
+        if QMessageBox.question(self, "Delete", f"Delete order {O.order_name(self.inv, o)} and its log?") \
+                == QMessageBox.Yes:
             self.inv.clientOrders = [x for x in self.inv.clientOrders if x["id"] != o["id"]]
-            self.commit("Client order deleted")
+            self.commit("Order deleted")
 
     # ============================================================= reorder
     def build_reorder(self):

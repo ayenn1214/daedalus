@@ -44,7 +44,7 @@ BIN_SIZES = [{"id": "small", "label": 'Small Bin (3 x 9 x 4.5")', "sku": "S-1626
 VENDOR_CATEGORIES = ["Fabrication", "Laser/Bend/Weld", "Manufacturing/Machining", "One-Stop", "Finishing",
                      "Raw Material", "Fastener", "Hardware Supplier", "Parts Supplier", "Other"]
 VENDOR_STATUSES = ["Active", "Prospective", "Inactive"]
-ORDER_STATUSES = ["Not Started", "In Fab", "In Finishing", "Complete"]
+ORDER_STATUSES = ["Not Started", "In Fab", "In Finishing", "Complete", "Cancelled"]
 CLIENT_ORDER_STATUSES = ["Requested", "Confirmed", "In Production", "Shipped", "Complete"]
 PART_ORDER_STATUSES = ["Ordered", "Received", "Cancelled"]
 
@@ -430,9 +430,17 @@ class Inventory:
         return p["name"] if p else None
 
     def project_qty(self, pid) -> float:
-        p = self.project(pid)
-        v = (p or {}).get("totalQtyNeeded")
-        return num(v, 1.0) if v not in (None, "") else 1.0
+        """Units to build: open production orders (confirmed orders create them). A project that has never had a
+        production order still uses its old planned quantity, if it has one."""
+        from .orders import units_on_order
+        u = units_on_order(self, pid)
+        if u is not None:
+            return u
+        return num(self.legacy_qty(pid))
+
+    def legacy_qty(self, pid):
+        v = (self.project(pid) or {}).get("totalQtyNeeded")
+        return num(v) if v not in (None, "") else 0.0
 
     @staticmethod
     def allocations(p):
@@ -506,8 +514,9 @@ class Inventory:
     def total_needed(self, p) -> float:
         return sum(num(a.get("qty")) * self.project_qty(a.get("projectId")) for a in self.allocations(p))
 
-    def project_rows(self, pid):
-        """Rows for a project table, expanding weldments: (part, depth, qty_label, needed, on_hand, embedded)."""
+    def project_rows(self, pid, per_unit=False):
+        """Rows for a project table, expanding weldments: (part, depth, qty_label, needed, on_hand, embedded).
+        per_unit: needed for one unit instead of the units on order."""
         out = []
         comp = self.component_ids()
 
@@ -524,7 +533,8 @@ class Inventory:
         for p in sorted(self.parts_for_project(pid), key=lambda x: x["name"].lower()):
             if p["id"] in comp:
                 continue
-            walk(p, 0, self.needed_for_project(p, pid), None, None)
+            a = self.allocation(p, pid)
+            walk(p, 0, num(a.get("qty")) if per_unit and a else self.needed_for_project(p, pid), None, None)
         return out
 
     def project_summary(self, pid):

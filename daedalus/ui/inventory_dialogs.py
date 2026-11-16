@@ -623,14 +623,9 @@ class ProjectDialog(_Base):
         f = QFormLayout()
         self.name = QLineEdit(p.get("name", ""))
         self.name.setPlaceholderText("e.g. Line 3 Retrofit")
-        self.qty = QSpinBox()
-        self.qty.setRange(0, 1_000_000)
-        self.qty.setSpecialValueText("— (1)")
-        self.qty.setValue(int(M.num(p.get("totalQtyNeeded"), 0)) if p.get("totalQtyNeeded") not in (None, "") else 0)
         self.folder = QLineEdit(p.get("folderPath", ""))
         self.folder.setPlaceholderText("Network path or URL")
         f.addRow("Project name", self.name)
-        f.addRow("Total qty needed (units to build)", self.qty)
         f.addRow("Folder location", self.folder)
         self.lay.addLayout(f)
         self.finish()
@@ -640,8 +635,7 @@ class ProjectDialog(_Base):
             raise ValueError("Enter a project name")
 
     def values(self):
-        return {"name": self.name.text().strip(), "totalQtyNeeded": self.qty.value() if self.qty.value() else "",
-                "folderPath": self.folder.text().strip()}
+        return {"name": self.name.text().strip(), "folderPath": self.folder.text().strip()}
 
 
 class LocationDialog(_Base):
@@ -797,94 +791,6 @@ class OrderDialog(_Base):
     def values(self):
         return {"projectId": self.project.currentData(), "qty": self.qty.value(),
                 **{k: _date_value(w) for k, w in self.d.items()}, "status": self.status.currentText()}
-
-
-class ClientOrderDialog(_Base):
-    def __init__(self, inv: M.Inventory, o=None, parent=None):
-        super().__init__("Edit Client Order" if o else "Add Client Order", parent,
-                         "Save Changes" if o else "Add Client Order")
-        self.inv = inv
-        r = o or {}
-        c = inv.client(r.get("clientId")) or {}
-        f = QFormLayout()
-        self.client = QComboBox()
-        self.client.setEditable(True)
-        self.client.addItems([x["name"] for x in sorted(inv.clients, key=lambda x: x["name"].lower())])
-        self.client.setCurrentText(c.get("name", ""))
-        self.contact = QLineEdit(c.get("contactName") or "")
-        self.phone = QLineEdit(c.get("phone") or "")
-        self.email = QLineEdit(c.get("email") or "")
-        self.client.currentTextChanged.connect(self._fill_client)
-        self.lines = QTableWidget(0, 2)
-        self.lines.setHorizontalHeaderLabels(["Project", "Qty"])
-        self.lines.setColumnWidth(0, 280)
-        self.lines.verticalHeader().hide()
-        self.lines.setMaximumHeight(140)
-        for ln in r.get("projectLines") or []:
-            self._line(ln.get("projectId"), ln.get("qty", 1))
-        add = QHBoxLayout()
-        self.add_proj = QComboBox()
-        for pr in inv.active_projects():
-            self.add_proj.addItem(pr["name"], pr["id"])
-        self.add_qty = _qty(1, 1)
-        ab = QPushButton("+ Add")
-        ab.clicked.connect(lambda: self._line(self.add_proj.currentData(), self.add_qty.value())
-                           if self.add_proj.currentData() else None)
-        rb = QPushButton("Remove")
-        rb.clicked.connect(lambda: self.lines.removeRow(self.lines.currentRow()) if self.lines.currentRow() >= 0
-                           else None)
-        add.addWidget(self.add_proj, 2)
-        add.addWidget(self.add_qty)
-        add.addWidget(ab)
-        add.addWidget(rb)
-        self.od = _date_edit(r.get("orderDate") or (M.today() if not o else ""))
-        self.dd = _date_edit(r.get("dueDate"))
-        self.status = QComboBox()
-        self.status.addItems(M.CLIENT_ORDER_STATUSES)
-        self.status.setCurrentText(r.get("status") or "Requested")
-        self.notes = QPlainTextEdit(r.get("notes") or "")
-        self.notes.setFixedHeight(54)
-        f.addRow("Client", self.client)
-        f.addRow("Contact name", self.contact)
-        f.addRow("Phone", self.phone)
-        f.addRow("Email", self.email)
-        f.addRow("Projects", self.lines)
-        f.addRow("", add)
-        f.addRow("Order date", self.od)
-        f.addRow("Due date", self.dd)
-        f.addRow("Status", self.status)
-        f.addRow("Notes", self.notes)
-        self.lay.addLayout(f)
-        self.finish()
-
-    def _fill_client(self, name):
-        c = next((x for x in self.inv.clients if x["name"].lower() == name.strip().lower()), None)
-        if c:
-            self.contact.setText(c.get("contactName") or "")
-            self.phone.setText(c.get("phone") or "")
-            self.email.setText(c.get("email") or "")
-
-    def _line(self, pid, qty):
-        r = self.lines.rowCount()
-        self.lines.insertRow(r)
-        it = QTableWidgetItem(self.inv.project_name(pid) or "(deleted project)")
-        it.setData(Qt.UserRole, pid)
-        it.setFlags(it.flags() & ~Qt.ItemIsEditable)
-        self.lines.setItem(r, 0, it)
-        self.lines.setCellWidget(r, 1, _qty(qty, 1))
-
-    def validate(self):
-        if not self.client.currentText().strip():
-            raise ValueError("Enter a client name")
-
-    def values(self):
-        c = self.inv.find_or_create_client(self.client.currentText(), self.contact.text().strip(),
-                                           self.phone.text().strip(), self.email.text().strip())
-        lines = [{"projectId": self.lines.item(r, 0).data(Qt.UserRole), "qty": self.lines.cellWidget(r, 1).value()}
-                 for r in range(self.lines.rowCount())]
-        return {"clientId": c["id"], "projectLines": lines, "orderDate": _date_value(self.od),
-                "dueDate": _date_value(self.dd), "status": self.status.currentText(),
-                "notes": self.notes.toPlainText().strip()}
 
 
 class PartOrderDialog(_Base):

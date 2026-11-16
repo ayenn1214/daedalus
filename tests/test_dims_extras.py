@@ -61,7 +61,7 @@ def test_discontinued_never_reordered_but_still_short():
     assert "nut" in low and "old" not in low
     rows = A.discontinued_rows(inv)
     assert rows[0]["Part"] == "Old Caster" and rows[0]["Replacement"] == "3/8-16 Hex Nut" and \
-        rows[0]["Needed by Projects"] == 4
+        rows[0]["Needed by Projects"] == 1          # demand = open production (po3, qty 1), not the old plan
 
 
 def test_trends_and_costs():
@@ -76,7 +76,7 @@ def test_trends_and_costs():
     c = A.cost_summary(inv, 6, end=TODAY)
     assert c["stock_value"] == pytest.approx(100 * 0.3 + 10 * 0.1 + 5 * 12)
     proj = c["projects"][0]
-    assert proj["Cost / Unit"] == pytest.approx(8 * 0.3) and proj["Units"] == 4
+    assert proj["Cost / Unit"] == pytest.approx(8 * 0.3) and proj["Units"] == 1   # open production: po3 ×1
 
 
 def test_vendor_xref():
@@ -176,7 +176,7 @@ def test_dims_tools(tmp_path):
     assert run("dims_search_parts", vendor="mcmaster")["count"] == 1
     assert run("dims_search_parts", discontinued=True)["parts"][0]["id"] == "old"
     gp = run("dims_get_part", part="bolt")
-    assert gp["trend"]["Avg / Month"] > 0 and gp["allocations"][0]["needed"] == 32
+    assert gp["trend"]["Avg / Month"] > 0 and gp["allocations"][0]["needed"] == 8   # 8/unit × 1 open
     assert run("dims_reorder_list")["rows"][0]["Part"] == "3/8-16 Hex Nut"
     assert run("dims_vendor_prices")["possible_savings_per_year"] > 0
     assert run("dims_production_history", start="2026-01-01")["projects"][0]["Units"] == 5

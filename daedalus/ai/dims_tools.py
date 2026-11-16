@@ -364,7 +364,7 @@ class DimsToolExecutor:
     def _dims_summary(self, a):
         inv, st = self.inv, self.store
         from ..inventory import backup as BK
-        prod = [o for o in inv.productionOrders if o.get("status") != "Complete"]
+        prod = [o for o in inv.productionOrders if o.get("status") not in ("Complete", "Cancelled")]
         return _j({"parts": len(inv.parts), "by_type": {k: sum(p.get("type") == k for p in inv.parts)
                                                         for k, _l in M.TYPES},
                    "stock_value_cad": round(inv.stock_value(), 2), "low_stock": len(inv.low_stock()),
@@ -467,15 +467,20 @@ class DimsToolExecutor:
                                                                                   lo.get("binPosition")),
                      "parts": [p["name"] for p in inv.parts_at(lo["id"])]} for lo in inv.sorted_locations()]
         elif k == "production_orders":
-            rows = [{"id": o["id"], "project": inv.project_name(o.get("projectId")),
-                     **{x: o.get(x) for x in ("qty", "status", "orderDate", "dueDate", "fabStart", "fabEnd",
-                                             "finishStart", "finishEnd")}}
+            from ..inventory import orders as O
+            rows = [{"id": o["id"], "project": inv.project_name(o.get("projectId")), "stage": O.stage(inv, o),
+                     **{x: o.get(x) for x in ("qty", "status", "orderName", "poNumber", "orderDate", "dueDate",
+                                             "finishBy", "fabStart", "fabEnd", "finishStart", "finishEnd")}}
                     for o in sorted(inv.productionOrders, key=lambda o: o.get("dueDate") or "")]
         elif k == "clients":
             rows = [{x: c.get(x) for x in ("name", "contactName", "phone", "email")} for c in inv.clients]
         elif k == "client_orders":
-            rows = [{**{x: o.get(x) for x in ("id", "status", "orderDate", "dueDate", "notes")},
-                     "client": (inv.client(o.get("clientId")) or {}).get("name")} for o in inv.clientOrders]
+            from ..inventory import orders as O
+            rows = [{"id": o["id"], "po": o.get("poNumber") or "", "name": O.order_name(inv, o),
+                     "status": O.status(o), "rev": o.get("rev", 0),
+                     "projects": [{"project": inv.project_name(l.get("projectId")), "qty": l.get("qty")}
+                                  for l in o.get("projectLines") or []],
+                     "production": O.progress(inv, o)} for o in inv.clientOrders]
         else:
             rows = [{**o, "part": (inv.part(o.get("partId")) or {}).get("name")}
                     for o in sorted(inv.partOrders, key=lambda o: o.get("orderDate") or "", reverse=True)[:80]]
