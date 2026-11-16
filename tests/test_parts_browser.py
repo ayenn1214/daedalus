@@ -81,6 +81,12 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     t.setCurrentCell(r, 2)
     app.processEvents()
     assert page.parts_sel == "tab" and br.editor is not None and not br.dirty()
+    ev = page.pages["parts"].widget()
+    assert [ev.tabs.tabText(i) for i in range(2)] == ["Parts", "Part Profile"]
+    assert ev.tabs.currentIndex() == 0                                     # click loads, stays on the list
+    t.cellDoubleClicked.emit(r, 2)
+    assert ev.tabs.currentWidget() is br.profile_page                      # double-click opens the profile tab
+    ev.tabs.setCurrentIndex(0)
     br.editor.name.setText("FLAT, TAB, 3/16")
     assert br.dirty()
     page.refresh_current()                                                 # unsaved edits survive a refresh
@@ -94,5 +100,6 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     page.add_part_inline()
     app.processEvents()
     assert page._browser.editor is not None and page._browser.editor.part is None
+    assert page.pages["parts"].widget().tabs.currentWidget() is page._browser.profile_page
     page.goto("engineering")
     assert page.current_key() == "parts"

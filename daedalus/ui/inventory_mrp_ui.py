@@ -63,7 +63,7 @@ class EngineeringView(QWidget):
     edit_part = Signal(str)
     new_part = Signal(dict)
 
-    def __init__(self, page, parent=None, parts_widget=None):
+    def __init__(self, page, parent=None, parts_widget=None, profile_widget=None):
         super().__init__(parent)
         self.page = page
         self.inv = page.inv
@@ -74,6 +74,8 @@ class EngineeringView(QWidget):
         self.tabs.setDocumentMode(True)
         if parts_widget is not None:                 # Parts and Engineering are one tab
             self.tabs.addTab(parts_widget, "Parts")
+        if profile_widget is not None:
+            self.tabs.addTab(profile_widget, "Part Profile")
         for name, fn in (("Part Numbers", self.numbers), ("BOM Workbench", self.bom), ("Where Used", self.used),
                          ("Job Order && Kit", self.job), ("Material Needs", self.materials)):
             self.tabs.addTab(fn(), name)

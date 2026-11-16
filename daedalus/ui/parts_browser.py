@@ -1,12 +1,12 @@
-"""Parts: every part on the left (weldment / assembly components included, each its own row), the selected part's
-editable profile on the right."""
+"""Parts: every part (weldment / assembly components included, each its own row) on the Parts tab; the selected
+part's editable profile on its own Part Profile tab."""
 from __future__ import annotations
 
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+    QMessageBox, QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
     QWidget,
 )
 
@@ -44,8 +44,7 @@ class PartsBrowser(QWidget):
         v.setContentsMargins(14, 10, 14, 14)
         v.setSpacing(6)
         v.addWidget(toolbar)
-        self.split = QSplitter(Qt.Horizontal)
-        self.split.setChildrenCollapsible(False)
+        self.open_profile = lambda: None            # set by the page: switch to the Part Profile tab
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -68,18 +67,14 @@ class PartsBrowser(QWidget):
                 sel.addWidget(b)
         lv.addLayout(sel)
         self.table = self._list(parts)
+        hint = QLabel("Click a part to load its profile · double-click (or Enter) opens the Part Profile tab")
+        hint.setObjectName("muted")
         lv.addWidget(self.table, 1)
-        self.split.addWidget(left)
-        self.right = QWidget()
-        self.rv = QVBoxLayout(self.right)
-        self.rv.setContentsMargins(8, 0, 0, 0)
-        self.split.addWidget(self.right)
-        self.split.setStretchFactor(0, 3)
-        self.split.setStretchFactor(1, 2)
-        sizes = page.mrp_state.get("parts_split")
-        self.split.setSizes(sizes or [820, 560])
-        self.split.splitterMoved.connect(lambda *_: page.mrp_state.__setitem__("parts_split", self.split.sizes()))
-        v.addWidget(self.split, 1)
+        lv.addWidget(hint)
+        v.addWidget(left, 1)
+        self.profile_page = QWidget()                # the Part Profile tab
+        self.rv = QVBoxLayout(self.profile_page)
+        self.rv.setContentsMargins(14, 10, 14, 14)
         self.setMinimumHeight(640)
         pid = page.parts_sel
         if pid == "__new__":
@@ -159,6 +154,8 @@ class PartsBrowser(QWidget):
         t.verticalHeader().setDefaultSectionSize(34)
         t.itemChanged.connect(self._checked)
         t.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._pick(r))
+        t.cellDoubleClicked.connect(lambda r, _c: (self._pick(r), self.open_profile()))
+        t.cellActivated.connect(lambda r, _c: (self._pick(r), self.open_profile()))
         return t
 
     def _select_all(self, on):
@@ -214,7 +211,7 @@ class PartsBrowser(QWidget):
 
     def _empty(self):
         self._clear()
-        lab = QLabel("Select a part to see and edit its profile — or + Add Part.")
+        lab = QLabel("Pick a part on the Parts tab to see and edit its profile — or + Add Part.")
         lab.setObjectName("muted")
         lab.setAlignment(Qt.AlignCenter)
         self.rv.addWidget(lab, 1)

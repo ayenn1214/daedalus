@@ -1153,7 +1153,8 @@ class InventoryPage(QWidget):
         self._browser = PartsBrowser(self, lst, w)
         QTimer.singleShot(0, lambda: (self.q.setFocus(), self.q.setCursorPosition(len(self.q.text())))
                           if f["q"] else None)
-        ev = EngineeringView(self, parts_widget=self._browser)
+        ev = EngineeringView(self, parts_widget=self._browser, profile_widget=self._browser.profile_page)
+        self._browser.open_profile = lambda: ev.tabs.setCurrentWidget(self._browser.profile_page)
         ev.edit_part.connect(self.edit_part)
         ev.new_part.connect(self.new_part_from)
         return ev
@@ -1167,6 +1168,9 @@ class InventoryPage(QWidget):
         if br is not None:
             br._clean = None
         self.refresh_current()
+        br = getattr(self, "_browser", None)
+        if br is not None:
+            br.open_profile()
 
     def _search(self, text):
         self.parts_filter["q"] = text
