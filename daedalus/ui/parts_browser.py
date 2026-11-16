@@ -5,7 +5,7 @@ from __future__ import annotations
 from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
+    QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
     QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
     QWidget,
 )
@@ -78,13 +78,16 @@ class PartsBrowser(QWidget):
         pl = QWidget()
         plv = QVBoxLayout(pl)
         plv.setContentsMargins(14, 10, 4, 14)
-        self.find = QLineEdit()
-        self.find.setPlaceholderText("Find part no., description, project…")
-        self.find.setClearButtonEnabled(True)
-        self.find.textChanged.connect(self._filter_picker)
-        plv.addWidget(self.find)
-        self.picker = self._picker(parts)
+        plv.addLayout(self._picker_filters())
+        # its own list: every part (the Parts tab's filters don't apply here), by part number
+        self.pick_parts = sorted(self.inv.parts, key=lambda p: ((p.get("partNumber") or "~").upper(),
+                                                                 p["name"].lower()))
+        self.picker = self._picker(self.pick_parts)
         plv.addWidget(self.picker, 1)
+        self.pick_count = QLabel()
+        self.pick_count.setObjectName("muted")
+        plv.addWidget(self.pick_count)
+        self._filter_picker()
         self.profile_page.addWidget(pl)
         right = QWidget()
         self.rv = QVBoxLayout(right)
@@ -210,25 +213,138 @@ class PartsBrowser(QWidget):
         t.setColumnWidth(1, min(max(t.columnWidth(1), 160), 300))
         h.setStretchLastSection(True)
         t.verticalHeader().setDefaultSectionSize(30)
-        t.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._pick(r))
+        t.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._pick(r, self.pick_parts))
         return t
 
-    def _filter_picker(self, text):
-        q = text.strip().lower()
-        for i in range(self.picker.rowCount()):
-            row = " ".join(self.picker.item(i, j).text() for j in range(self.picker.columnCount())).lower()
-            self.picker.setRowHidden(i, bool(q) and q not in row)
+    PF_DEFAULT = {"q": "", "type": "all", "project": "all", "vendor": "all", "stock": "all", "kind": "all",
+                  "prefix": "all"}
+
+    def _picker_filters(self):
+        """Search filters for the Part Profile list: text, type, project, vendor, prefix, kind, stock."""
+        from ..inventory import mrp as R
+        inv = self.inv
+        f = self.page.mrp_state.setdefault("pp_filter", dict(self.PF_DEFAULT))
+        for k, val in self.PF_DEFAULT.items():
+            f.setdefault(k, val)
+        lay = QVBoxLayout()
+        lay.setSpacing(4)
+        self.find = QLineEdit(f["q"])
+        self.find.setPlaceholderText("Search part no., name, description, supplier, size, bin…")
+        self.find.setClearButtonEnabled(True)
+        self.find.textChanged.connect(lambda t: (f.__setitem__("q", t), self._filter_picker()))
+        lay.addWidget(self.find)
+
+        def combo(key, items, tip):
+            c = QComboBox()
+            for val, lab in items:
+                c.addItem(lab, val)
+            c.setCurrentIndex(max(0, c.findData(f[key])))
+            c.setToolTip(tip)
+            c.currentIndexChanged.connect(lambda _i, c=c, key=key: (f.__setitem__(key, c.currentData()),
+                                                                     self._filter_picker()))
+            return c
+        self.pf = {
+            "type": combo("type", [("all", "All types")] + list(M.TYPES), "Part type"),
+            "project": combo("project", [("all", "All projects"), ("none", "No project")]
+                             + [(p["id"], p["name"]) for p in inv.active_projects()], "Project it's used on"),
+            "vendor": combo("vendor", [("all", "All vendors"), ("none", "No vendor")]
+                            + [(n, n) for n in sorted({s["name"] for p in inv.parts for s in inv.suppliers(p)},
+                                                      key=str.lower)], "Supplier"),
+            "prefix": combo("prefix", [("all", "All prefixes"), ("none", "No part number")]
+                            + [(x, x) for x in sorted({R.split_number(p.get("partNumber"))[0] for p in inv.parts
+                                                       if R.split_number(p.get("partNumber"))[0]})],
+                            "Part-number prefix (C10, M20, P00 …)"),
+            "kind": combo("kind", [("all", "Any structure"), ("bom", "Has a BOM (weldment / assembly)"),
+                                   ("component", "Inside a weldment / assembly"),
+                                   ("top", "Not inside anything")], "Where it sits in the structure"),
+            "stock": combo("stock", [("all", "Any stock"), ("low", "At / below reorder point"),
+                                     ("out", "Out of stock"), ("in", "In stock")], "Stock level"),
+        }
+        grid = QGridLayout()
+        grid.setSpacing(4)
+        for i, k in enumerate(("type", "project", "vendor", "prefix", "kind", "stock")):
+            grid.addWidget(self.pf[k], i // 3, i % 3)
+        lay.addLayout(grid)
+        clear = QPushButton("Clear filters")
+        clear.clicked.connect(self._clear_picker_filters)
+        row = QHBoxLayout()
+        row.addStretch(1)
+        row.addWidget(clear)
+        lay.addLayout(row)
+        return lay
+
+    def _clear_picker_filters(self):
+        f = self.page.mrp_state["pp_filter"]
+        f.update(self.PF_DEFAULT)
+        for k, c in self.pf.items():
+            c.blockSignals(True)
+            c.setCurrentIndex(max(0, c.findData("all")))
+            c.blockSignals(False)
+        self.find.blockSignals(True)
+        self.find.clear()
+        self.find.blockSignals(False)
+        self._filter_picker()
+
+    def picker_match(self, p) -> bool:
+        from ..inventory import mrp as R
+        inv = self.inv
+        f = self.page.mrp_state.get("pp_filter") or self.PF_DEFAULT
+        if f["type"] != "all" and (p.get("type") or "fastener") != f["type"]:
+            return False
+        if f["project"] == "none" and inv.allocations(p):
+            return False
+        if f["project"] not in ("all", "none") and not inv.allocation(p, f["project"]):
+            return False
+        sups = inv.suppliers(p)
+        if f["vendor"] == "none" and sups:
+            return False
+        if f["vendor"] not in ("all", "none") and not any(s["name"] == f["vendor"] for s in sups):
+            return False
+        pre = R.split_number(p.get("partNumber"))[0]
+        if f["prefix"] == "none" and p.get("partNumber"):
+            return False
+        if f["prefix"] not in ("all", "none") and pre != f["prefix"]:
+            return False
+        if f["kind"] != "all":
+            inside = p["id"] in self._components
+            if (f["kind"] == "bom" and not R.has_bom(p)) or (f["kind"] == "component" and not inside) or \
+                    (f["kind"] == "top" and inside):
+                return False
+        stock, rp = M.num(p.get("currentStock")), M.num(p.get("reorderPoint"))
+        if (f["stock"] == "low" and stock > rp) or (f["stock"] == "out" and stock > 0) or \
+                (f["stock"] == "in" and stock <= 0):
+            return False
+        q = (f.get("q") or "").strip().lower()
+        if q:
+            hay = " ".join(str(x) for x in (
+                p.get("partNumber"), p.get("name"), p.get("description"), p.get("category"), p.get("size"),
+                p.get("length"), p.get("grade"), p.get("qbPartNumber"), *[s.get("name") for s in sups],
+                *[s.get("partNumber") for s in sups], *inv.project_chips(p),
+                inv.location_label_for(p.get("locationId")))).lower()
+            if not all(w in hay for w in q.split()):
+                return False
+        return True
+
+    def _filter_picker(self, *_):
+        self._components = self.inv.component_ids()
+        shown = 0
+        for i, p in enumerate(self.pick_parts):
+            ok = self.picker_match(p)
+            self.picker.setRowHidden(i, not ok)
+            shown += ok
+        n = len(self.pick_parts)
+        self.pick_count.setText(f"{shown} of {n} parts" if shown != n else f"{n} parts")
 
     def _mark_row(self, pid):
         """Select pid's row in both lists without loading it again."""
-        r = next((i for i, p in enumerate(self.parts) if p["id"] == pid), -1)
-        for t in (self.table, getattr(self, "picker", None)):
+        for t, lst in ((self.table, self.parts), (getattr(self, "picker", None), getattr(self, "pick_parts", []))):
             if t is None:
                 continue
+            r = next((i for i, p in enumerate(lst) if p["id"] == pid), -1)
             t.blockSignals(True)
             if r >= 0:
                 t.selectRow(r)
-                QTimer.singleShot(0, lambda t=t: t.scrollToItem(t.item(r, 1)))
+                QTimer.singleShot(0, lambda t=t, r=r: t.scrollToItem(t.item(r, 1)))
             else:
                 t.clearSelection()
             t.blockSignals(False)
@@ -253,10 +369,11 @@ class PartsBrowser(QWidget):
         self.sel_lab.setText(f"{n} selected" if n else f"{len(self.parts)} parts")
         QTimer.singleShot(0, self.page.refresh_current)        # show / hide Assign to Project
 
-    def _pick(self, row):
-        if row < 0 or row >= len(self.parts):
+    def _pick(self, row, lst=None):
+        lst = self.parts if lst is None else lst
+        if row < 0 or row >= len(lst):
             return
-        pid = self.parts[row]["id"]
+        pid = lst[row]["id"]
         if pid == self.page.parts_sel and self.editor is not None:
             return
         if self.dirty() and QMessageBox.question(

@@ -90,14 +90,32 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     assert [pk.horizontalHeaderItem(i).text() for i in range(4)] == ["Part No.", "Description", "Project", "Used In"]
     prow = {pk.item(i, 0).text(): (pk.item(i, 1).text(), pk.item(i, 3).text()) for i in range(pk.rowCount())}
     assert prow["M10-0005"] == ("Laser", "M20-0001") and prow["M20-0001"][0] == "WLDMT"
-    assert pk.currentRow() == r
-    w_row = next(i for i in range(pk.rowCount()) if pk.item(i, 0).text() == "M20-0001")
+    prow_of = lambda pn: next(i for i in range(pk.rowCount()) if pk.item(i, 0).text() == pn)  # noqa: E731
+    pr = prow_of("M10-0005")
+    assert pk.currentRow() == pr
+    w_row = prow_of("M20-0001")
     pk.setCurrentCell(w_row, 1)
-    assert page.parts_sel == "w" and br.editor.part["id"] == "w" and t.currentRow() == w_row
+    assert page.parts_sel == "w" and br.editor.part["id"] == "w"
+    assert t.item(t.currentRow(), 1).text() == "M20-0001"                   # both lists follow
     br.find.setText("m10")
-    assert not pk.isRowHidden(r) and pk.isRowHidden(w_row)
+    assert not pk.isRowHidden(pr) and pk.isRowHidden(w_row)
     br.find.clear()
-    pk.setCurrentCell(r, 1)
+    visible = lambda: {pk.item(i, 0).text() for i in range(pk.rowCount()) if not pk.isRowHidden(i)}  # noqa: E731
+    br.pf["kind"].setCurrentIndex(br.pf["kind"].findData("component"))
+    assert visible() == {"M10-0005"}
+    br.pf["kind"].setCurrentIndex(br.pf["kind"].findData("bom"))
+    assert visible() == {"M20-0001"}
+    br._clear_picker_filters()
+    br.pf["prefix"].setCurrentIndex(br.pf["prefix"].findData("none"))
+    assert visible() == {""}
+    br.pf["prefix"].setCurrentIndex(br.pf["prefix"].findData("M10"))
+    assert visible() == {"M10-0005"} and "1 of 3" in br.pick_count.text()
+    br._clear_picker_filters()
+    br.pf["type"].setCurrentIndex(br.pf["type"].findData("fastener"))
+    assert visible() == {""}
+    br._clear_picker_filters()
+    assert len(visible()) == 3
+    pk.setCurrentCell(pr, 1)
     app.processEvents()
     ev.tabs.setCurrentIndex(0)
     br.editor.name.setText("FLAT, TAB, 3/16")
