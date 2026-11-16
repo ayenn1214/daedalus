@@ -63,7 +63,7 @@ class EngineeringView(QWidget):
     edit_part = Signal(str)
     new_part = Signal(dict)
 
-    def __init__(self, page, parent=None):
+    def __init__(self, page, parent=None, parts_widget=None):
         super().__init__(parent)
         self.page = page
         self.inv = page.inv
@@ -72,6 +72,8 @@ class EngineeringView(QWidget):
         v.setContentsMargins(0, 0, 0, 0)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
+        if parts_widget is not None:                 # Parts and Engineering are one tab
+            self.tabs.addTab(parts_widget, "Parts")
         for name, fn in (("Part Numbers", self.numbers), ("BOM Workbench", self.bom), ("Where Used", self.used),
                          ("Job Order && Kit", self.job), ("Material Needs", self.materials)):
             self.tabs.addTab(fn(), name)
@@ -628,7 +630,8 @@ class TimePhasedView(QWidget):
     def receive(self, oid):
         o = next(x for x in self.inv.partOrders if x["id"] == oid)
         if o.get("partId"):
-            self.inv.receive_order(oid)
+            receive_dialog(self.page, o)
+            return
         else:
             o.update(status="Received", receivedDate=M.today())
             R.add_event(o, "received", self.inv.userName)
@@ -734,32 +737,7 @@ class PartProfileDialog(QDialog):
             g.addWidget(b, i // 2, (i % 2) * 2 + 1)
         top.addLayout(g, 1)
         v.addLayout(top)
-        tabs = QTabWidget()
-        tabs.addTab(_table(["Role", "Vendor", "Vendor Part #", "Price", "Currency", "Price CAD", "Quoted Lead",
-                            "Last Lead (days)", "Avg Lead (days)", "Price Date"], R.vendor_options(inv, p), 1,
-                           money=("Price CAD",)), "Vendors")
-        oh = R.order_history(inv, p["id"])
-        tabs.addTab(_table(["Ordered", "Qty", "Vendor", "PO", "Expected", "Received", "Status", "For", "Lead (days)"],
-                           oh, 2) if oh else _muted("No orders yet."), f"Order history ({len(oh)})")
-        wu = R.where_used(inv, p["id"])
-        wt = QWidget()
-        wl = QVBoxLayout(wt)
-        wl.addWidget(QLabel("<b>Shared</b> — used in more than one place" if wu["shared"] else "Unique to one use"))
-        wl.addWidget(_table(["Part", "Part Number", "Qty", "Kind"], wu["parents"], 0) if wu["parents"] else
-                     _muted("Not inside any assembly."))
-        wl.addWidget(_table(["Project", "Qty per unit"], wu["projects"], 0) if wu["projects"] else
-                     _muted("No project needs it."))
-        tabs.addTab(wt, "Where used")
-        if R.has_bom(p):
-            tabs.addTab(_table(["Level", "Part Number", "Part", "Qty / Assy", "Qty Total", "On Hand", "Unit Cost",
-                                "Vendor", "Bin"], R.bom_rows(inv, p["id"], 0), 2, money=("Unit Cost",)),
-                        f"BOM ({len(p['components'])})")
-        tx = [t for t in inv.transactions if t.get("partId") == p["id"]][-60:]
-        tabs.addTab(_table(["When", "Action", "Qty", "By", "Note"], [
-            {"When": dt.datetime.fromtimestamp(t["ts"] / 1000).strftime("%Y-%m-%d %H:%M"),
-             "Action": {"usage": "Used", "receiving": "Received"}.get(t.get("mode"), t.get("mode")),
-             "Qty": M.num(t.get("qty")), "By": t.get("by"), "Note": t.get("note")} for t in reversed(tx)], 4),
-            "Stock moves")
+        tabs = profile_tabs(page, p)
         v.addWidget(tabs, 1)
         bb = QDialogButtonBox()
         bb.addButton("Edit", QDialogButtonBox.ActionRole).clicked.connect(lambda: (self.accept(),
@@ -770,6 +748,89 @@ class PartProfileDialog(QDialog):
                 bb.addButton(lab, QDialogButtonBox.ActionRole).clicked.connect(lambda _=False, u=p[k]: _open_link(u))
         bb.addButton(QDialogButtonBox.Close).clicked.connect(self.reject)
         v.addWidget(bb)
+
+
+def profile_tabs(page, p) -> QTabWidget:
+    """Vendors, order history, where used, BOM, stock moves for one part."""
+    inv = page.inv
+    tabs = QTabWidget()
+    tabs.addTab(_table(["Role", "Vendor", "Vendor Part #", "Price", "Currency", "Price CAD", "Quoted Lead",
+                        "Last Lead (days)", "Avg Lead (days)", "Price Date"], R.vendor_options(inv, p), 1,
+                       money=("Price CAD",)), "Vendors")
+    oh = R.order_history(inv, p["id"])
+    if oh:
+        t = _table(["Ordered", "Qty", "Vendor", "PO", "Expected", "Status", "Received", "Rcvd Qty", "For",
+                    "Lead (days)", ""], [{**r, "": ""} for r in oh], 2)
+        for i, r in enumerate(oh):
+            o = next((x for x in inv.partOrders if x.get("id") == r["id"]), None)
+            if o is None:
+                continue
+            if o.get("status") == "Ordered":
+                b = _btn("Receive…", lambda _=False, oo=o: receive_dialog(page, oo))
+            elif o.get("status") in ("Received", "Binned"):
+                n = len(o.get("receivedChanges") or [])
+                b = _btn(f"🔒 Change…{f' ({n})' if n else ''}", lambda _=False, oo=o: change_received_dialog(page, oo))
+                b.setToolTip("Received quantity is locked — changing it moves stock by the difference and is logged"
+                             + "".join(f"\n{R._d(c['at'])} {c['by']}: {c['from']:g} → {c['to']:g}"
+                                       + (f" ({c['reason']})" if c.get("reason") else "")
+                                       for c in o.get("receivedChanges") or []))
+            else:
+                continue
+            t.setCellWidget(i, 10, b)
+        tabs.addTab(t, f"Orders ({len(oh)})")
+    else:
+        tabs.addTab(_muted("No orders yet."), "Orders (0)")
+    wu = R.where_used(inv, p["id"])
+    wt = QWidget()
+    wl = QVBoxLayout(wt)
+    wl.addWidget(QLabel("<b>Shared</b> — used in more than one place" if wu["shared"] else "Unique to one use"))
+    wl.addWidget(_table(["Part", "Part Number", "Qty", "Kind"], wu["parents"], 0) if wu["parents"] else
+                 _muted("Not inside any assembly."))
+    wl.addWidget(_table(["Project", "Qty per unit"], wu["projects"], 0) if wu["projects"] else
+                 _muted("No project needs it."))
+    tabs.addTab(wt, "Where used")
+    if R.has_bom(p):
+        tabs.addTab(_table(["Level", "Part Number", "Part", "Qty / Assy", "Qty Total", "On Hand", "Unit Cost",
+                            "Vendor", "Bin"], R.bom_rows(inv, p["id"], 0), 2, money=("Unit Cost",)),
+                    f"BOM ({len(p['components'])})")
+    tx = [t for t in inv.transactions if t.get("partId") == p["id"]][-60:]
+    tabs.addTab(_table(["When", "Action", "Qty", "By", "Note"], [
+        {"When": dt.datetime.fromtimestamp(t["ts"] / 1000).strftime("%Y-%m-%d %H:%M"),
+         "Action": {"usage": "Used", "receiving": "Received"}.get(t.get("mode"), t.get("mode")),
+         "Qty": M.num(t.get("qty")), "By": t.get("by"), "Note": t.get("note")} for t in reversed(tx)], 4),
+        "Stock moves")
+    return tabs
+
+
+def receive_dialog(page, o) -> bool:
+    """Confirm the quantity actually received; stock goes up by it and it is locked."""
+    inv = page.inv
+    item = R.order_item(inv, o)
+    q, ok = QInputDialog.getDouble(page, "Receive", f"{item}\nOrdered {M.num(o.get('qty')):g}"
+                                   + (f" · PO {o['poNumber']}" if o.get("poNumber") else "")
+                                   + "\n\nQuantity received:", M.num(o.get("qty")), 0, 1e9, 2)
+    if not ok:
+        return False
+    inv.receive_order(o["id"], q)
+    page.commit(f"Received {q:g} × {item} — stock updated, quantity locked")
+    return True
+
+
+def change_received_dialog(page, o) -> bool:
+    """Correct a locked received quantity — logged, stock moves by the difference."""
+    inv = page.inv
+    old = inv.received_qty(o)
+    q, ok = QInputDialog.getDouble(page, "Change received quantity",
+                                   f"{R.order_item(inv, o)}\nReceived {old:g} (locked). New received quantity:",
+                                   old, 0, 1e9, 2)
+    if not ok or q == old:
+        return False
+    reason, ok = QInputDialog.getText(page, "Change received quantity", f"Why {old:g} → {q:g}? (logged)")
+    if not ok:
+        return False
+    inv.change_received(o["id"], q, reason)
+    page.commit(f"Received qty {old:g} → {q:g} (logged)")
+    return True
 
 
 # ================================================================== imports

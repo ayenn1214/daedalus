@@ -206,18 +206,19 @@ def test_screens(tmp_path, monkeypatch):
     for key in ("engineering", "timephased", "vendors", "parts"):
         page.goto(key)
         app.processEvents()
-    page.goto("engineering")
-    eng = page.pages["engineering"].widget()
+    page.goto("engineering")                          # Engineering is part of the Parts tab now
+    assert page.current_key() == "parts"
+    eng = page.pages["parts"].widget()
     for i in range(eng.tabs.count()):
         page.mrp_state["eng_tab"] = i
         page.refresh_current()
         app.processEvents()
-    eng = page.pages["engineering"].widget()
+    eng = page.pages["parts"].widget()
     got = eng.reserve("C20", 2, None, "test")
     assert [r["id"] for r in got] == ["C20-0002", "C20-0003"]
-    page.mrp_state["eng_tab"] = 3
+    page.mrp_state["eng_tab"] = 4                      # Job Order & Kit (Parts is tab 0)
     page.refresh_current()
-    eng = page.pages["engineering"].widget()
+    eng = page.pages["parts"].widget()
     eng.log_orders()
     assert len(st.inv.partOrders) == 5
     page.goto("timephased")

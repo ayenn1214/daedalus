@@ -59,8 +59,11 @@ class _Worker(QThread):
         self.copilot, self.prompt, self.state, self.bridge = copilot, prompt, state, bridge
         self.images = images or []
         self.documents = documents or []
+        self.killed = False
 
     def _call(self, name, args):
+        if self.killed:                               # hard-stopped: never touch the model / inventory again
+            return "Not run — stopped by the user.", True
         self.bridge.request.emit(name, args)          # blocks until GUI thread ran it
         return self.bridge.result
 
@@ -74,7 +77,12 @@ class _Worker(QThread):
                 images=self.images, documents=self.documents,
             )
         except Exception as e:  # noqa: BLE001
-            self.failed.emit(f"{e.__class__.__name__}: {e}")
+            if not self.killed:
+                self.failed.emit(f"{e.__class__.__name__}: {e}")
+            try:
+                self.copilot.repair()                 # leave a history the next prompt can use
+            except Exception:  # noqa: BLE001
+                pass
 
 
 class CopilotPanel(QWidget):
@@ -94,6 +102,7 @@ class CopilotPanel(QWidget):
         self.settings = QSettings("Daedalus", "Daedalus")
         self.copilot: Copilot | None = None
         self.worker: _Worker | None = None
+        self._orphans: list = []                    # killed workers still unwinding in the background
         self._turn_checkpointed = False
         self._attached: list[tuple[str, bytes]] = []
         self._docs: list[dict] = []                 # spreadsheets / PDFs (ai.attachments.describe)
@@ -193,6 +202,12 @@ class CopilotPanel(QWidget):
         self.stop_btn.setIcon(icons.icon("stop"))
         self.stop_btn.setEnabled(False)
         self.stop_btn.clicked.connect(self.stop)
+        self.kill_btn = QPushButton("Kill")
+        self.kill_btn.setToolTip("Hard stop now: abandon the request in progress, run no more tools, and get the chat "
+                                 "back (Esc twice)")
+        self.kill_btn.setStyleSheet(f"QPushButton:enabled {{ color: {theme.ERROR}; font-weight: 600; }}")
+        self.kill_btn.setEnabled(False)
+        self.kill_btn.clicked.connect(self.kill)
         self.send_btn = QPushButton("Send")
         self.send_btn.setObjectName("primary")
         self.send_btn.setIcon(icons.icon("send", theme.ON_ACCENT, theme.ON_ACCENT))
@@ -200,6 +215,7 @@ class CopilotPanel(QWidget):
         self.send_btn.clicked.connect(self.send)
         row.addWidget(self.status, 1)
         row.addWidget(self.stop_btn)
+        row.addWidget(self.kill_btn)
         row.addWidget(self.send_btn)
         lay.addLayout(row)
         self._provider_changed(self.provider.currentIndex(), first=True)
@@ -256,7 +272,28 @@ class CopilotPanel(QWidget):
                 and ev.modifiers() & Qt.ControlModifier:
             self.send()
             return True
+        if obj is self.input and ev.type() == QEvent.KeyPress and ev.key() == Qt.Key_Escape and self.busy():
+            self.escape()
+            return True
         return super().eventFilter(obj, ev)
+
+    def busy(self) -> bool:
+        return self.worker is not None and self.worker.isRunning()
+
+    def escape(self):
+        """Esc: stop after this step; Esc again: kill."""
+        if not self.busy():
+            return
+        if self.copilot is not None and getattr(self.copilot, "_stop", False):
+            self.kill()
+        else:
+            self.stop()
+
+    def keyPressEvent(self, e):
+        if e.key() == Qt.Key_Escape and self.busy():
+            self.escape()
+            return
+        super().keyPressEvent(e)
 
     # ------------------------------------------------------- provider
     def kind(self) -> str:
@@ -455,6 +492,7 @@ class CopilotPanel(QWidget):
         self.worker.finished.connect(self._done)
         self.send_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
+        self.kill_btn.setEnabled(True)
         self.status.setText("Working…")
         self.worker.start()
 
@@ -520,7 +558,34 @@ class CopilotPanel(QWidget):
     def stop(self):
         if self.copilot:
             self.copilot.stop()
-        self.status.setText("Stopping after current step…")
+        self.status.setText("Stopping after current step… (Kill to stop now)")
+
+    def kill(self):
+        """Hard stop: the chat is usable again immediately. The request in flight is abandoned (Claude's connection
+        is closed; a local model's answer is ignored when it arrives) and no further tool runs."""
+        w = self.worker
+        self._verify_rounds = 0
+        if w is not None and w.isRunning():
+            w.killed = True
+            for sig in (w.text, w.tool, w.failed, w.finished):
+                try:
+                    sig.disconnect()
+                except (RuntimeError, TypeError):
+                    pass
+            self._orphans.append(w)                   # keep the QThread alive until it unwinds
+            w.finished.connect(lambda w=w: self._orphans.remove(w) if w in self._orphans else None)
+        if self.copilot is not None:
+            try:
+                kill = getattr(self.copilot, "kill", None)
+                (kill or self.copilot.stop)()
+            except Exception:  # noqa: BLE001
+                pass
+        self.worker = None
+        self.send_btn.setEnabled(True)
+        self.stop_btn.setEnabled(False)
+        self.kill_btn.setEnabled(False)
+        self.status.setText("Killed")
+        self._append("Icarus", "Stopped. Anything already done stays (Ctrl+Z to undo a model change).", theme.MUTED)
 
     def _done(self):
         stopped = self.copilot is not None and self.copilot._stop
@@ -539,6 +604,7 @@ class CopilotPanel(QWidget):
                 return
         self.send_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
+        self.kill_btn.setEnabled(False)
         if self.doc is None:
             self.status.setText("Done")
             return

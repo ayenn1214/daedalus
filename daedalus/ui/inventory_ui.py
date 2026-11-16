@@ -245,7 +245,7 @@ class InventoryPage(QWidget):
 
     TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
             ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Orders"),
-            ("reorder", "Reorder"), ("engineering", "Engineering"),
+            ("reorder", "Reorder"),
             ("timephased", "Time-Phased"), ("analytics", "Analytics"), ("log", "Activity Log"),
             ("sync", "Import / Export")]
 
@@ -264,6 +264,7 @@ class InventoryPage(QWidget):
                              "discontinued": False}
         self.analytics_state: dict = {}
         self.mrp_state: dict = {}
+        self.parts_sel = None                       # part open in the Parts profile pane
         from .inventory_extras_ui import ThumbLoader
         self.thumbs = ThumbLoader(self)
         self.thumbs.ready.connect(lambda _src: self._thumb_refresh())
@@ -440,6 +441,8 @@ class InventoryPage(QWidget):
             self._sync_status()
 
     def goto(self, key):
+        if key == "engineering":                     # merged into Parts
+            key = "parts"
         if key == "shortages":                       # merged into Reorder: show only the project shortages
             self.reorder_filter["why"] = "short"
             key = "reorder"
@@ -459,7 +462,7 @@ class InventoryPage(QWidget):
         counts = {"projects": len(inv.projects),
                   "production": sum(O.is_unread(p, inv.userName) for p in inv.productionOrders
                                     if p.get("status") not in O.CLOSED_PROD),
-                  "locations": len(inv.locations), "parts": len([p for p in inv.parts if p["id"] not in comp]),
+                  "locations": len(inv.locations), "parts": len(inv.parts),
                   "vendors": len(inv.vendors), "clients": sum(O.status(o) in (O.DRAFT, O.CONFIRMED) for o in inv.clientOrders),
                   "reorder": low,
                   "shortages": len(inv.shortages())}
@@ -533,6 +536,14 @@ class InventoryPage(QWidget):
 
     def refresh_current(self):
         key = self.current_key()
+        br = getattr(self, "_browser", None)
+        if key == "parts" and br is not None and br.dirty():
+            try:                                     # unsaved edits in the profile: don't wipe them
+                br.isVisible()
+                self.status.emit("Changes arrived — save or revert the part you're editing to see them")
+                return
+            except RuntimeError:
+                pass
         sc = self.pages[key]
         y = sc.verticalScrollBar().value()
         w = getattr(self, f"build_{key}")()
@@ -1085,7 +1096,7 @@ class InventoryPage(QWidget):
         vsel.currentIndexChanged.connect(lambda _i: (f.__setitem__("vendor", vsel.currentData()),
                                                      self.refresh_current()))
         ssel = QComboBox()
-        for k, lab in (("name", "Sort: Name"), ("vendor", "Sort: Vendor"), ("stock", "Sort: Stock level"),
+        for k, lab in (("partno", "Sort: Part No."), ("name", "Sort: Name"), ("vendor", "Sort: Vendor"), ("stock", "Sort: Stock level"),
                        ("location", "Sort: Location"), ("value", "Sort: Stock value"), ("type", "Sort: Type")):
             ssel.addItem(lab, k)
         ssel.setCurrentIndex(max(0, ssel.findData(f["sort"])))
@@ -1103,14 +1114,8 @@ class InventoryPage(QWidget):
         row.addWidget(disc)
         row.addWidget(_btn("MFG revisions…", self.revision_check, "Check manufactured parts against their model / "
                                                                   "drawing files for newer revisions"))
-        row.addWidget(_btn("+ Add Part", lambda: self.edit_part(None), primary=True))
+        row.addWidget(_btn("+ Add Part", self.add_part_inline, primary=True))
         v.addLayout(row)
-        if self.sel_parts:
-            b = QHBoxLayout()
-            b.addWidget(_muted(f"{len(self.sel_parts)} part{'s' if len(self.sel_parts) != 1 else ''} selected", False), 1)
-            b.addWidget(_small("Clear", lambda: (self.sel_parts.clear(), self.refresh_current())))
-            b.addWidget(_small("Assign to Project", self.bulk_assign))
-            v.addLayout(b)
         lst = list(inv.parts)
         if f["type"] != "all":
             lst = [p for p in lst if p.get("type") == f["type"]]
@@ -1135,18 +1140,33 @@ class InventoryPage(QWidget):
             b = inv.best_supplier(p) or (inv.suppliers(p)[0] if inv.suppliers(p) else None)
             return ((b["name"].lower() if b else "~~~"), p["name"].lower())
         keys = {"name": lambda p: p["name"].lower(), "vendor": vendor_key,
+                "partno": lambda p: ((p.get("partNumber") or "~").upper(), p["name"].lower()),
                 "stock": lambda p: (inv.stock_ratio(p), p["name"].lower()),
                 "location": lambda p: (inv.location_label_for(p.get("locationId")) or "~~~", p["name"].lower()),
                 "value": lambda p: -M.num(p.get("currentStock")) * inv.to_cad(p.get("unitCost"),
                                                                             p.get("unitCostCurrency")),
                 "type": lambda p: (p.get("type") or "", p["name"].lower())}
         lst.sort(key=keys.get(f["sort"], keys["name"]))
-        v.addWidget(self.parts_tree(lst, actions=True, selectable=True) if lst
-                    else _muted("No parts match. Add one, or clear the filters."))
-        v.addStretch(1)
+        v.setContentsMargins(0, 0, 0, 0)
+        from .inventory_mrp_ui import EngineeringView
+        from .parts_browser import PartsBrowser
+        self._browser = PartsBrowser(self, lst, w)
         QTimer.singleShot(0, lambda: (self.q.setFocus(), self.q.setCursorPosition(len(self.q.text())))
                           if f["q"] else None)
-        return w
+        ev = EngineeringView(self, parts_widget=self._browser)
+        ev.edit_part.connect(self.edit_part)
+        ev.new_part.connect(self.new_part_from)
+        return ev
+
+    def add_part_inline(self):
+        br = getattr(self, "_browser", None)
+        if br is not None and br.dirty() and QMessageBox.question(
+                self, "Unsaved changes", "Discard your changes to the open part?") != QMessageBox.Yes:
+            return
+        self.parts_sel = "__new__"
+        if br is not None:
+            br._clean = None
+        self.refresh_current()
 
     def _search(self, text):
         self.parts_filter["q"] = text
@@ -1475,8 +1495,10 @@ class InventoryPage(QWidget):
             self.commit("Order placed")
 
     def receive_order(self, oid):
-        self.inv.receive_order(oid)
-        self.commit("Received — stock updated")
+        from .inventory_mrp_ui import receive_dialog
+        o = next((x for x in self.inv.partOrders if x["id"] == oid), None)
+        if o is not None:
+            receive_dialog(self, o)
 
     def cancel_order(self, o):
         if QMessageBox.question(self, "Cancel order", "Cancel this part order?") == QMessageBox.Yes:
@@ -1797,13 +1819,6 @@ class InventoryPage(QWidget):
         from .inventory_extras_ui import AnalyticsView
         w = AnalyticsView(self)
         w.edit_part.connect(self.edit_part)
-        return w
-
-    def build_engineering(self):
-        from .inventory_mrp_ui import EngineeringView
-        w = EngineeringView(self)
-        w.edit_part.connect(self.edit_part)
-        w.new_part.connect(self.new_part_from)
         return w
 
     def build_timephased(self):

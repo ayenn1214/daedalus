@@ -142,6 +142,8 @@ class Copilot:
         self.max_steps = max_steps
         self.messages: list[dict] = []
         self._stop = False
+        self._killed = False
+        self._api_key = api_key
         if tools is None:
             from .tools import TOOLS as tools
         self.tools = tools
@@ -149,6 +151,44 @@ class Copilot:
 
     def stop(self):
         self._stop = True
+
+    def kill(self):
+        """Hard stop: abandon the request in flight (its connection is closed) and run no more tools. The history is
+        repaired so the next prompt works."""
+        import anthropic
+        self._stop = self._killed = True
+        old = self.client
+        self.client = anthropic.Anthropic(api_key=self._api_key or os.environ.get("ANTHROPIC_API_KEY"))
+        try:
+            old.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self.repair()
+
+    def repair(self):
+        """Make the history valid again after a stop, kill or error: every tool_use gets a tool_result, a trailing
+        tool_use-only assistant turn is answered, and empty turns are dropped."""
+        msgs = [m for m in self.messages if m.get("content")]
+        out = []
+        for i, m in enumerate(msgs):
+            out.append(m)
+            if m["role"] != "assistant" or not isinstance(m["content"], list):
+                continue
+            ids = [b.get("id") for b in m["content"] if isinstance(b, dict) and b.get("type") == "tool_use"]
+            if not ids:
+                continue
+            nxt = msgs[i + 1] if i + 1 < len(msgs) else None
+            have = {b.get("tool_use_id") for b in (nxt or {}).get("content", []) if isinstance(b, dict)
+                    and b.get("type") == "tool_result"} if nxt and nxt["role"] == "user" and \
+                isinstance(nxt["content"], list) else set()
+            missing = [{"type": "tool_result", "tool_use_id": t, "content": "Not run — stopped by the user.",
+                        "is_error": True} for t in ids if t not in have]
+            if missing:
+                if nxt is not None and nxt["role"] == "user" and isinstance(nxt["content"], list):
+                    nxt["content"][:0] = missing
+                else:
+                    out.append({"role": "user", "content": missing})
+        self.messages[:] = out
 
     def reset(self):
         self.messages.clear()
@@ -160,7 +200,8 @@ class Copilot:
         """`images`: PNG/JPEG bytes sent before the text (drawings, photos, renders). `documents`: PDF bytes, read
         by the model page by page (text, scans and drawings)."""
         import base64
-        self._stop = False
+        self._stop = self._killed = False
+        self.repair()
         content = prompt
         if model_state is not None:
             content = f"<current_model>\n{json.dumps(model_state)}\n</current_model>\n\n{prompt}"
@@ -183,9 +224,11 @@ class Copilot:
             if self._stop:
                 break
             resp = self.client.messages.create(
-                model=self.model, max_tokens=4096, system=self.system,
+                model=self.model, max_tokens=8192, system=self.system,
                 tools=self.tools, messages=self.messages,
             )
+            if self._killed:
+                break
             self.messages.append({"role": "assistant", "content": [b.model_dump() for b in resp.content]})
             results = []
             for block in resp.content:
@@ -193,12 +236,17 @@ class Copilot:
                     final = block.text
                     on_text(block.text)
                 elif block.type == "tool_use":
-                    text, err = self.call_tool(block.name, block.input)
+                    if self._killed:
+                        text, err = "Not run — stopped by the user.", True
+                    else:
+                        text, err = self.call_tool(block.name, block.input)
                     if on_tool:
                         on_tool(block.name, block.input, text, err)
                     results.append({"type": "tool_result", "tool_use_id": block.id,
                                     "content": text, "is_error": err})
-            if resp.stop_reason != "tool_use" or not results:
+            if results:
+                self.messages.append({"role": "user", "content": results})
+            if resp.stop_reason != "tool_use" or not results or self._killed:
                 break
-            self.messages.append({"role": "user", "content": results})
+        self.repair()
         return final

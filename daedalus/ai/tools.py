@@ -638,12 +638,12 @@ NEW_TOOLS += [
 TOOLS += NEW_TOOLS
 
 from .dims_tools import DIMS_NAMES, DIMS_TOOLS, DimsToolExecutor  # noqa: E402
-
-TOOLS += [t for t in DIMS_TOOLS if t["name"] not in {x["name"] for x in TOOLS}]
-
 from .tools28 import NAMES as _NAMES28, TOOLS28, run28  # noqa: E402
 
-TOOLS += TOOLS28
+# DIMS shares design_calc / convert_units with the modelling tools: the modelling versions (material-aware) win, and
+# every tool name appears once — the API rejects a request with duplicate tool names.
+TOOLS += [t for t in DIMS_TOOLS if t["name"] not in {x["name"] for x in TOOLS} and t["name"] not in _NAMES28]
+TOOLS += [t for t in TOOLS28 if t["name"] not in {x["name"] for x in TOOLS}]
 
 
 def _item(x: dict) -> dict:

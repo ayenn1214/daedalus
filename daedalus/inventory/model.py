@@ -36,6 +36,10 @@ UNF_TPI = {'#4': 48, '#6': 40, '#8': 36, '#10': 32, '1/4"': 28, '5/16"': 24, '3/
            '9/16"': 18, '5/8"': 18, '3/4"': 16, '7/8"': 14, '1"': 12}
 HEAD_ABBR = {"Hex": "HHCS", "Socket Head": "SHCS", "Button Head": "BHCS", "Flat Head": "FHSCS", "Pan Head": "PHMS",
              "Round Head": "RHMS", "Carriage": "CB"}
+FASTENER_GRADES = ["Grade 3", "Grade 5", "Grade 8", "Class 8.8", "Class 10.9", "Class 12.9", "18-8 SS", "316 SS"]
+FASTENER_MATERIALS = ["Steel", "Alloy Steel", "Stainless 18-8", "Stainless 316", "Brass", "Aluminum", "Nylon"]
+FASTENER_FINISHES = ["Plain", "Zinc Plated", "Yellow Zinc", "Black Oxide", "Hot-Dip Galvanized", "Phosphate",
+                     "Nickel Plated"]
 FASTENER_CATEGORIES = ["Bolt", "Screw", "Nut", "Washer", "Stud", "Pin", "Rivet", "Other"]
 RACKS = ["Rack A", "Rack B"]
 SHELVES = [1, 2, 3, 4, 5, 6]
@@ -306,7 +310,7 @@ class Inventory:
                 bits.append(p["size"])
             if p.get("length"):
                 bits.append(f"L:{p['length']}")
-            for k in ("threadStandard", "headStyle", "threadType"):
+            for k in ("threadStandard", "headStyle", "threadType", "grade", "fastenerMaterial", "fastenerFinish"):
                 if p.get(k):
                     bits.append(p[k])
         if p.get("partNumber"):
@@ -642,15 +646,53 @@ class Inventory:
         self.partOrders.append(o)
         return o
 
-    def receive_order(self, oid):
+    def receive_order(self, oid, qty=None):
+        """Receive an order: stock goes up by the quantity actually received (default: what was ordered), and the
+        received quantity is locked — change it with change_received, which is logged."""
         o = next((x for x in self.partOrders if x["id"] == oid), None)
         if o is None:
             return
-        if self.part(o.get("partId")):
-            self.record(o["partId"], "receiving", num(o.get("qty")), "From part order")
+        q = num(o.get("qty")) if qty is None else num(qty)
+        if q < 0:
+            raise ValueError("Received quantity can't be negative")
+        if self.part(o.get("partId")) and q > 0:
+            self.record(o["partId"], "receiving", q, "Received" + (f" — PO {o['poNumber']}" if o.get("poNumber")
+                                                                   else "") + (f" ({q:g} of {num(o.get('qty')):g} "
+                                                                               "ordered)" if q != num(o.get("qty"))
+                                                                               else ""))
         o["status"] = "Received"
         o["receivedDate"] = today()
-        o.setdefault("events", []).append({"what": "received", "at": now_ms(), "by": self.userName or "unknown"})
+        o["receivedQty"] = q
+        o["receivedLocked"] = True
+        o.setdefault("events", []).append({"what": "received" + (f" {q:g} of {num(o.get('qty')):g}"
+                                                                  if q != num(o.get("qty")) else ""),
+                                           "at": now_ms(), "by": self.userName or "unknown"})
+
+    def received_qty(self, o) -> float:
+        return num(o.get("receivedQty")) if o.get("receivedQty") not in (None, "") else num(o.get("qty"))
+
+    def change_received(self, oid, new_qty, reason=""):
+        """Correct a locked received quantity: stock moves by the difference and the change is logged."""
+        o = next((x for x in self.partOrders if x["id"] == oid), None)
+        if o is None or o.get("status") not in ("Received", "Binned"):
+            raise ValueError("Receive the order first")
+        old, new = self.received_qty(o), num(new_qty)
+        if new < 0:
+            raise ValueError("Received quantity can't be negative")
+        if new == old:
+            return None
+        note = f"Received qty corrected {old:g} → {new:g}" + (f" — PO {o['poNumber']}" if o.get("poNumber") else "") \
+            + (f": {reason.strip()}" if reason.strip() else "")
+        tx = None
+        if self.part(o.get("partId")):
+            tx = self.record(o["partId"], "receiving" if new > old else "usage", abs(new - old), note)
+        o["receivedQty"] = new
+        o.setdefault("receivedChanges", []).append({"at": now_ms(), "by": self.userName or "unknown", "from": old,
+                                                    "to": new, "reason": reason.strip()})
+        o.setdefault("events", []).append({"what": f"received qty {old:g} → {new:g}"
+                                                   + (f" ({reason.strip()})" if reason.strip() else ""),
+                                           "at": now_ms(), "by": self.userName or "unknown"})
+        return tx
 
     # ----------------------------------------------------------- vendors
     def ensure_vendor(self, name):

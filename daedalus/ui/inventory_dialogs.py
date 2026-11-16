@@ -131,8 +131,19 @@ class PartDialog(_Base):
         self.size.setCurrentText(p.get("size") or "")
         self.length = QLineEdit(str(p.get("length") or ""))
         self.length.setPlaceholderText("e.g. 1, 1-1/2, 20 (blank for nuts/washers)")
+
+        def opt_combo(items, val):
+            c = QComboBox()
+            c.setEditable(True)
+            c.addItems(["", *items])
+            c.setCurrentText(val or "")
+            return c
+        self.grade = opt_combo(M.FASTENER_GRADES, p.get("grade"))
+        self.f_mat = opt_combo(M.FASTENER_MATERIALS, p.get("fastenerMaterial"))
+        self.f_fin = opt_combo(M.FASTENER_FINISHES, p.get("fastenerFinish"))
         for i, (lab, w) in enumerate((("Type", self.head), ("Thread type", self.thread_type),
-                                      ("Thread standard", self.std), ("Size", self.size), ("Length", self.length))):
+                                      ("Thread standard", self.std), ("Size", self.size), ("Length", self.length),
+                                      ("Grade", self.grade), ("Material", self.f_mat), ("Finish", self.f_fin))):
             g.addWidget(QLabel(lab), i // 2, (i % 2) * 2)
             g.addWidget(w, i // 2, (i % 2) * 2 + 1)
         f.addRow(self.fast)
@@ -404,6 +415,7 @@ class PartDialog(_Base):
         sc = QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(body)
+        self.body_scroll = sc
         self.lay.addWidget(sc)
         if part:
             h = QHBoxLayout()
@@ -577,7 +589,9 @@ class PartDialog(_Base):
         if typ == "fastener":
             out.update(headStyle=self.head.currentText(), threadType=self.thread_type.currentText(),
                        threadStandard=self.std.currentText(), size=self.size.currentText().strip(),
-                       length=self.length.text().strip())
+                       length=self.length.text().strip(), grade=self.grade.currentText().strip(),
+                       fastenerMaterial=self.f_mat.currentText().strip(),
+                       fastenerFinish=self.f_fin.currentText().strip())
         if typ == "manufactured":
             out["material"] = {"shape": self.m_shape.currentText().strip(), "grade": self.m_grade.currentText().strip(),
                                "size": self.m_size.text().strip(), "qty": self.m_qty.value(),

@@ -419,9 +419,12 @@ def order_history(inv: Inventory, pid):
     rows = []
     for o in sorted([o for o in inv.partOrders if o.get("partId") == pid], key=lambda o: o.get("orderDate") or "",
                     reverse=True):
+        got = o.get("status") in ("Received", "Binned")
         rows.append({"Ordered": o.get("orderDate") or "", "Qty": num(o.get("qty")), "Vendor": o.get("vendorName") or "",
                      "PO": o.get("poNumber") or "", "Expected": o.get("expectedDate") or "",
-                     "Received": o.get("receivedDate") or "", "Status": o.get("status") or "",
+                     "Received": o.get("receivedDate") or "",
+                     "Rcvd Qty": inv.received_qty(o) if got else "", "id": o.get("id"),
+                     "Status": o.get("status") or "",
                      "For": inv.project_name(o.get("projectId")) or "",
                      "Lead (days)": days_between(o.get("orderDate"), o.get("receivedDate"))})
     return rows

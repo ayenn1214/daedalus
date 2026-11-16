@@ -129,9 +129,11 @@ DIMS_TOOLS = [
      "input_schema": {"type": "object", "properties": {"part": _S, "qty": _N, "expected": _S},
                       "required": ["part", "qty"]}},
     {"name": "dims_receive_order",
-     "description": "Receive an open part order (order id, or the part's oldest open order) — adds the stock. Only "
-                    "when the user asks.",
-     "input_schema": {"type": "object", "properties": {"order": _S, "part": _S}}},
+     "description": "Receive an open part order (order id, or the part's oldest open order) — adds the quantity "
+                    "received (default: the ordered qty) to stock and locks it. A received order's qty can be "
+                    "corrected with received_qty (logged). Only when the user asks.",
+     "input_schema": {"type": "object", "properties": {"order": _S, "part": _S, "qty": _N, "received_qty": _N,
+                                                       "reason": _S}}},
     {"name": "dims_project_edit",
      "description": "Create a project or set its units (Total Qty Needed); allocate parts to it with qty per unit "
                     "(qty 0 removes) — only when the user asks.",
@@ -215,6 +217,38 @@ DIMS_TOOLS += [
          "file": _S, "kind": {"type": "string", "enum": ["vendors", "prices", "parts", "counts"]}, "sheet": _S,
          "apply": _B}, "required": ["file", "kind"]}},
 ]
+DIMS_TOOLS += [
+    {"name": "dims_order",
+     "description": "Customer orders (PO, name, projects with qty). action: list | create | change | confirm | ship | "
+                    "cancel. create starts as Draft; confirm adds the demand and creates one production order per "
+                    "project; change on a confirmed order is a logged change order that updates production. "
+                    "lines = [{project, qty}]. Only change data when the user asks.",
+     "input_schema": {"type": "object", "properties": {
+         "action": _S, "order": _S, "po": _S, "name": _S,
+         "lines": {"type": "array", "items": {"type": "object", "properties": {"project": _S, "qty": _N}}}},
+         "required": ["action"]}},
+    {"name": "dims_production_po",
+     "description": "A production order's purchasing (id from dims_list production): action status (fab PO, the PO "
+                    "checklist by group — Fasteners / Powder coating / Zinc plating / Purchased parts — and vendor, "
+                    "lines, need / on hand / to order) | fab (state yes|no|na, po, vendor) | po (group, vendor, state "
+                    "yes|no|na, po) | move (group, part, vendor — split a line onto another vendor's PO) | finish "
+                    "(days to finish, once every PO is yes or not needed) | read (mark read). Changes only when asked.",
+     "input_schema": {"type": "object", "properties": {
+         "id": _S, "action": _S, "state": _S, "po": _S, "vendor": _S, "group": _S, "part": _S, "days": _N},
+         "required": ["id", "action"]}},
+    {"name": "design_calc",
+     "description": "Machine-design calculators (design-data-handbook procedures): no 'calc' lists them with their "
+                    "inputs; otherwise calc id + inputs → results. Units mm, N, MPa, N·m, kW, rpm, deg. Ids include "
+                    "shaft_asme, parallel_key, spur_gear, helical_gear, worm_gear, fatigue, principal_stress, "
+                    "column_buckling, hertz_contact, flange_coupling, plate_clutch, band_brake, block_brake, "
+                    "thick_cylinder, section_properties, factor_of_safety.",
+     "input_schema": {"type": "object", "properties": {"calc": _S, "inputs": {"type": "object"}}}},
+    {"name": "convert_units",
+     "description": "Convert a value between units, or read a typed value (5' 6-1/4 in, 3 kip, 50 psf, 72°F) with "
+                    "quantity (length default) → base and the requested / every unit.",
+     "input_schema": {"type": "object", "properties": {"value": _S, "quantity": _S, "to": _S},
+                      "required": ["value"]}},
+]
 DIMS_NAMES = {t["name"] for t in DIMS_TOOLS}
 
 DIMS_SYSTEM = """You are Icarus, the assistant inside DIMS — the Daedalus Inventory Management System a fabrication
@@ -241,6 +275,12 @@ orders, part orders, vendors and clients.
   Children sit at a lower level than their parent.
 - MRP: dims_job_order routes an assembly's needs to vendors (PO drafts, kit list); dims_time_phased shows what's
   coming, when, for which project, and when stock runs short.
+- Orders and production: dims_order (Draft → confirm = demand + production orders; changes to confirmed orders are
+  logged change orders). Projects describe one unit; demand comes from open production orders. dims_production_po
+  works a production order: fab PO, then one PO per vendor for fasteners / powder coating / zinc plating /
+  purchased parts (yes / no / not needed), then days to finish.
+- Calculations: design_calc (shafts, keys, gears, fatigue, columns, couplings, brakes, cylinders, sections) and
+  convert_units — use them instead of doing engineering arithmetic in your head; quote inputs and results with units.
 - Answer briefly: the figure or list the user needs, then one useful next step if there is one. Use short tables for
   lists of parts. No preamble."""
 
@@ -253,6 +293,9 @@ DIMS_EXAMPLES = [
     "Any manufactured parts with a newer drawing revision?",
     "Next C10 number? Reserve 3 for the Lift Cart project",
     "What do we need to buy to build 4 × C30-0001, split by vendor?",
+    "New order PO 5521 for Acme Cabinets: 2 × RLC and 1 × FHD — confirm it",
+    "Where is production for PO 5521? Which POs are still not sent?",
+    "Size a key for a 30 mm shaft carrying 200 N·m",
 ]
 
 
@@ -938,11 +981,16 @@ class DimsToolExecutor:
         else:
             pid = self.find_part(a["part"])["id"]
             o = next((x for x in inv.open_part_orders() if x.get("partId") == pid), None)
+        if o is not None and a.get("received_qty") is not None and o.get("status") in ("Received", "Binned"):
+            inv.change_received(o["id"], a["received_qty"], a.get("reason") or "")
+            p = inv.part(o.get("partId"))
+            self._commit(f"Received qty corrected: {(p or {}).get('name', '?')}")
+            return _j({"ok": True, "order": o, "stock": M.num((p or {}).get("currentStock"))})
         if o is None or o.get("status") != "Ordered":
             raise LookupError("No open order found")
-        inv.receive_order(o["id"])
+        inv.receive_order(o["id"], a.get("qty"))
         p = inv.part(o.get("partId"))
-        self._commit(f"Received order: {o.get('qty')} × {(p or {}).get('name', '?')}")
+        self._commit(f"Received order: {inv.received_qty(o):g} × {(p or {}).get('name', '?')}")
         return _j({"ok": True, "order": o, "stock": M.num((p or {}).get("currentStock"))})
 
     def _dims_project_edit(self, a):
@@ -984,6 +1032,106 @@ class DimsToolExecutor:
                 o[k] = a[k]
         self._commit(f"Production order saved ({inv.project_name(o['projectId'])})")
         return _j({"ok": True, "order": o})
+
+    def _dims_order(self, a):
+        from ..inventory import orders as O
+        inv, act = self.inv, (a.get("action") or "list").lower()
+        if act == "list":
+            return _j([{"id": o["id"], "po": o.get("poNumber") or "", "name": O.order_name(inv, o),
+                        "status": O.status(o), "rev": o.get("rev", 0),
+                        "projects": [{"project": inv.project_name(l.get("projectId")), "qty": l.get("qty")}
+                                     for l in o.get("projectLines") or []],
+                        "production": O.progress(inv, o), "log": (o.get("changes") or [])[-5:]}
+                       for o in inv.clientOrders])
+        lines = [{"projectId": self.find_project(l["project"])["id"], "qty": M.num(l.get("qty"), 1)}
+                 for l in a.get("lines") or []]
+        if act == "create":
+            o = O.save_order(inv, None, a.get("po") or "", a.get("name") or "", lines, inv.userName)
+            self._commit(f"Order {O.order_name(inv, o)} added (draft)")
+            return _j({"ok": True, "order": o})
+        ref = str(a.get("order") or "").strip()
+        o = next((x for x in inv.clientOrders if ref and (x["id"] == ref or (x.get("poNumber") or "").lower() ==
+                                                           ref.lower() or O.order_name(inv, x).lower() == ref.lower())),
+                 None)
+        if o is None:
+            raise LookupError(f"No order '{ref}' — give its id, PO or name (action list shows them)")
+        if act == "change":
+            cur = [{"projectId": l["projectId"], "qty": l["qty"]} for l in o.get("projectLines") or []]
+            O.save_order(inv, o, a["po"] if a.get("po") is not None else o.get("poNumber") or "",
+                         a.get("name") or O.order_name(inv, o), lines or cur, inv.userName)
+            self._commit(f"Order {O.order_name(inv, o)} changed" + (f" (change order {o['rev']})" if o.get("rev")
+                                                                     else ""))
+        elif act == "confirm":
+            O.confirm(inv, o, inv.userName)
+            self._commit(f"Order {O.order_name(inv, o)} confirmed — production created")
+        elif act in ("ship", "cancel"):
+            O.set_status(inv, o, O.SHIPPED if act == "ship" else O.CANCELLED, inv.userName)
+            self._commit(f"Order {O.order_name(inv, o)} {O.status(o).lower()}")
+        else:
+            raise ValueError("action: list | create | change | confirm | ship | cancel")
+        return _j({"ok": True, "order": o, "production": O.progress(inv, o)})
+
+    def _dims_production_po(self, a):
+        from ..inventory import orders as O
+        inv = self.inv
+        p = next((x for x in inv.productionOrders if x["id"] == a.get("id")), None)
+        if p is None:
+            raise LookupError("No such production order — dims_list production gives the ids")
+        act = (a.get("action") or "status").lower()
+        by = inv.userName
+        if act == "fab":
+            O.set_fab_po(p, a.get("state") or O.YES, a.get("po") or "", a.get("vendor") or "", by)
+        elif act == "po":
+            O.set_po(p, a["group"], a["vendor"], a.get("state") or O.YES, a.get("po") or "", by)
+        elif act == "move":
+            part = self.find_part(a["part"])
+            O.move_line(p, a["group"], part["id"], a["vendor"], by)
+        elif act == "finish":
+            if not O.all_pos_done(inv, p):
+                s, n = O.po_counts(inv, p)
+                raise ValueError(f"Only {s} of {n} POs are sent or not needed yet")
+            O.set_finish(p, int(M.num(a.get("days"), 0) or 1), by)
+        elif act == "read":
+            O.mark_read(p, by)
+        elif act != "status":
+            raise ValueError("action: status | fab | po | move | finish | read")
+        if act != "status":
+            self._commit(f"Production: {act} updated")
+        cl = O.checklist(inv, p) if O.fab_state(p) in O.DONE else {}
+        return _j({"id": p["id"], "project": inv.project_name(p.get("projectId")), "qty": p.get("qty"),
+                   "order": p.get("orderName"), "po": p.get("poNumber"), "stage": O.stage(inv, p),
+                   "fab": {"state": O.fab_state(p), "po": p.get("fabPoNumber"), "vendor": p.get("fabVendor")},
+                   "pos": {g: {v: {"state": b["state"], "po": b["poNumber"],
+                                   "lines": [{k: l[k] for k in ("partNumber", "name", "qty", "onHand", "toOrder")}
+                                             for l in b["lines"]]} for v, b in vs.items()} for g, vs in cl.items()},
+                   "done": "{}/{}".format(*O.po_counts(inv, p)), "finishBy": p.get("finishBy")})
+
+    def _design_calc(self, a):
+        from ..design import calcs as C
+        if not a.get("calc"):
+            return _j([c.spec() for c in C.REGISTRY.values()])
+        try:
+            res = C.run(a["calc"], dict(a.get("inputs") or {}))
+        except C.CalcError as e:
+            raise ValueError(str(e)) from e
+        return _j({k: (f"{C.fmt_value(v['value'])} {v['unit']}".strip() + (f" ({v['note']})" if v["note"] else ""))
+                   for k, v in res.items()})
+
+    def _convert_units(self, a):
+        from ..core import units as U
+        q = a.get("quantity") or "length"
+        try:
+            base = U.parse(a["value"], q)
+            out = {"quantity": q, "base": base, "base_unit": U.base_unit(q), "display": U.fmt(base, q)}
+            if a.get("to"):
+                out["result"] = U.fmt(base, q, unit=a["to"], places=6)
+            else:
+                out["all"] = {u: U.fmt(base, q, unit=u, places=6, show_unit=False) for u in U.units_of(q)}
+                if q == "length":
+                    out["ft_in"] = U.fmt_ft_in(base, 16)
+        except (U.UnitError, ZeroDivisionError) as e:
+            raise ValueError(str(e)) from e
+        return _j(out)
 
     def _dims_check_in_revision(self, a):
         p = self.find_part(a["part"])

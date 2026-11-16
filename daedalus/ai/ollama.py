@@ -181,12 +181,17 @@ class OllamaCopilot:
         self.temperature = temperature
         self.messages: list[dict] = []
         self._stop = False
+        self._killed = False
         self.custom_tools = tools
         self.system = system
         self._post = post or (lambda payload: _http("POST", self.host + "/api/chat", payload))
 
     def stop(self):
         self._stop = True
+
+    def kill(self):
+        """Hard stop: the request in flight is abandoned (its answer is ignored) and no more tools run."""
+        self._stop = self._killed = True
 
     def reset(self):
         self.messages.clear()
@@ -201,7 +206,7 @@ class OllamaCopilot:
             on_tool: Callable[[str, dict, str, bool], None] | None = None,
             images: list[bytes] | None = None, documents: list[bytes] | None = None) -> str:
         """documents (PDF bytes) aren't sent — local models get the PDF's extracted text in the prompt."""
-        self._stop = False
+        self._stop = self._killed = False
         content = prompt
         if model_state is not None:
             content = f"<current_model>\n{json.dumps(model_state)}\n</current_model>\n\n{prompt}"
@@ -220,6 +225,8 @@ class OllamaCopilot:
                 "messages": [{"role": "system", "content": (self.system or SYSTEM) + LOCAL_NOTE}] + self.messages,
                 "options": {"num_ctx": self.num_ctx, "temperature": self.temperature},
             })
+            if getattr(self, "_killed", False):
+                break
             m = resp.get("message") or {}
             text = _THINK.sub("", m.get("content") or "").strip()
             calls = m.get("tool_calls") or []
@@ -242,6 +249,8 @@ class OllamaCopilot:
                         args = json.loads(args)
                     except ValueError:
                         args = {}
+                if self._killed:
+                    break
                 if name not in known:
                     out, err = f"Unknown tool '{name}'. Available: {', '.join(sorted(known))}", True
                 else:
