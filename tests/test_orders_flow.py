@@ -146,3 +146,21 @@ def test_old_confirmed_order_can_be_sent_to_production():
     assert O.status(o) == O.CONFIRMED and not O.progress(inv, o)
     O.sync_production(inv, o, "Ankur", "From confirmed order")
     assert O.progress(inv, o)[0]["qty"] == 2 and inv.project_qty(pid) == 2
+
+
+def test_project_page_groups_parts_by_type(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QLabel
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage, project_group
+    assert [project_group({"type": t}) for t in ("manufactured", "purchased", "fastener", None)] == \
+        ["MFG parts", "Purchased parts", "Fasteners", "Other"]
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv, pid = shop()
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.goto("projects")
+    app.processEvents()
+    heads = [lab.text() for lab in page.pages["projects"].widget().findChildren(QLabel) if "</b> · " in lab.text()]
+    assert heads == ["<b>MFG parts</b> · 2", "<b>Purchased parts</b> · 1", "<b>Fasteners</b> · 2"]

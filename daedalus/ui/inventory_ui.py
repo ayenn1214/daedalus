@@ -235,6 +235,14 @@ class Toast(QFrame):
 
 # ======================================================================= page
 
+PROJECT_GROUPS = ("MFG parts", "Purchased parts", "Fasteners", "Other")
+
+
+def project_group(p) -> str:
+    return {"manufactured": "MFG parts", "purchased": "Purchased parts",
+            "fastener": "Fasteners"}.get(p.get("type"), "Other")
+
+
 class InventoryPage(QWidget):
     closed = Signal()
     status = Signal(str)
@@ -783,31 +791,24 @@ class InventoryPage(QWidget):
             if not rows:
                 v.addWidget(_muted("No parts assigned yet."))
                 continue
-            tr = []
-            for p, depth, ql, need, on_hand, emb in rows:
-                short = max(0.0, need - on_hand)
-                name = QTableWidgetItem(("    " * depth) + (f"× {ql}  " if ql is not None else "") + p["name"])
-                name.setToolTip(inv.spec_line(p))
-                if depth == 0:
-                    a = inv.allocation(p, pr["id"])
-                    q = QSpinBox()
-                    q.setRange(0, 1_000_000)
-                    q.setValue(int(M.num(a.get("qty") if a else 0)))
-                    q.editingFinished.connect(lambda q=q, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, q.value()))
-                else:
-                    q = "—"
-                acts = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
-                        _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
-                        _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i))]
-                if depth == 0:
-                    acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid),
-                                       danger=True))
-                tr.append([name, M.TYPE_LABEL.get(p.get("type"), ""), q, _num_item(need),
-                           _num_item(on_hand, None) if not emb else _num_item(f"{on_hand:g} *"),
-                           _num_item(f"−{short:g}" if short > 0 else "—", theme.ERROR if short > 0 else None,
-                                     short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
-            v.addWidget(self.table(["Part", "Type", "Qty/Unit", "For 1 Unit", "On Hand", "Short (1 unit)",
-                                    "Unit Cost", ""], tr))
+            groups = {k: [] for k in PROJECT_GROUPS}             # top-level part + its BOM lines stay together
+            for r in rows:
+                if r[1] == 0:
+                    cur = groups[project_group(r[0])]
+                cur.append(r)
+            for gname, grows in groups.items():
+                blocks, cur = [], None                           # sort by part number, BOM lines stay under
+                for r in grows:
+                    if r[1] == 0:
+                        cur = []
+                        blocks.append(cur)
+                    cur.append(r)
+                blocks.sort(key=lambda b: ((b[0][0].get("partNumber") or "~").upper(), b[0][0]["name"].lower()))
+                grows = [r for b in blocks for r in b]
+                if grows:
+                    n = sum(1 for r in grows if r[1] == 0)
+                    v.addWidget(_muted(f"<b>{gname}</b> · {n}", False))
+                    v.addWidget(self._project_table(pr, grows))
         v.addWidget(_section("Unassigned"))
         un = [p for p in inv.parts if not inv.allocations(p)]
         v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower())) if un
@@ -827,6 +828,39 @@ class InventoryPage(QWidget):
                     v.addLayout(h)
         v.addStretch(1)
         return w
+
+    def _project_table(self, pr, rows):
+        inv = self.inv
+        tr = []
+        for p, depth, ql, need, on_hand, emb in rows:
+            short = max(0.0, need - on_hand)
+            name = QTableWidgetItem(("    " * depth) + (f"× {ql}  " if ql is not None else "") + p["name"])
+            name.setToolTip(inv.spec_line(p))
+            if depth == 0:
+                a = inv.allocation(p, pr["id"])
+                q = QSpinBox()
+                q.setRange(0, 1_000_000)
+                q.setValue(int(M.num(a.get("qty") if a else 0)))
+                q.editingFinished.connect(lambda q=q, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, q.value()))
+            else:
+                q = "—"
+            acts = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
+                    _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
+                    _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i))]
+            if depth == 0:
+                acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid),
+                                   danger=True))
+            tr.append([p.get("partNumber") or "", name, q, _num_item(need),
+                       _num_item(on_hand, None) if not emb else _num_item(f"{on_hand:g} *"),
+                       _num_item(f"−{short:g}" if short > 0 else "—", theme.ERROR if short > 0 else None,
+                                 short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
+        t = self.table(["Part No.", "Part", "Qty/Unit", "For 1 Unit", "On Hand", "Short (1 unit)",
+                        "Unit Cost", ""], tr, 1)
+        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)          # each group shows all its rows, no gaps
+        t.setFixedHeight(t.horizontalHeader().sizeHint().height() + sum(t.rowHeight(i) for i in range(t.rowCount()))
+                         + 2 * t.frameWidth() + (t.horizontalScrollBar().sizeHint().height()
+                                                  if t.horizontalScrollBar().isVisible() else 0))
+        return t
 
     def _demand_note(self, pid):
         from ..inventory import orders as O
