@@ -422,6 +422,11 @@ class MainWindow(QMainWindow):
                 fill(w)
             from .adaptive import h_scroller
             sa = h_scroller(w)
+            # never shorter than an icon + its label (Windows can measure unpolished buttons too small), and
+            # pages filled on first show start at the first page's height
+            floor = 22 + tabs.fontMetrics().lineSpacing() + 18
+            ref = self._ribbon_pages[0][0].height() if self._ribbon_pages else 0
+            sa.setFixedHeight(max(sa.height(), floor, ref))
             self._ribbon_pages.append((sa, w))
             return sa
 
@@ -635,11 +640,20 @@ class MainWindow(QMainWindow):
                 page = self._ribbon_pages[i][1]
                 if not page._filled:
                     fill(page)
-                    sa = self._ribbon_pages[i][0]       # its height was taken while it was still empty
-                    sa.setFixedHeight(max(sa.height(), page.sizeHint().height() + 6))
+                    sa = self._ribbon_pages[i][0]
                     ad = self._adaptive[i]
                     ad.level = -1
                     ad.fit()
+
+                    def settle(sa=sa, page=page):     # measured once styled and laid out (Windows polishes late)
+                        page.ensurePolished()
+                        for b in page._buttons:
+                            b.ensurePolished()
+                        page.layout().activate()
+                        sa.setFixedHeight(max(sa.height(), self._ribbon_pages[0][0].height(),
+                                              page.sizeHint().height() + 6))
+                    settle()
+                    QTimer.singleShot(0, settle)
         tabs.currentChanged.connect(shown)
         for i in range(tabs.count()):
             if tabs.tabText(i) in hidden:
