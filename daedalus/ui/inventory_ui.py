@@ -101,6 +101,10 @@ def _open_link(target: str):
         QDesktopServices.openUrl(QUrl.fromLocalFile(t.replace("\\\\", "//") if t.startswith("\\\\") else t))
 
 
+REORDER_TYPES = (("all", "All types"), ("manufactured", "Manufactured only"), ("fastener", "Fasteners only"),
+                 ("purchased", "Purchased only"))
+
+
 class Gauge(QWidget):
     def __init__(self, ratio, level):
         super().__init__()
@@ -259,7 +263,7 @@ class InventoryPage(QWidget):
         from .inventory_extras_ui import ThumbLoader
         self.thumbs = ThumbLoader(self)
         self.thumbs.ready.connect(lambda _src: self._thumb_refresh())
-        self.reorder_filter = {"project": "all", "vendor": "all", "why": "all"}
+        self.reorder_filter = {"project": "all", "vendor": "all", "why": "all", "type": "all"}
         self.sel_parts: set = set()
         self.sel_reorder: set = set()
         self.collapsed: set = set()
@@ -1272,14 +1276,17 @@ class InventoryPage(QWidget):
             ws.setCurrentIndex(max(0, ws.findData(f.get("why", "all"))))
             ws.currentIndexChanged.connect(lambda _i: (f.__setitem__("why", ws.currentData()),
                                                        self.refresh_current()))
-            lst = inv.reorder_list(f["project"], f["vendor"])
-            if f.get("why") == "short":
-                lst = [p for p in lst if p["id"] in short]
-            elif f.get("why") == "low":
-                lst = [p for p in lst if M.num(p.get("currentStock")) <= M.num(p.get("reorderPoint"))]
+            ts = QComboBox()
+            for k, lab in REORDER_TYPES:
+                ts.addItem(lab, k)
+            ts.setCurrentIndex(max(0, ts.findData(f.get("type", "all"))))
+            ts.currentIndexChanged.connect(lambda _i: (f.__setitem__("type", ts.currentData()),
+                                                       self.refresh_current()))
+            lst = self.reorder_filtered(short)
             row.addWidget(ps)
             row.addWidget(vs)
             row.addWidget(ws)
+            row.addWidget(ts)
             row.addWidget(_muted(f"{len(lst)} of {len(all_low)} parts", False), 1)
             row.addWidget(_btn("Export All (per project)", self.export_reorder_by_project))
             row.addWidget(_btn("Export List (.xlsx)", self.export_reorder, primary=True))
@@ -1394,10 +1401,23 @@ class InventoryPage(QWidget):
             self.sel_reorder.clear()
             self.commit(f"Placed {n} order(s)")
 
+    def reorder_filtered(self, short=None):
+        """The reorder list with every filter applied (project, vendor, reason, part type)."""
+        inv, f = self.inv, self.reorder_filter
+        lst = inv.reorder_list(f["project"], f["vendor"])
+        if f.get("why") == "short":
+            short = short if short is not None else {r["part"]["id"] for r in inv.shortages()}
+            lst = [p for p in lst if p["id"] in short]
+        elif f.get("why") == "low":
+            lst = [p for p in lst if M.num(p.get("currentStock")) <= M.num(p.get("reorderPoint"))]
+        if f.get("type", "all") != "all":
+            lst = [p for p in lst if (p.get("type") or "fastener") == f["type"]]
+        return lst
+
     def export_reorder(self):
         inv = self.inv
         f = self.reorder_filter
-        lst = inv.reorder_list(f["project"], f["vendor"])
+        lst = self.reorder_filtered()
         if not lst:
             return self.toast.show_msg("Nothing to export with the current filters")
         need = (lambda p: inv.needed_for_project(p, f["project"])) if f["project"] != "all" else inv.total_needed

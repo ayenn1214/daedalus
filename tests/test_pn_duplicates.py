@@ -67,3 +67,25 @@ def test_parts_and_reorder_show_part_numbers(tmp_path):
         for t in w.findChildren(QTableWidget):
             texts |= {t.item(r, 1).text() for r in range(t.rowCount()) if t.item(r, 1)}
     assert "M10-0005  FLAT, TAB" in texts and "Nut" in texts
+
+
+def test_reorder_type_filter(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv.parts = [M.new_part(id="t", name="FLAT, TAB", partNumber="M10-0005", type="manufactured", reorderPoint=4),
+                    M.new_part(id="n", name="Nut", type="fastener", reorderPoint=5),
+                    M.new_part(id="b", name="Bearing", type="purchased", reorderPoint=5)]
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.goto("reorder")
+    app.processEvents()
+    for k, ids in (("all", {"t", "n", "b"}), ("manufactured", {"t"}), ("fastener", {"n"}), ("purchased", {"b"})):
+        page.reorder_filter["type"] = k
+        assert {p["id"] for p in page.reorder_filtered()} == ids
+    page.refresh_current()
+    app.processEvents()
