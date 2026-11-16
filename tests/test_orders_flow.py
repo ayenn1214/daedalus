@@ -164,3 +164,40 @@ def test_project_page_groups_parts_by_type(tmp_path):
     app.processEvents()
     heads = [lab.text() for lab in page.pages["projects"].widget().findChildren(QLabel) if "</b> · " in lab.text()]
     assert heads == ["<b>MFG parts</b> · 2", "<b>Purchased parts</b> · 1", "<b>Fasteners</b> · 2"]
+
+
+def test_typed_dates():
+    b = "2026-11-16"                                                       # a Monday
+    p = M.parse_date_input
+    assert p("2026-11-20", b) == "2026-11-20" and p("11/20", b) == "2026-11-20" and p("Nov 20", b) == "2026-11-20"
+    assert p("Fri Nov 20, 2026", b) == "2026-11-20" and p("20 nov 2027", b) == "2027-11-20"
+    assert p("today", b) == b and p("tomorrow", b) == "2026-11-17" and p("fri", b) == "2026-11-20"
+    assert p("mon", b) == "2026-11-23" and p("+10", b) == "2026-11-26" and p("2w", b) == "2026-11-30"
+    assert p("1/15", b) == "2027-01-15" and p("", b) == "" and p("abc", b) is None and p("13/40", b) is None
+
+
+def test_production_dates_inline(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from daedalus.ui import orders_ui as OU
+    from daedalus.ui.date_field import DateField
+    inv, pid = shop()
+    p = O.confirm(inv, O.save_order(inv, None, "PO-3", "Shop", [{"projectId": pid, "qty": 1}]))[0]
+    saved = []
+    d = OU.ProductionDialog(inv, p, saved.append)
+    d.days_box.setValue(12)
+    d.days_box.editingFinished.emit()
+    assert p["finishDays"] == 12 and d.finish_field.value() == M.add_days(M.today(), 12)
+    d.finish_field.edit.setText("+5")                                      # typed straight into the finish date
+    d.finish_field.edit.editingFinished.emit()
+    assert p["finishBy"] == M.add_days(M.today(), 5) and p["finishDays"] == 5 and d.days_box.value() == 5
+    d.date_fields["dueDate"].edit.setText("+3")
+    d.date_fields["dueDate"].edit.editingFinished.emit()
+    app.processEvents()
+    assert p["dueDate"] == M.add_days(M.today(), 3) and any("Due date" in e["what"] for e in p["events"])
+    f = DateField("")
+    f.edit.setText("not a date")
+    assert f.value() == "" and "border" in f.edit.styleSheet()
+    O.set_finish_by(p, "")
+    assert "finishBy" not in p

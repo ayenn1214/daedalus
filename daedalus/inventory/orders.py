@@ -10,7 +10,7 @@ vendor, and any line can be moved to another vendor to split a PO. Each PO is Ye
 every one is Yes or Not needed the build gets a finish estimate."""
 from __future__ import annotations
 
-from .model import Inventory, add_days, now_ms, num, today, uid
+from .model import Inventory, add_days, days_between, now_ms, num, today, uid
 
 DRAFT, CONFIRMED, SHIPPED, CANCELLED = "Draft", "Confirmed", "Shipped", "Cancelled"
 ORDER_FLOW = [DRAFT, CONFIRMED, SHIPPED, CANCELLED]
@@ -316,6 +316,35 @@ def set_finish(p, days: int, by: str = ""):
     if p.get("status") in (None, "", "Not Started"):
         p["status"] = "In Fab"
     _prod_event(p, by, f"Finish estimate: {int(days)} day(s) → {p['finishBy']}")
+
+
+def set_finish_by(p, date: str, by: str = ""):
+    """Finish date typed or picked directly; the day count follows (from today)."""
+    if not date:
+        p.pop("finishBy", None)
+        p.pop("finishDays", None)
+        _prod_event(p, by, "Finish estimate cleared")
+        return
+    p["finishBy"] = date
+    p["finishDays"] = max(0, days_between(today(), date) or 0)
+    if p.get("status") in (None, "", "Not Started"):
+        p["status"] = "In Fab"
+    _prod_event(p, by, f"Finish by {date}")
+
+
+DATE_FIELDS = {"orderDate": "Order date", "dueDate": "Due date", "fabStart": "Fab start", "fabEnd": "Fab end",
+               "finishStart": "Finishing start", "finishEnd": "Finishing end"}
+
+
+def set_date(p, key: str, date: str, by: str = ""):
+    if key not in DATE_FIELDS or (p.get(key) or "") == (date or ""):
+        return False
+    if date:
+        p[key] = date
+    else:
+        p.pop(key, None)
+    _prod_event(p, by, f"{DATE_FIELDS[key]}: {date or 'cleared'}")
+    return True
 
 
 def stage(inv: Inventory, p) -> str:

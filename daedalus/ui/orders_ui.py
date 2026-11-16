@@ -2,7 +2,7 @@
 checklist split by vendor, finish estimate). The logic lives in inventory/orders.py."""
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QComboBox, QDialog, QDialogButtonBox, QFormLayout, QFrame, QHBoxLayout, QHeaderView, QInputDialog, QLabel,
@@ -160,15 +160,20 @@ class ProductionDialog(QDialog):
             self.ask_finish()
 
     def ask_finish(self):
-        days, ok = QInputDialog.getInt(self, "Time to finish", "Every PO is sent or not needed.\n"
-                                       "How many days to finish this build?", int(self.p.get("finishDays") or 10),
-                                       1, 365)
-        if ok:
-            O.set_finish(self.p, days, self.by)
-            self.save(f"Finish estimate {days} day(s)")
-            self.build()
+        """Every PO is done: jump to the inline time-to-finish box (type days or a finish date)."""
+        box = getattr(self, "days_box", None)
+        if box is None:
+            return
+        self.scroll.ensureWidgetVisible(box)
+        box.setFocus()
+        box.selectAll()
 
     def build(self):
+        pos = self.scroll.verticalScrollBar().value()
+        self._build()
+        QTimer.singleShot(0, lambda: self.scroll.verticalScrollBar().setValue(pos))
+
+    def _build(self):
         inv, p = self.inv, self.p
         self._done = O.all_pos_done(inv, p)
         w = QWidget()
@@ -216,22 +221,9 @@ class ProductionDialog(QDialog):
                 v.addWidget(self._sub(f"{g} · {len(vends)} PO{'s' if len(vends) != 1 else ''}"))
                 for vendor, box in vends.items():
                     v.addWidget(self._po_box(g, vendor, box, vendors))
-        # 3. finish
-        v.addWidget(self._title("3 · Finish"))
-        if p.get("finishBy"):
-            r = QHBoxLayout()
-            r.addWidget(QLabel(f"{p.get('finishDays')} day(s) → finish by <b>{M.fmt_date(p['finishBy'])}</b>"), 1)
-            b = QPushButton("Change…")
-            b.clicked.connect(self.ask_finish)
-            r.addWidget(b)
-            v.addLayout(r)
-        elif self._done:
-            b = QPushButton("Set time to finish…")
-            b.clicked.connect(self.ask_finish)
-            v.addWidget(b)
-        else:
-            s, n = O.po_counts(inv, p)
-            v.addWidget(self._muted(f"{s} of {n} POs done — asked once every PO is Yes or Not needed."))
+        # 3. dates — type or pick; days ⇄ finish date stay in step
+        v.addWidget(self._title("3 · Dates"))
+        v.addWidget(self._dates())
         # log
         v.addWidget(self._title("Log"))
         log = QPlainTextEdit("\n".join(f"{_when(e.get('at'))}  {e.get('by') or ''}: {e.get('what')}"
@@ -241,6 +233,96 @@ class ProductionDialog(QDialog):
         v.addWidget(log)
         v.addStretch(1)
         self.scroll.setWidget(w)
+
+    def _dates(self):
+        from PySide6.QtWidgets import QGridLayout, QSpinBox
+
+        from .date_field import DateField
+        p = self.p
+        fr = QFrame()
+        fr.setObjectName("card")
+        fr.setStyleSheet(f"QFrame#card {{ border: 1px solid {theme.MUTED}; border-radius: 6px; }}")
+        g = QGridLayout(fr)
+        g.setHorizontalSpacing(10)
+        g.setColumnStretch(1, 1)
+        g.setColumnStretch(3, 1)
+
+        def cap(t):
+            lab = QLabel(t)
+            lab.setStyleSheet("font-weight: 600;")
+            return lab
+
+        def span_label(a, b):
+            n = M.days_between(p.get(a), p.get(b))
+            lab = QLabel("" if n is None else f"{n} day{'s' if n != 1 else ''}")
+            lab.setObjectName("muted")
+            return lab
+        self.date_fields = {}
+
+        def field(key):
+            f = DateField(p.get(key) or "")
+            f.changed.connect(lambda iso, k=key: self._date_set(k, iso))
+            self.date_fields[key] = f
+            return f
+        # finish estimate: days ⇄ date
+        days = QSpinBox()
+        days.setRange(0, 999)
+        days.setSuffix(" days")
+        days.setSpecialValueText("—")
+        days.setValue(int(p.get("finishDays") or 0) if p.get("finishBy") else 0)
+        fin = DateField(p.get("finishBy") or "", placeholder="type or pick")
+        self.days_box, self.finish_field = days, fin
+
+        def days_set():
+            n = days.value()
+            if n == int(p.get("finishDays") or 0) and p.get("finishBy"):
+                return
+            if n == 0:
+                O.set_finish_by(p, "", self.by)
+            else:
+                O.set_finish(p, n, self.by)
+            fin.set_value(p.get("finishBy") or "")
+            self.save(f"Finish estimate {n} day(s)" if n else "Finish estimate cleared")
+
+        def fin_set(iso):
+            O.set_finish_by(p, iso, self.by)
+            days.blockSignals(True)
+            days.setValue(int(p.get("finishDays") or 0))
+            days.blockSignals(False)
+            self.save(f"Finish by {iso}" if iso else "Finish estimate cleared")
+        days.editingFinished.connect(days_set)
+        fin.changed.connect(fin_set)
+        g.addWidget(cap("Due"), 0, 0)
+        g.addWidget(field("dueDate"), 0, 1)
+        g.addWidget(cap("Ordered"), 0, 2)
+        g.addWidget(field("orderDate"), 0, 3)
+        g.addWidget(cap("Time to finish"), 1, 0)
+        g.addWidget(days, 1, 1)
+        g.addWidget(cap("Finish by"), 1, 2)
+        g.addWidget(fin, 1, 3)
+        for r, (lab, a, b) in enumerate((("Fab", "fabStart", "fabEnd"), ("Finishing", "finishStart", "finishEnd")), 2):
+            g.addWidget(cap(f"{lab} start"), r, 0)
+            g.addWidget(field(a), r, 1)
+            g.addWidget(cap("end"), r, 2)
+            g.addWidget(field(b), r, 3)
+            g.addWidget(span_label(a, b), r, 4)
+        due, fby = p.get("dueDate"), p.get("finishBy")
+        if due and fby and fby > due:
+            late = QLabel(f"⚠ Finish by is {M.days_between(due, fby)} day(s) after the due date")
+            late.setStyleSheet(f"color:{theme.WARN};")
+            g.addWidget(late, 4, 0, 1, 5)
+        elif not fby and not self._done:
+            s_, n_ = O.po_counts(self.inv, p)
+            g.addWidget(self._muted(f"{s_} of {n_} POs done — the finish estimate is asked once every PO is Yes or "
+                                    "Not needed, or set it here now."), 4, 0, 1, 5)
+        hint = self._muted("Type dates directly: 11/20, Nov 20, fri, tomorrow, +10, 2w — or use ▾ for a calendar.")
+        g.addWidget(hint, 5, 0, 1, 5)
+        return fr
+
+    def _date_set(self, key, iso):
+        if O.set_date(self.p, key, iso, self.by):
+            self.save(f"{O.DATE_FIELDS[key]} {iso or 'cleared'}")
+            self.build()
 
     def _po_box(self, group, vendor, box, vendors):
         fr = QFrame()

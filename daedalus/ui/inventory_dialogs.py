@@ -782,10 +782,11 @@ class OrderDialog(_Base):
                 i = self.project.count() - 1
             self.project.setCurrentIndex(i)
         self.qty = _qty(r.get("qty", 1), 1)
-        self.d = {k: _date_edit(r.get(k)) for k in ("orderDate", "dueDate", "fabStart", "fabEnd", "finishStart",
-                                                     "finishEnd")}
+        from .date_field import DateField
+        self.d = {k: DateField(r.get(k) or "") for k in ("orderDate", "dueDate", "fabStart", "fabEnd", "finishStart",
+                                                          "finishEnd")}
         if not o:
-            self.d["orderDate"].setDate(QDate.currentDate())
+            self.d["orderDate"].set_value(M.today())
         self.status = QComboBox()
         self.status.addItems(M.ORDER_STATUSES)
         self.status.setCurrentText(r.get("status") or "Not Started")
@@ -804,7 +805,7 @@ class OrderDialog(_Base):
 
     def values(self):
         return {"projectId": self.project.currentData(), "qty": self.qty.value(),
-                **{k: _date_value(w) for k, w in self.d.items()}, "status": self.status.currentText()}
+                **{k: w.value() for k, w in self.d.items()}, "status": self.status.currentText()}
 
 
 class PartOrderDialog(_Base):

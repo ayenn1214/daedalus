@@ -144,6 +144,64 @@ def parse_date(s):
         return None
 
 
+_MONTHS = {m: i + 1 for i, m in enumerate(("jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct",
+                                            "nov", "dec"))}
+_WEEKDAYS = ("mon", "tue", "wed", "thu", "fri", "sat", "sun")
+
+
+def parse_date_input(text, base=None):
+    """A typed date → ISO string ('' when blank, None when it can't be read).
+    Takes 2026-11-20 · 2026/11/20 · 11/20 · 11/20/2026 · Nov 20 · 20 Nov 2026 · today · tomorrow · fri ·
+    +10 / 10d / 2w / 3m (from today)."""
+    import re
+    t = (text or "").strip().lower().replace(",", " ")
+    if not t or t in ("-", "—", "none"):
+        return ""
+    base = parse_date(base) if isinstance(base, str) else (base or dt.date.today())
+    if t in ("today", "now", "t"):
+        return base.isoformat()
+    if t in ("tomorrow", "tmr", "tom"):
+        return (base + dt.timedelta(days=1)).isoformat()
+    m = re.fullmatch(r"\+?\s*(\d{1,4})\s*(d|day|days|w|wk|week|weeks|m|mo|month|months)?", t)
+    if m and (t.startswith("+") or m.group(2)):
+        n, u = int(m.group(1)), (m.group(2) or "d")[0]
+        if u == "m":
+            y, mo = divmod(base.month - 1 + n, 12)
+            y, mo = base.year + y, mo + 1
+            import calendar
+            return dt.date(y, mo, min(base.day, calendar.monthrange(y, mo)[1])).isoformat()
+        return (base + dt.timedelta(days=n * (7 if u == "w" else 1))).isoformat()
+    for i, wd in enumerate(_WEEKDAYS):                       # next fri (today counts as next week)
+        if t.startswith(wd) and t.isalpha():
+            ahead = (i - base.weekday()) % 7 or 7
+            return (base + dt.timedelta(days=ahead)).isoformat()
+    try:
+        m = re.fullmatch(r"(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})", t)
+        if m:
+            return dt.date(int(m.group(1)), int(m.group(2)), int(m.group(3))).isoformat()
+        m = re.fullmatch(r"(\d{1,2})[-/.](\d{1,2})(?:[-/.](\d{2,4}))?", t)       # month/day[/year]
+        if m:
+            y = int(m.group(3)) if m.group(3) else None
+            y = (2000 + y if y is not None and y < 100 else y)
+            d = dt.date(y or base.year, int(m.group(1)), int(m.group(2)))
+            if y is None and d < base - dt.timedelta(days=60):            # 1/15 typed in November → next year
+                d = d.replace(year=d.year + 1)
+            return d.isoformat()
+        words = t.split()
+        mon = next((_MONTHS[w[:3]] for w in words if w[:3] in _MONTHS and w.isalpha()), None)
+        nums = [int(w.rstrip("stndrh") or 0) for w in words if w.rstrip("stndrh").isdigit()]
+        if mon and nums:
+            day = next(n for n in nums if n <= 31)
+            year = next((n for n in nums if n > 31), None)
+            d = dt.date(year or base.year, mon, day)
+            if year is None and d < base - dt.timedelta(days=60):
+                d = d.replace(year=d.year + 1)
+            return d.isoformat()
+    except (ValueError, StopIteration):
+        return None
+    return None
+
+
 def fmt_date(s) -> str:
     d = parse_date(s)
     return d.strftime("%b %d, %Y") if d else "—"
