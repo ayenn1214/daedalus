@@ -814,6 +814,7 @@ class InventoryPage(QWidget):
                 if r[1] == 0:
                     cur = groups[project_group(r[0])]
                 cur.append(r)
+            ordered = []                                         # one table, a header row per type
             for gname, grows in groups.items():
                 blocks, cur = [], None                           # sort by part number, BOM lines stay under
                 for r in grows:
@@ -824,9 +825,9 @@ class InventoryPage(QWidget):
                 blocks.sort(key=lambda b: ((b[0][0].get("partNumber") or "~").upper(), b[0][0]["name"].lower()))
                 grows = [r for b in blocks for r in b]
                 if grows:
-                    n = sum(1 for r in grows if r[1] == 0)
-                    v.addWidget(_muted(f"<b>{gname}</b> · {n}", False))
-                    v.addWidget(self._project_table(pr, grows))
+                    ordered.append(("hdr", gname, sum(1 for r in grows if r[1] == 0)))
+                    ordered.extend(grows)
+            v.addWidget(self._project_table(pr, ordered))
         v.addWidget(_section("Unassigned"))
         un = [p for p in inv.parts if not inv.allocations(p)]
         v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower())) if un
@@ -849,8 +850,19 @@ class InventoryPage(QWidget):
 
     def _project_table(self, pr, rows):
         inv = self.inv
-        tr = []
-        for p, depth, ql, need, on_hand, emb in rows:
+        tr, heads = [], []
+        for row in rows:
+            if row[0] == "hdr":
+                it = QTableWidgetItem(f"{row[1]}  ·  {row[2]}")
+                f_ = it.font()
+                f_.setBold(True)
+                it.setFont(f_)
+                it.setForeground(QBrush(QColor(theme.ACCENT_TEXT)))
+                it.setFlags(Qt.ItemIsEnabled)
+                heads.append(len(tr))
+                tr.append([it] + [""] * 7)
+                continue
+            p, depth, ql, need, on_hand, emb = row
             short = max(0.0, need - on_hand)
             name = QTableWidgetItem(("    " * depth) + (f"× {ql}  " if ql is not None else "") + p["name"])
             name.setToolTip(inv.spec_line(p))
@@ -875,10 +887,15 @@ class InventoryPage(QWidget):
                                  short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
         t = self.table(["Part No.", "Part", "Qty/Unit", "For 1 Unit", "On Hand", "Short (1 unit)",
                         "Unit Cost", ""], tr, 1)
-        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)          # each group shows all its rows, no gaps
-        t.setFixedHeight(t.horizontalHeader().sizeHint().height() + sum(t.rowHeight(i) for i in range(t.rowCount()))
-                         + 2 * t.frameWidth() + (t.horizontalScrollBar().sizeHint().height()
-                                                  if t.horizontalScrollBar().isVisible() else 0))
+        for i in heads:                                             # type header rows span the table
+            t.setSpan(i, 0, 1, t.columnCount())
+            t.item(i, 0).setBackground(QBrush(QColor(theme.PANEL)))
+            t.setRowHeight(i, max(26, t.fontMetrics().height() + 12))
+        from PySide6.QtWidgets import QAbstractScrollArea, QSizePolicy
+        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)          # the whole project shows, no gaps:
+        t.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)  # height follows the rows (also after styling)
+        t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        t.setMinimumHeight(0)
         return t
 
     def _demand_note(self, pid):

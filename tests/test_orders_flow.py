@@ -162,8 +162,10 @@ def test_project_page_groups_parts_by_type(tmp_path):
     page = InventoryPage(st, lite=True)
     page.goto("projects")
     app.processEvents()
-    heads = [lab.text() for lab in page.pages["projects"].widget().findChildren(QLabel) if "</b> · " in lab.text()]
-    assert heads == ["<b>MFG parts</b> · 2", "<b>Purchased parts</b> · 1", "<b>Fasteners</b> · 2"]
+    from PySide6.QtWidgets import QTableWidget
+    t = next(x for x in page.pages["projects"].widget().findChildren(QTableWidget) if x.rowCount() > 3)
+    heads = [t.item(i, 0).text() for i in range(t.rowCount()) if t.columnSpan(i, 0) > 1]
+    assert heads == ["MFG parts  ·  2", "Purchased parts  ·  1", "Fasteners  ·  2"]       # one table per project
 
 
 def test_typed_dates():
