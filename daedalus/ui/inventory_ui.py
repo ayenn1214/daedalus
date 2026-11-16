@@ -2013,17 +2013,37 @@ class InventoryPage(QWidget):
             self.goto("locations")
 
     def _link_at(self, obj, pos):
-        """(kind, id) under a Shift-click: a tagged table / tree row, or a widget with a dimsLink property."""
-        from PySide6.QtWidgets import QAbstractItemView
+        """What a Shift-click points at: ('link', kind, id) for a record, ('quote', text) for anything else,
+        None for controls (buttons, inputs) that should keep their own Shift-click."""
+        import re
+
+        from PySide6.QtWidgets import QAbstractButton, QAbstractItemView, QAbstractSpinBox, QComboBox, QTextEdit
+        from ..inventory import chat as C
         view = obj.parent() if obj is not None else None
         if isinstance(view, QAbstractItemView) and obj is view.viewport():
             idx = view.indexAt(pos)
-            if idx.isValid():
-                m = idx.model()
-                for c in [idx.column(), *range(m.columnCount(idx.parent()))]:
-                    d = m.index(idx.row(), c, idx.parent()).data(LINK_ROLE)
-                    if d:
-                        return tuple(d)
+            if not idx.isValid():
+                return None
+            m = idx.model()
+            cols = [idx.column(), *[c for c in range(m.columnCount(idx.parent())) if c != idx.column()]]
+            cells = [m.index(idx.row(), c, idx.parent()) for c in cols]
+            for ix in cells:
+                d = ix.data(LINK_ROLE)
+                if d:
+                    return ("link", *d)
+            ids = [ix.data(r) for ix in cells for r in (Qt.UserRole, Qt.UserRole + 1)]
+            texts = [ix.data(Qt.DisplayRole) or "" for ix in cells]
+            if isinstance(view, QAbstractItemView) and hasattr(view, "cellWidget"):
+                for c in cols:                                    # cells drawn by widgets (labels, spin boxes)
+                    w = view.cellWidget(idx.row(), c)
+                    if isinstance(w, QLabel):
+                        texts.append(re.sub(r"<[^>]+>", " ", w.text()))
+            hit = C.resolve(self.inv, [str(t) for t in texts], ids)
+            if hit:
+                return ("link", *hit)
+            return ("quote", str(texts[0]) if texts and texts[0] else " · ".join(str(t) for t in texts if t))
+        if isinstance(obj, (QAbstractButton, QLineEdit, QAbstractSpinBox, QComboBox, QTextEdit)) or \
+                isinstance(view, (QAbstractSpinBox, QComboBox, QTextEdit)):
             return None
         w = obj
         for _ in range(4):
@@ -2032,8 +2052,12 @@ class InventoryPage(QWidget):
             d = w.property("dimsLink") if hasattr(w, "property") else None
             if d:
                 k, _s, i = str(d).partition(":")
-                return k, i
+                return "link", k, i
             w = w.parent()
+        if isinstance(obj, QLabel) and obj.text():
+            txt = re.sub(r"<[^>]+>", " ", obj.text()).replace("&nbsp;", " ").replace("&amp;", "&")
+            hit = C.resolve(self.inv, [txt, *[x for x in re.split(r"\s*·\s*", txt)]])
+            return ("link", *hit) if hit else ("quote", txt)
         return None
 
     def _owned(self, w) -> bool:
@@ -2047,10 +2071,16 @@ class InventoryPage(QWidget):
     def eventFilter(self, obj, ev):
         from PySide6.QtCore import QEvent
         if ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton and \
-                ev.modifiers() & Qt.ShiftModifier and isinstance(obj, QWidget) and self._owned(obj):
-            link = self._link_at(obj, ev.position().toPoint())
-            if link and self.link_to_chat(*link):
+                ev.modifiers() & Qt.ShiftModifier and isinstance(obj, QWidget) and self._owned(obj) and \
+                not self.chat.isAncestorOf(obj):
+            what = self._link_at(obj, ev.position().toPoint())
+            if what and what[0] == "link" and self.link_to_chat(*what[1:]):
                 return True
+            if what and what[0] == "quote" and what[1].strip():
+                if not self.chat.isVisible():
+                    self.toggle_chat(True)
+                if self.chat.insert_quote(what[1]):
+                    return True
         return super().eventFilter(obj, ev)
 
     def report_bug(self):

@@ -77,6 +77,52 @@ def link_for(inv: M.Inventory, kind: str, id_: str) -> str | None:
     return None
 
 
+def resolve(inv: M.Inventory, texts=(), ids=()):
+    """Best record for something clicked that carries no link: ids found on it (part / project / order ids), then
+    its text — part number, 'PN — name', project, vendor, bin, order PO, then a unique part name."""
+    for v in ids:
+        if not isinstance(v, str) or not v:
+            continue
+        if inv.part(v):
+            return "part", v
+        if inv.project(v):
+            return "project", v
+        if any(o.get("id") == v for o in inv.productionOrders):
+            return "production", v
+        if any(o.get("id") == v for o in inv.clientOrders):
+            return "order", v
+    by_pn = {(p.get("partNumber") or "").strip().lower(): p for p in inv.parts if p.get("partNumber")}
+    by_name: dict = {}
+    for p in inv.parts:
+        by_name.setdefault(p["name"].strip().lower(), []).append(p)
+    projects = {pr["name"].strip().lower(): pr for pr in inv.projects}
+    vendors = {v["name"].strip().lower(): v for v in inv.vendors if v.get("name")}
+    pos = {(o.get("poNumber") or "").strip().lower(): o for o in inv.clientOrders if o.get("poNumber")}
+    for raw in texts:
+        for t in [x.strip() for x in re.split(r"\n", raw or "") if x.strip()]:
+            t = re.sub(r"^(×\s*\S+\s+)", "", t).strip()                    # BOM lines: "× 4  FLAT, TAB"
+            k = t.lower()
+            first = k.split(" — ")[0].split()[0] if k.split() else ""
+            if k in by_pn:
+                return "part", by_pn[k]["id"]
+            if first in by_pn and (k == first or k.startswith(first + " ")):
+                return "part", by_pn[first]["id"]
+            if k in projects:
+                return "project", projects[k]["id"]
+            if k in vendors:
+                v = vendors[k]
+                return "vendor", v.get("id") or v["name"]
+            if k in pos:
+                return "order", pos[k]["id"]
+            loc = next((l for l in inv.locations if inv.location_label_for(l.get("id")).lower() == k), None)
+            if loc:
+                return "location", loc["id"]
+            name = re.sub(r"\s+\((weldment|assembly)\)$", "", k)
+            if len(by_name.get(name, [])) == 1:
+                return "part", by_name[name][0]["id"]
+    return None
+
+
 def quality(inv: M.Inventory, kind: str, id_: str) -> str:
     """Rarity-style colour class for a link (see ui.chat_panel)."""
     if kind == "part":
@@ -160,6 +206,33 @@ def mentions(body: str, name: str) -> bool:
 
 
 # ------------------------------------------------------------------ backends
+def ts_ms(text: str) -> int:
+    """Server timestamp → epoch ms. Any fraction length, Z or ±hh:mm (Python 3.10's fromisoformat isn't that
+    forgiving: Postgres drops trailing zeros, e.g. .38047)."""
+    import datetime as dt
+    m = re.fullmatch(r"(\d{4}-\d\d-\d\d)[T ](\d\d:\d\d:\d\d)(?:\.(\d+))?(Z|[+-]\d\d(?::?\d\d)?)?",
+                     (text or "").strip())
+    if not m:
+        raise ValueError(f"Bad timestamp {text!r}")
+    base = dt.datetime.strptime(f"{m.group(1)} {m.group(2)}", "%Y-%m-%d %H:%M:%S")
+    frac = int(((m.group(3) or "") + "000000")[:6])
+    tz = m.group(4) or "Z"
+    off = 0
+    if tz != "Z":
+        sign = -1 if tz[0] == "-" else 1
+        hh, mm = int(tz[1:3]), int(tz[-2:]) if len(tz) > 3 else 0
+        off = sign * (hh * 60 + mm)
+    epoch = dt.datetime(1970, 1, 1)
+    return int(((base - epoch).total_seconds() - off * 60) * 1000) + frac // 1000
+
+
+def iso_utc(ms: int) -> str:
+    """Epoch ms → ISO UTC (no fromtimestamp: Windows rejects times before 1970)."""
+    import datetime as dt
+    t = dt.datetime(1970, 1, 1) + dt.timedelta(milliseconds=max(0, int(ms)))
+    return t.strftime("%Y-%m-%dT%H:%M:%S.") + f"{t.microsecond // 1000:03d}Z"
+
+
 class FileChat:
     """Append-only JSON lines next to the inventory file."""
 
@@ -210,14 +283,11 @@ class ServerChat:
 
     @staticmethod
     def _row(r: dict) -> dict:
-        import datetime as dt
-        t = dt.datetime.fromisoformat(r["at"].replace("Z", "+00:00"))
-        return {"id": r["id"], "at": int(t.timestamp() * 1000), "by": r.get("by_name") or "?",
+        return {"id": r["id"], "at": ts_ms(r["at"]), "by": r.get("by_name") or "?",
                 "channel": r.get("channel") or "general", "body": r.get("body") or "", "userId": r.get("user_id")}
 
     def fetch(self, since_ms: int = 0) -> list[dict]:
-        import datetime as dt
-        since = dt.datetime.fromtimestamp(since_ms / 1000, dt.timezone.utc).isoformat().replace("+00:00", "Z")
+        since = iso_utc(since_ms)
         from urllib.parse import quote
         code, rows = self.store._rest("GET", f"/rest/v1/dims_chat?select=*&at=gt.{quote(since)}&order=at.asc"
                                              "&limit=500")

@@ -137,8 +137,10 @@ class ChatPanel(QWidget):
         if be is not self.backend:
             return
         if kind == "err":
-            self.status.setText("offline")
+            self.status.setText("can't load messages — hover for why")
+            self.status.setToolTip(str(payload))
             return
+        self.status.setToolTip("")
         known = {m["id"] for m in self.msgs}
         new = [m for m in payload if m["id"] not in known]
         if not new:
@@ -218,6 +220,18 @@ class ChatPanel(QWidget):
         cur = self.input.text()
         sep = "" if not cur or cur.endswith(" ") else " "
         self.input.setText(cur + sep + shown + " ")
+        self.input.setFocus()
+        self.input.end(False)
+        return True
+
+    def insert_quote(self, text: str) -> bool:
+        """Something with no record behind it: drop its text in as a quote."""
+        text = " ".join((text or "").split())[:160]
+        if not text:
+            return False
+        cur = self.input.text()
+        sep = "" if not cur or cur.endswith(" ") else " "
+        self.input.setText(cur + sep + f"“{text}” ")
         self.input.setFocus()
         self.input.end(False)
         return True

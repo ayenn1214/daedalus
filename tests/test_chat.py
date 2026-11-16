@@ -87,3 +87,71 @@ def test_chat_panel_shift_click_and_open(tmp_path):
     page.toggle_chat(True)
     assert page.chat.unread == 0
     page.close()
+
+
+def test_server_chat_parses_postgres_times_and_fetches_from_zero():
+    """Windows / Python 3.10: no fromtimestamp before 1970, and Postgres trims fraction zeros (.38047)."""
+    calls = []
+
+    class FakeStore:
+        schema = 3
+
+        def _rest(self, method, path, body=None, headers=None):
+            calls.append((method, path))
+            if method == "GET":
+                return 200, [{"id": "a", "at": "2026-11-16T23:16:08.52567+00:00", "by_name": "Daniel",
+                              "channel": "general", "body": "Hello @Ankur", "user_id": "u"}]
+            return 201, [{"id": body["id"], "at": "2026-11-16 23:16:15.888873+00", "by_name": body["by_name"],
+                          "channel": "general", "body": body["body"]}]
+
+        def _check_write(self, code, res, what):
+            pass
+    ch = C.ServerChat(FakeStore())
+    got = ch.fetch(-1)                                                     # empty panel asks from "before" 1970
+    assert "at=gt.1970-01-01T00%3A00%3A00.000Z" in calls[0][1] or "at=gt.1970-01-01T00:00:00.000Z" in calls[0][1]
+    assert got[0]["by"] == "Daniel" and got[0]["at"] == C.ts_ms("2026-11-16T23:16:08.525670Z")
+    m = ch.post(C.new_message("Ankur", "hi"))
+    assert m["by"] == "Ankur" and m["at"] > got[0]["at"]
+    assert C.ts_ms("2026-11-16T15:16:08-08:00") == C.ts_ms("2026-11-16T23:16:08Z")
+
+
+def test_shift_click_anything(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    from PySide6.QtWidgets import QApplication, QLabel, QTableWidget, QTreeWidget
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv, pid = shop()
+    inv.vendors.append({"id": "v1", "name": "Acme Steel"})
+    assert C.resolve(inv, ["M10-0005"]) == ("part", "tab") and C.resolve(inv, ["× 4  FLAT, TAB"]) == ("part", "tab")
+    assert C.resolve(inv, ["RLC"]) == ("project", pid) and C.resolve(inv, ["acme steel"]) == ("vendor", "v1")
+    assert C.resolve(inv, ["M30-0001 — WLDMT, FRAME"]) == ("part", "frame") and C.resolve(inv, ["nothing"]) is None
+    assert C.resolve(inv, [], ["frame"]) == ("part", "frame")
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.resize(1400, 900)
+    page.show()
+
+    def shift_click(w, pt):
+        QApplication.sendEvent(w, QMouseEvent(QEvent.MouseButtonPress, QPointF(pt), QPointF(w.mapToGlobal(pt)),
+                                              Qt.LeftButton, Qt.LeftButton, Qt.ShiftModifier))
+        app.processEvents()
+    page.goto("vendors")
+    app.processEvents()
+    root = page.pages["vendors"].widget()
+    views = [v for v in root.findChildren(QTableWidget) + root.findChildren(QTreeWidget) if v.isVisible()
+             and v.model().rowCount()]
+    t = views[0]
+    shift_click(t.viewport(), t.visualRect(t.model().index(0, 0)).center())     # a vendor row (untagged)
+    assert "[Acme Steel]" in page.chat.input.text()
+    page.chat.input.clear()
+    page.goto("dashboard")
+    app.processEvents()
+    lab = next(x for x in page.pages["dashboard"].widget().findChildren(QLabel) if x.isVisible() and x.text())
+    shift_click(lab, lab.rect().center())                                         # any label → linked or quoted
+    assert page.chat.input.text().strip() != ""
+    page.close()
