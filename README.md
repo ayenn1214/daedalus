@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.6</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.7</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -416,7 +416,8 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
-| **3.0.6** | DIMS: part numbers shown in front of names in Parts and Reorder · Reorder filter by part type (manufactured / fasteners / purchased) · same name + different part number = different parts (duplicates, import, SolidWorks / CAD BOM matching, Icarus) · weldment Components can name parts by number |
+| **3.0.7** | DIMS Reorder: filter by part type (manufactured / fasteners / purchased); Export List follows every filter |
+| **3.0.6** | DIMS: part numbers shown in front of names in Parts and Reorder · same name + different part number = different parts (duplicates, import, SolidWorks / CAD BOM matching, Icarus) · weldment Components can name parts by number |
 | **3.0.4** | SolidWorks Link: Review for DIMS (every BOM level vs inventory, shop-structure numbers for new parts, profiles + BOMs + project allocation, PartNo / DIMSId written back), Icarus in Link gets the BOM review and every DIMS tool · DIMS tables adjust like a spreadsheet (drag / double-click column edges, right-click autofit / width / hide, row numbers and row height, spacing, grid lines, text size) · reliable restart after updates and theme changes |
 | 3.0.3 | Reorder and Shortages merged: one Reorder tab with every project shortage and every part at its reorder point, a Why column and competing projects · Icarus accepts Excel / CSV and PDF attachments (attach or drop), reads long sheets on demand and imports vendors, prices, parts or stock counts with a preview first |
 | 3.0.2 | Themes: Light, Rangate Blue and Rangate Blue Light (RAL 5003 Sapphire blue), Midnight, Sith (red on black); View ▸ Theme in the inventory-only window too |
