@@ -2,8 +2,8 @@
 the level the user picked (View ▸ Toolbar size)."""
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, QObject, Qt
-from PySide6.QtWidgets import QFrame, QScrollArea, QToolButton
+from PySide6.QtCore import QEvent, QObject, QPoint, QRect, QSize, Qt
+from PySide6.QtWidgets import QFrame, QLayout, QScrollArea, QToolButton
 
 SIZES = {"auto": "Auto (fit the window)", "full": "Full", "compact": "Compact", "icons": "Icons only"}
 
@@ -137,3 +137,77 @@ def text_mode(buttons, on: bool, under=False):
             b.setToolButtonStyle(Qt.ToolButtonTextUnderIcon if under else Qt.ToolButtonTextBesideIcon)
         else:
             b.setToolButtonStyle(Qt.ToolButtonIconOnly)
+
+
+class FlowLayout(QLayout):
+    """Lays widgets out left to right and wraps onto as many rows as the width needs (toolbars that grow downward
+    instead of scrolling sideways). A widget with property 'break' True starts a new row."""
+
+    def __init__(self, parent=None, spacing=2, row_spacing=2):
+        super().__init__(parent)
+        self._items = []
+        self._hs, self._vs = spacing, row_spacing
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, w):
+        return self._do(QRect(0, 0, w, 0), True)
+
+    def setGeometry(self, r):
+        super().setGeometry(r)
+        self._do(r, False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        s = QSize()
+        for it in self._items:
+            s = s.expandedTo(it.minimumSize())
+        m = self.contentsMargins()
+        return s + QSize(m.left() + m.right(), m.top() + m.bottom())
+
+    def _do(self, rect, test):
+        m = self.contentsMargins()
+        r = rect.adjusted(m.left(), m.top(), -m.right(), -m.bottom())
+        rows, row, x = [], [], r.x()
+        for it in self._items:
+            w = it.widget()
+            if w is not None and w.isHidden():
+                continue
+            hint = it.sizeHint()
+            brk = w is not None and bool(w.property("break"))
+            if row and (x + hint.width() > r.right() + 1 or brk):
+                rows.append(row)
+                row, x = [], r.x()
+            row.append((it, hint))
+            x += hint.width() + self._hs
+        if row:
+            rows.append(row)
+        y = r.y()
+        for row in rows:
+            line_h = max(h.height() for _i, h in row)
+            if not test:
+                x = r.x()
+                for it, h in row:                      # vertically centred in its row
+                    it.setGeometry(QRect(QPoint(x, y + (line_h - h.height()) // 2), h))
+                    x += h.width() + self._hs
+            y += line_h + self._vs
+        return max(0, y - self._vs - rect.y()) + m.bottom() + m.top()

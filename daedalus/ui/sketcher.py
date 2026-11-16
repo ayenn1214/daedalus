@@ -1749,13 +1749,32 @@ class SketchEditor(QWidget):
         bar.setObjectName("sketchbar")
         bar.setAttribute(Qt.WA_StyledBackground, True)
         bar.setStyleSheet(f"#sketchbar {{ background:{theme.PANEL}; border-bottom:1px solid {theme.BORDER}; }}")
-        h = QHBoxLayout(bar)
-        h.setContentsMargins(6, 4, 6, 4)
-        h.setSpacing(2)
+        outer = QHBoxLayout(bar)
+        outer.setContentsMargins(6, 3, 6, 3)
+        outer.setSpacing(6)
+        from .adaptive import FlowLayout
+        tools = QWidget()                          # wraps onto more rows when the window is narrow
+        flow = FlowLayout(tools, spacing=2, row_spacing=2)
+        sp = tools.sizePolicy()
+        sp.setHeightForWidth(True)
+        tools.setSizePolicy(sp)
+        outer.addWidget(tools, 1)
+
+        def add(w, brk=False):
+            if brk:
+                w.setProperty("break", True)
+            flow.addWidget(w)
+            return w
+
+        def sep(text="│", brk=False):
+            lab = QLabel(text)
+            lab.setObjectName("muted")
+            lab.setContentsMargins(4, 0, 4, 0)
+            return add(lab, brk)
         self.title = QLabel("Sketch")
         self.title.setObjectName("h1")
-        h.addWidget(self.title)
-        h.addSpacing(10)
+        self.title.setContentsMargins(0, 0, 8, 0)
+        add(self.title)
         self.canvas = SketchCanvas()
         self.tool_btns = {}
         self.flyouts = {}
@@ -1765,9 +1784,10 @@ class SketchEditor(QWidget):
         sel.setCheckable(True)
         sel.clicked.connect(lambda: self.canvas.set_tool("select"))
         self.tool_btns["select"] = sel
-        h.addWidget(sel)
+        add(sel)
         for group, glyph, keys in self.FLYOUTS:
-            h.addWidget(self._flyout(group, glyph, keys))
+            add(self._flyout(group, glyph, keys))
+        first = True
         for key, glyph, label, sc in self.TOOLS:
             if key == "select":
                 continue
@@ -1777,17 +1797,19 @@ class SketchEditor(QWidget):
             b.setCheckable(True)
             b.clicked.connect(lambda _=False, k=key: self.canvas.set_tool(k))
             self.tool_btns[key] = b
-            h.addWidget(b)
+            add(b, brk=first)                       # second row: annotate / edit tools, modify, relations
+            first = False
+        sep()
+        sep("Modify", False).setContentsMargins(0, 0, 2, 0)
         for key, glyph, label in self.ACTIONS:
             b = QToolButton()
             b.setText(glyph)
             b.setToolTip(label)
             b.setFixedWidth(32)
             b.clicked.connect(lambda _=False, k=key: self.canvas.action(k))
-            h.addWidget(b)
-        sep = QLabel("│")
-        sep.setObjectName("muted")
-        h.addWidget(sep)
+            add(b)
+        sep()
+        sep("Relations", False).setContentsMargins(0, 0, 2, 0)
         self.rel_btns = {}
         for key, glyph, label in self.RELATIONS:
             b = QToolButton()
@@ -1796,12 +1818,11 @@ class SketchEditor(QWidget):
             b.setFixedWidth(32)
             b.clicked.connect(lambda _=False, k=key: self.canvas.apply_relation(k))
             self.rel_btns[key] = b
-            h.addWidget(b)
-        sep2 = QLabel("│")
-        sep2.setObjectName("muted")
-        h.addWidget(sep2)
-        h.addWidget(self._snap_button())
-        h.addStretch(1)
+            add(b)
+        sep()
+        add(self._snap_button())
+        right = QHBoxLayout()                       # always visible, top right
+        right.setSpacing(2)
         undo = QToolButton()
         undo.setText("↶")
         undo.setToolTip("Undo (Ctrl+Z)")
@@ -1810,18 +1831,19 @@ class SketchEditor(QWidget):
         redo.setText("↷")
         redo.setToolTip("Redo (Ctrl+Y)")
         redo.clicked.connect(self.canvas.redo)
-        h.addWidget(undo)
-        h.addWidget(redo)
+        right.addWidget(undo)
+        right.addWidget(redo)
         cancel = QPushButton("Cancel")
         cancel.clicked.connect(self.cancelled.emit)
         done = QPushButton("✓  Finish sketch")
         done.setObjectName("primary")
         done.clicked.connect(self._finish)
-        h.addSpacing(8)
-        h.addWidget(cancel)
-        h.addWidget(done)
-        from .adaptive import h_scroller
-        lay.addWidget(h_scroller(bar))
+        right.addSpacing(8)
+        right.addWidget(cancel)
+        right.addWidget(done)
+        outer.addLayout(right)
+        outer.setAlignment(right, Qt.AlignTop)
+        lay.addWidget(bar)
         self.msg = QLabel("")
         self.msg.setStyleSheet(f"color:{theme.ACCENT_LINE}; padding:3px 10px; background:{theme.BG};")
         lay.addWidget(self.msg)

@@ -169,3 +169,19 @@ def test_ribbon_pages_filled_later_get_their_height(qapp):
         assert sa.height() >= page.sizeHint().height() and sa.height() >= first_h - 2, tb.tabText(i)
     w.doc.dirty = False
     w.close()
+
+
+def test_sketch_toolbar_wraps_instead_of_scrolling(qapp):
+    """The sketch toolbar wraps onto more rows when the window is narrow — every tool stays reachable."""
+    from PySide6.QtWidgets import QWidget
+    from daedalus.ui.sketcher import SketchEditor
+    e = SketchEditor()
+    bar = [w for w in e.findChildren(QWidget) if w.objectName() == "sketchbar"][0]
+    tools = bar.layout().itemAt(0).widget()
+    wide, narrow = tools.layout().heightForWidth(2400), tools.layout().heightForWidth(500)
+    assert narrow > wide * 2                                  # more rows when narrow
+    tools.resize(500, narrow)
+    tools.layout().setGeometry(tools.rect())
+    for b in list(e.tool_btns.values()) + list(e.rel_btns.values()):
+        g = b.geometry()
+        assert g.right() <= 500 and g.bottom() <= narrow, b.text()
