@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.15</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.16</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -416,6 +416,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.16** | Chat: Shift-click anything in DIMS (rows and labels resolve to part / project / vendor / bin / order links, otherwise quoted) · team-server chat timestamp fixes · Projects: one table per project with type header rows |
 | **3.0.15** | DIMS team chat with Shift-click item links (rarity colours, live hover card, click to open) · Production Dates card with typed dates (11/20, fri, +10, 2w) and calendar · Projects grouped into MFG / Purchased / Fasteners / Other |
 | **3.0.14** | Ribbon: tabs filled on first show start at the Model tab's height with an icon + label floor, re-measured after styling (Windows showed clipped / empty strips) |
 | **3.0.13** | DIMS Part Numbers merged into Part Profile: + New Part reserves the next number for a prefix and opens a blank profile inline; registry as a Part Numbers list beside Parts; Add Part removed from the Parts tab · Shop quote cost labels |
