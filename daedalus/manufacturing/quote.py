@@ -325,8 +325,8 @@ def text(q: dict) -> str:
     else:
         rows += [("Thickness", f"{q['thickness']:.2f} mm"), ("Cut length", f"{q['cut_length']:.0f} mm"),
                  ("Pierces", q["pierces"]), ("Time per part", f"{q['per_part_min']:.2f} min")]
-    rows += [("Batch machine time", f"{q['batch_hr']:.2f} h"), ("Machine", f"${q['machine_cost']:.2f}"),
-             ("Material", f"${q['material_cost']:.2f}"), ("Margin", f"${q['margin']:.2f}"),
+    rows += [("Batch machine time", f"{q['batch_hr']:.2f} h"), ("Machine cost", f"${q['machine_cost']:.2f}"),
+             ("Material cost", f"${q['material_cost']:.2f}"), ("Margin", f"${q['margin']:.2f}"),
              ("TOTAL", f"${q['total']:.2f}"), ("Per part", f"${q['unit']:.2f}")]
     w = max(len(str(k)) for k, _ in rows)
     return "\n".join(f"{str(k).ljust(w)}  {v}" for k, v in rows)
