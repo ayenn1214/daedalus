@@ -140,8 +140,8 @@ def match_part(inv: Inventory, t: dict):
             if norm_len(p.get("length")) != norm_len(t.get("length")):
                 continue
             return p
-    name = (t.get("name") or "").strip().lower()
-    return next((p for p in inv.parts if (p.get("name") or "").strip().lower() == name and p.get("type") == typ), None)
+    from .model import find_part
+    return find_part(inv.parts, t.get("name"), t.get("partNumber") or "", typ)
 
 
 def send_bom(inv: Inventory, doc, project: str, units: float | None = None, weldments: bool = True) -> dict:

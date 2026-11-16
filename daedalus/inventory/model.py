@@ -54,6 +54,40 @@ KEYS = {"parts": "parts", "transactions": "transactions", "projects": "projects"
         "client-orders": "clientOrders", "part-orders": "partOrders", "part-numbers": "partNumbers"}
 
 
+def _pn(v) -> str:
+    return str(v or "").strip().lower()
+
+
+def pn_differs(a, b) -> bool:
+    """Two part numbers that are both filled in and not the same: the parts are different even if their names match
+    (mirror / left-right parts, two weldments with the same description)."""
+    a, b = _pn(a), _pn(b)
+    return bool(a and b and a != b)
+
+
+def same_part(p, name, part_number="", typ=None) -> bool:
+    """Is `p` the part described by name / part number? A matching part number decides; otherwise the same name
+    (and type, if given) — unless both have part numbers and they differ."""
+    pn = _pn(part_number)
+    if pn and _pn(p.get("partNumber")) == pn:
+        return True
+    if (p.get("name") or "").strip().lower() != str(name or "").strip().lower():
+        return False
+    if typ is not None and p.get("type") != typ:
+        return False
+    return not pn_differs(p.get("partNumber"), part_number)
+
+
+def find_part(parts, name, part_number="", typ=None):
+    """Part-number match first, then a name match that doesn't conflict on part number."""
+    pn = _pn(part_number)
+    if pn:
+        hit = next((p for p in parts if _pn(p.get("partNumber")) == pn), None)
+        if hit:
+            return hit
+    return next((p for p in parts if same_part(p, name, part_number, typ)), None)
+
+
 def uid() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=8)) + \
         format(int(time.time() * 1000), "x")[-4:]
@@ -317,7 +351,8 @@ class Inventory:
                 continue
             pn, pnum = (p.get("name") or "").strip().lower(), (p.get("partNumber") or "").strip().lower()
             matches = [q for q in self.parts if q["id"] != p["id"] and q["id"] not in seen and
-                       ((pn and (q.get("name") or "").strip().lower() == pn) or
+                       ((pn and (q.get("name") or "").strip().lower() == pn
+                         and not pn_differs(q.get("partNumber"), pnum)) or
                         (pnum and (q.get("partNumber") or "").strip().lower() == pnum))]
             if matches:
                 g = [p, *matches]
@@ -814,7 +849,7 @@ class Inventory:
             if not name:
                 continue
             typ = self.norm_type(g(r, "Type", "type"))
-            ex = next((p for p in self.parts if p["name"].lower() == name.lower() and p.get("type") == typ), None)
+            ex = find_part(self.parts, name, str(g(r, "Part Number", "partNumber")), typ)
             e = ex or {}
             sups = []
             for i, L in enumerate("ABC"):
@@ -884,7 +919,7 @@ class Inventory:
             if not name:
                 continue
             typ = self.norm_type(g(r, "Type", "type"))
-            p = next((x for x in self.parts if x["name"].lower() == name.lower() and x.get("type") == typ), None)
+            p = find_part(self.parts, name, str(g(r, "Part Number", "partNumber")), typ)
             if not p:
                 continue
             for col, key in (("Revision", "revision"), ("CAD File", "cadFile")):
@@ -904,8 +939,10 @@ class Inventory:
                     m = re.match(r"^(.+?)\s+x(\d+(?:\.\d+)?)$", entry.strip(), re.I)
                     if not m:
                         continue
-                    cp = next((x for x in self.parts if x["name"].lower() == m.group(1).strip().lower()
-                               and x["id"] != p["id"]), None)
+                    ref = m.group(1).strip()          # a part number or a name
+                    cp = next((x for x in self.parts if x["id"] != p["id"] and _pn(x.get("partNumber")) == _pn(ref)),
+                              None) or next((x for x in self.parts if x["id"] != p["id"] and
+                                             x["name"].lower() == ref.lower()), None)
                     if cp:
                         cs.append({"partId": cp["id"], "qty": num(m.group(2))})
                 if cs:

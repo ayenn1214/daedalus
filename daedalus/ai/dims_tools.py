@@ -877,8 +877,7 @@ class DimsToolExecutor:
         if not p.get("name"):
             raise ValueError("Give the part a name (or a fastener size, standard and head style)")
         if not allow:
-            dup = [x for x in inv.parts if x["name"].lower() == p["name"].lower() or
-                   (p.get("partNumber") and (x.get("partNumber") or "").lower() == p["partNumber"].lower())]
+            dup = [x for x in inv.parts if M.same_part(x, p["name"], p.get("partNumber") or "")]
             if dup:
                 return _j({"ok": False, "reason": "a similar part exists — ask the user, then pass "
                                                   "allow_duplicate=true or update the existing part",

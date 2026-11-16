@@ -111,7 +111,9 @@ def _match(inv, r):
         if p:
             return p, "part number"
     for nm in {r["description"].strip().lower(), _base(r["file"]).strip().lower()}:
-        p = next((x for x in inv.parts if (x.get("name") or "").strip().lower() == nm), None)
+        from ..inventory.model import pn_differs
+        p = next((x for x in inv.parts if (x.get("name") or "").strip().lower() == nm
+                  and not pn_differs(x.get("partNumber"), r["part_no"])), None)
         if p:
             return p, "name"
     return None, ""
