@@ -152,3 +152,20 @@ def test_main_window_all_modules_unchanged(qapp):
     assert {"mates", "physics", "studies", "cam"} <= set(w.sidebar.keys)
     w.doc.dirty = False
     w.close()
+
+
+def test_ribbon_pages_filled_later_get_their_height(qapp):
+    """Pages other than the first are filled when first shown — their scroller must grow to fit the buttons
+    (the Surfaces tab used to show an empty strip)."""
+    from daedalus.ui.main_window import MainWindow
+    w = MainWindow()
+    tb = w.toolbelt
+    first_h = w._ribbon_pages[0][0].height()
+    for i in range(1, tb.count()):
+        tb.setCurrentIndex(i)
+        qapp.processEvents()
+        sa, page = w._ribbon_pages[i]
+        assert page._filled and page._buttons, tb.tabText(i)
+        assert sa.height() >= page.sizeHint().height() and sa.height() >= first_h - 2, tb.tabText(i)
+    w.doc.dirty = False
+    w.close()

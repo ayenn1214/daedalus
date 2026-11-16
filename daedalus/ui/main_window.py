@@ -635,6 +635,8 @@ class MainWindow(QMainWindow):
                 page = self._ribbon_pages[i][1]
                 if not page._filled:
                     fill(page)
+                    sa = self._ribbon_pages[i][0]       # its height was taken while it was still empty
+                    sa.setFixedHeight(max(sa.height(), page.sizeHint().height() + 6))
                     ad = self._adaptive[i]
                     ad.level = -1
                     ad.fit()
