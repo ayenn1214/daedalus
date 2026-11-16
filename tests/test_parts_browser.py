@@ -86,6 +86,19 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     assert ev.tabs.currentIndex() == 0                                     # click loads, stays on the list
     t.cellDoubleClicked.emit(r, 2)
     assert ev.tabs.currentWidget() is br.profile_page                      # double-click opens the profile tab
+    pk = br.picker                                                         # Part Profile: compact list on the left
+    assert [pk.horizontalHeaderItem(i).text() for i in range(4)] == ["Part No.", "Description", "Project", "Used In"]
+    prow = {pk.item(i, 0).text(): (pk.item(i, 1).text(), pk.item(i, 3).text()) for i in range(pk.rowCount())}
+    assert prow["M10-0005"] == ("Laser", "M20-0001") and prow["M20-0001"][0] == "WLDMT"
+    assert pk.currentRow() == r
+    w_row = next(i for i in range(pk.rowCount()) if pk.item(i, 0).text() == "M20-0001")
+    pk.setCurrentCell(w_row, 1)
+    assert page.parts_sel == "w" and br.editor.part["id"] == "w" and t.currentRow() == w_row
+    br.find.setText("m10")
+    assert not pk.isRowHidden(r) and pk.isRowHidden(w_row)
+    br.find.clear()
+    pk.setCurrentCell(r, 1)
+    app.processEvents()
     ev.tabs.setCurrentIndex(0)
     br.editor.name.setText("FLAT, TAB, 3/16")
     assert br.dirty()

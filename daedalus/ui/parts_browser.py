@@ -6,7 +6,7 @@ from PySide6.QtCore import QSize, Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractButton, QAbstractSpinBox, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel, QLineEdit,
-    QMessageBox, QPlainTextEdit, QPushButton, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
+    QMessageBox, QPlainTextEdit, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTabWidget, QVBoxLayout,
     QWidget,
 )
 
@@ -72,21 +72,36 @@ class PartsBrowser(QWidget):
         lv.addWidget(self.table, 1)
         lv.addWidget(hint)
         v.addWidget(left, 1)
-        self.profile_page = QWidget()                # the Part Profile tab
-        self.rv = QVBoxLayout(self.profile_page)
-        self.rv.setContentsMargins(14, 10, 14, 14)
+        # the Part Profile tab: a compact part list on the left, the profile on the right
+        self.profile_page = QSplitter(Qt.Horizontal)
+        self.profile_page.setChildrenCollapsible(False)
+        pl = QWidget()
+        plv = QVBoxLayout(pl)
+        plv.setContentsMargins(14, 10, 4, 14)
+        self.find = QLineEdit()
+        self.find.setPlaceholderText("Find part no., description, project…")
+        self.find.setClearButtonEnabled(True)
+        self.find.textChanged.connect(self._filter_picker)
+        plv.addWidget(self.find)
+        self.picker = self._picker(parts)
+        plv.addWidget(self.picker, 1)
+        self.profile_page.addWidget(pl)
+        right = QWidget()
+        self.rv = QVBoxLayout(right)
+        self.rv.setContentsMargins(4, 10, 14, 14)
+        self.profile_page.addWidget(right)
+        self.profile_page.setStretchFactor(0, 2)
+        self.profile_page.setStretchFactor(1, 3)
+        self.profile_page.setSizes(page.mrp_state.get("profile_split") or [520, 860])
+        self.profile_page.splitterMoved.connect(
+            lambda *_: page.mrp_state.__setitem__("profile_split", self.profile_page.sizes()))
         self.setMinimumHeight(640)
         pid = page.parts_sel
         if pid == "__new__":
             self.show_new()
         elif pid and self.inv.part(pid):
             self.show_part(pid)
-            r = next((i for i, p in enumerate(parts) if p["id"] == pid), -1)
-            if r >= 0:
-                self.table.blockSignals(True)
-                self.table.selectRow(r)
-                self.table.blockSignals(False)
-                QTimer.singleShot(0, lambda: self.table.scrollToItem(self.table.item(r, 1)))
+            self._mark_row(pid)
         else:
             self._empty()
 
@@ -158,6 +173,66 @@ class PartsBrowser(QWidget):
         t.cellActivated.connect(lambda r, _c: (self._pick(r), self.open_profile()))
         return t
 
+    def _picker(self, parts):
+        """Part Profile's list: part number, description, project, used in."""
+        inv = self.inv
+        parents: dict = {}
+        for p in inv.parts:
+            for c in p.get("components") or []:
+                parents.setdefault(c.get("partId"), set()).add(p.get("partNumber") or p["name"])
+        hdr = ["Part No.", "Description", "Project", "Used In"]
+        t = QTableWidget(len(parts), len(hdr))
+        t.setHorizontalHeaderLabels(hdr)
+        t.verticalHeader().hide()
+        t.setEditTriggers(QTableWidget.NoEditTriggers)
+        t.setSelectionBehavior(QTableWidget.SelectRows)
+        t.setSelectionMode(QTableWidget.SingleSelection)
+        t.setAlternatingRowColors(True)
+        t.setIconSize(QSize(22, 22))
+        for i, p in enumerate(parts):
+            desc = p.get("description") or p["name"]
+            used = sorted(parents.get(p["id"], ()))
+            for j, val in enumerate((p.get("partNumber") or "", desc, ", ".join(inv.project_chips(p)),
+                                     ", ".join(used[:3]) + ("…" if len(used) > 3 else ""))):
+                it = QTableWidgetItem(val)
+                if j == 1:
+                    it.setIcon(self.page.thumbs.icon_for(p))
+                    it.setToolTip(p["name"] if p.get("description") else inv.spec_line(p))
+                if j == 3 and used:
+                    it.setToolTip("Inside: " + ", ".join(used))
+                if p.get("discontinued"):
+                    it.setForeground(QColor(theme.MUTED))
+                t.setItem(i, j, it)
+        h = t.horizontalHeader()
+        for c in range(len(hdr)):
+            h.setSectionResizeMode(c, QHeaderView.Interactive)
+        t.resizeColumnsToContents()
+        t.setColumnWidth(1, min(max(t.columnWidth(1), 160), 300))
+        h.setStretchLastSection(True)
+        t.verticalHeader().setDefaultSectionSize(30)
+        t.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._pick(r))
+        return t
+
+    def _filter_picker(self, text):
+        q = text.strip().lower()
+        for i in range(self.picker.rowCount()):
+            row = " ".join(self.picker.item(i, j).text() for j in range(self.picker.columnCount())).lower()
+            self.picker.setRowHidden(i, bool(q) and q not in row)
+
+    def _mark_row(self, pid):
+        """Select pid's row in both lists without loading it again."""
+        r = next((i for i, p in enumerate(self.parts) if p["id"] == pid), -1)
+        for t in (self.table, getattr(self, "picker", None)):
+            if t is None:
+                continue
+            t.blockSignals(True)
+            if r >= 0:
+                t.selectRow(r)
+                QTimer.singleShot(0, lambda t=t: t.scrollToItem(t.item(r, 1)))
+            else:
+                t.clearSelection()
+            t.blockSignals(False)
+
     def _select_all(self, on):
         ids = [p["id"] for p in self.parts]
         if on:
@@ -186,13 +261,10 @@ class PartsBrowser(QWidget):
             return
         if self.dirty() and QMessageBox.question(
                 self, "Unsaved changes", "Discard your changes to this part?") != QMessageBox.Yes:
-            r = next((i for i, p in enumerate(self.parts) if p["id"] == self.page.parts_sel), -1)
-            self.table.blockSignals(True)
-            if r >= 0:
-                self.table.selectRow(r)
-            self.table.blockSignals(False)
+            self._mark_row(self.page.parts_sel)
             return
         self.page.parts_sel = pid
+        self._mark_row(pid)
         self.show_part(pid)
 
     # ------------------------------------------------------------ profile
