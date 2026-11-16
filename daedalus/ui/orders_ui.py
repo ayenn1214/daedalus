@@ -182,6 +182,8 @@ class ProductionDialog(QDialog):
                       + (f" · PO {p['poNumber']}" if p.get("poNumber") else "")
                       + f" · {inv.project_name(p.get('projectId')) or '(deleted project)'} ×{M.num(p.get('qty')):g}"
                       + f"<br><span style='color:{theme.MUTED}'>{O.stage(inv, p)} · status {p.get('status')}</span>")
+        head.setProperty("dimsLink", f"production:{p['id']}")
+        head.setToolTip("Shift-click to link this production order in chat")
         v.addWidget(head)
         # 1. fab PO
         v.addWidget(self._title("1 · Fab PO"))

@@ -18,6 +18,7 @@ from ..inventory import model as M
 from ..inventory.store import InventoryStore, get_store
 from . import inventory_dialogs as D
 from . import orders_ui as OU
+from .chat_panel import LINK_ROLE, tag
 from . import theme
 
 LEVEL = {"red": theme.ERROR, "amber": theme.WARN, "green": theme.OK}
@@ -307,6 +308,10 @@ class InventoryPage(QWidget):
                                "trends, orders — or have it record changes for you")
         self.icarus_btn.setCheckable(True)
         h.addWidget(self.icarus_btn)
+        self.chat_btn = _btn("💬 Chat", self.toggle_chat, "Team chat — Shift-click a part, project or order to "
+                             "link it in a message")
+        self.chat_btn.setCheckable(True)
+        h.addWidget(self.chat_btn)
         h.addWidget(_btn("▦", self.table_layout, "Table layout: row and column spacing, grid lines, text size, "
                                                "column widths"))
         h.addWidget(_btn("?", self.guide, "User guide"))
@@ -342,7 +347,17 @@ class InventoryPage(QWidget):
         self.split = QSplitter(Qt.Horizontal)
         self.split.addWidget(self.tabs)
         self.icarus = None
+        from .chat_panel import ChatPanel
+        self.chat = ChatPanel(self)
+        self.chat.setMinimumWidth(300)
+        self.chat.hide()
+        self.chat.open_link.connect(self.open_link)
+        self.chat.unread_changed.connect(self._chat_unread)
+        self.split.addWidget(self.chat)
         lay.addWidget(self.split, 1)
+        QApplication.instance().installEventFilter(self)
+        if self.settings.value("dims/chat_visible", False, type=bool):
+            QTimer.singleShot(0, lambda: self.toggle_chat(True))
         if self.settings.value("dims/icarus_visible", False, type=bool):
             QTimer.singleShot(0, lambda: self.toggle_icarus(True))
         self.toast = Toast(self)
@@ -594,6 +609,7 @@ class InventoryPage(QWidget):
                 (f"  Rev {p['revision']}" if p.get("revision") else "")
             it.setText(off + 0, name)
             it.setIcon(off + 0, self.thumbs.icon_for(p))
+            it.setData(off + 0, LINK_ROLE, ("part", p["id"]))
             f = it.font(off)
             f.setBold(depth == 0)
             f.setStrikeOut(bool(p.get("discontinued")))
@@ -767,6 +783,8 @@ class InventoryPage(QWidget):
                          f"{'s' if s['parts'] != 1 else ''} · {M.fmt_money(s['value'])}"
                          + (f" · <span style='color:{theme.ERROR}'>{s['short']} short</span>" if s["short"] else "")
                          + self._demand_note(pr["id"]) + "</span>")
+            lab.setProperty("dimsLink", f"project:{pr['id']}")
+            lab.setToolTip("Shift-click to link this project in chat")
             hdr.addWidget(lab, 1)
             if pr.get("folderPath"):
                 hdr.addWidget(_small("📁", lambda _=False, f=pr["folderPath"]: _open_link(f), pr["folderPath"], icon="folder"))
@@ -836,6 +854,7 @@ class InventoryPage(QWidget):
             short = max(0.0, need - on_hand)
             name = QTableWidgetItem(("    " * depth) + (f"× {ql}  " if ql is not None else "") + p["name"])
             name.setToolTip(inv.spec_line(p))
+            tag(name, "part", p["id"])
             if depth == 0:
                 a = inv.allocation(p, pr["id"])
                 q = QSpinBox()
@@ -850,7 +869,7 @@ class InventoryPage(QWidget):
             if depth == 0:
                 acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid),
                                    danger=True))
-            tr.append([p.get("partNumber") or "", name, q, _num_item(need),
+            tr.append([tag(QTableWidgetItem(p.get("partNumber") or ""), "part", p["id"]), name, q, _num_item(need),
                        _num_item(on_hand, None) if not emb else _num_item(f"{on_hand:g} *"),
                        _num_item(f"−{short:g}" if short > 0 else "—", theme.ERROR if short > 0 else None,
                                  short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
@@ -972,7 +991,7 @@ class InventoryPage(QWidget):
                         it.setFont(f_)
                     if o.get("status") in O.CLOSED_PROD:
                         it.setForeground(QBrush(QColor(theme.MUTED)))
-                    items.append(it)
+                    items.append(tag(it, "production", o["id"]))
                 rows.append([dot, *items, self.pill(o.get("status") or "Not Started",
                                                     STATUS_COL.get(o.get("status"), theme.MUTED)),
                              _actions(_small("Open", lambda _=False, oo=o: self.open_production(oo)),
@@ -1368,7 +1387,8 @@ class InventoryPage(QWidget):
             if st in (O.DRAFT, O.CANCELLED):
                 acts.append(_small("Delete", lambda _=False, oo=o: self.delete_client_order(oo), danger=True))
             rev = f" · rev {o['rev']}" if o.get("rev") else ""
-            rows.append([o.get("poNumber") or "—", O.order_name(inv, o), lines,
+            rows.append([tag(QTableWidgetItem(o.get("poNumber") or "—"), "order", o["id"]),
+                         tag(QTableWidgetItem(O.order_name(inv, o)), "order", o["id"]), lines,
                          self.pill(st + rev, ORDER_COL.get(st, theme.MUTED)), prod, _actions(*acts)])
         t = self.table(["PO", "Name", "Projects", "Order", "Production", ""], rows, 4)
         t.resizeRowsToContents()
@@ -1490,7 +1510,7 @@ class InventoryPage(QWidget):
                         sl.addWidget(QLabel(txt))
                 if not sups:
                     sl.addWidget(_muted("—", False))
-                name = QTableWidgetItem(M.label(p))
+                name = tag(QTableWidgetItem(M.label(p)), "part", p["id"])
                 name.setToolTip(inv.spec_line(p))
                 is_short, is_low = p["id"] in short, M.num(p.get("currentStock")) <= M.num(p.get("reorderPoint"))
                 why = QTableWidgetItem(" + ".join(x for x, on in (("Short", is_short), ("Below RP", is_low)) if on))
@@ -1934,6 +1954,104 @@ class InventoryPage(QWidget):
             self.icarus.setVisible(on)
         self.icarus_btn.setChecked(on)
         self.settings.setValue("dims/icarus_visible", on)
+
+    # ============================================================== chat
+    def toggle_chat(self, on=None):
+        if on is None:
+            on = not self.chat.isVisible()
+        on = bool(on)
+        self.chat.setVisible(on)
+        if on:
+            sizes = self.split.sizes()
+            if sizes[self.split.indexOf(self.chat)] < 200:
+                tot = sum(sizes) or 1400
+                sizes[self.split.indexOf(self.chat)] = 360
+                sizes[0] = max(400, tot - sum(sizes[1:]))
+                self.split.setSizes(sizes)
+            self.chat.mark_read()
+        self.chat_btn.setChecked(on)
+        self._chat_unread(self.chat.unread)
+        self.settings.setValue("dims/chat_visible", on)
+
+    def _chat_unread(self, n):
+        self.chat_btn.setText(f"💬 Chat · {n}" if n else "💬 Chat")
+        self.chat_btn.setStyleSheet(f"color:{theme.INFO}; font-weight:600;" if n else "")
+
+    def link_to_chat(self, kind, id_) -> bool:
+        if not self.chat.isVisible():
+            self.toggle_chat(True)
+        ok = self.chat.insert_link(kind, id_)
+        if ok:
+            self.toast.show_msg("Linked in chat — add a message and press Enter")
+        return ok
+
+    def open_link(self, kind, id_):
+        """A chat link was clicked: open that record."""
+        inv = self.inv
+        if kind == "part":
+            if inv.part(id_) is None:
+                return self.toast.show_msg("That part no longer exists")
+            self.parts_sel = id_
+            self.goto("parts")
+            br = getattr(self, "_browser", None)
+            if br is not None:
+                br.open_profile()
+        elif kind == "project":
+            self.collapsed.discard(id_)
+            self.goto("projects")
+        elif kind == "production":
+            o = next((x for x in inv.productionOrders if x.get("id") == id_), None)
+            if o is None:
+                return self.toast.show_msg("That production order no longer exists")
+            self.goto("production")
+            self.open_production(o)
+        elif kind == "order":
+            self.goto("clients")
+        elif kind == "vendor":
+            self.goto("vendors")
+        elif kind == "location":
+            self.goto("locations")
+
+    def _link_at(self, obj, pos):
+        """(kind, id) under a Shift-click: a tagged table / tree row, or a widget with a dimsLink property."""
+        from PySide6.QtWidgets import QAbstractItemView
+        view = obj.parent() if obj is not None else None
+        if isinstance(view, QAbstractItemView) and obj is view.viewport():
+            idx = view.indexAt(pos)
+            if idx.isValid():
+                m = idx.model()
+                for c in [idx.column(), *range(m.columnCount(idx.parent()))]:
+                    d = m.index(idx.row(), c, idx.parent()).data(LINK_ROLE)
+                    if d:
+                        return tuple(d)
+            return None
+        w = obj
+        for _ in range(4):
+            if w is None:
+                break
+            d = w.property("dimsLink") if hasattr(w, "property") else None
+            if d:
+                k, _s, i = str(d).partition(":")
+                return k, i
+            w = w.parent()
+        return None
+
+    def _owned(self, w) -> bool:
+        """In DIMS: on this page or in a dialog opened from it."""
+        while w is not None:
+            if w is self:
+                return True
+            w = w.parentWidget()
+        return False
+
+    def eventFilter(self, obj, ev):
+        from PySide6.QtCore import QEvent
+        if ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton and \
+                ev.modifiers() & Qt.ShiftModifier and isinstance(obj, QWidget) and self._owned(obj):
+            link = self._link_at(obj, ev.position().toPoint())
+            if link and self.link_to_chat(*link):
+                return True
+        return super().eventFilter(obj, ev)
 
     def report_bug(self):
         from .bug_report import BugReportDialog

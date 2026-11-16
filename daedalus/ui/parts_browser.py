@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..inventory import model as M
+from .chat_panel import tag
 from . import theme
 
 COLS = ["", "Part No.", "Name", "Description", "Type", "Used In", "Project", "Vendor", "Stock", "Level",
@@ -165,6 +166,7 @@ class PartsBrowser(QWidget):
                     continue
                 it = QTableWidgetItem(val)
                 it.setData(Qt.UserRole, p["id"])
+                tag(it, "part", p["id"])
                 if j == 2:
                     it.setIcon(page.thumbs.icon_for(p))
                     it.setToolTip(inv.spec_line(p))
@@ -216,6 +218,7 @@ class PartsBrowser(QWidget):
             for j, val in enumerate((p.get("partNumber") or "", desc, ", ".join(inv.project_chips(p)),
                                      ", ".join(used[:3]) + ("…" if len(used) > 3 else ""))):
                 it = QTableWidgetItem(val)
+                tag(it, "part", p["id"])
                 if j == 1:
                     it.setIcon(self.page.thumbs.icon_for(p))
                     it.setToolTip(p["name"] if p.get("description") else inv.spec_line(p))
@@ -452,6 +455,9 @@ class PartsBrowser(QWidget):
                         f"{p.get('unit') or ''}" + (f" · {p['description']}" if p.get("description") else "")
                         + "</span>") if p else "<b>New part</b>")
         title.setWordWrap(True)
+        if p:
+            title.setProperty("dimsLink", f"part:{p['id']}")
+            title.setToolTip("Shift-click to link this part in chat")
         head.addWidget(title, 1)
         if p:
             for lab, fn in (("Use", lambda: page.move(p["id"], "usage")),
