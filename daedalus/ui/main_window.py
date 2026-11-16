@@ -669,6 +669,16 @@ class MainWindow(QMainWindow):
         hb.setToolTip("Home — recent files, new, open (Ctrl+Shift+0)")
         hb.clicked.connect(self.show_home)
         h.addWidget(hb)
+        cb = QToolButton()
+        cb.setObjectName("view")
+        cb.setText("Close")
+        if icons.available():
+            cb.setIcon(icons.icon("close"))
+            cb.setIconSize(QSize(14, 14))
+            cb.setToolButtonStyle(Qt.ToolButtonTextBesideIcon)
+        cb.setToolTip("Close this part (Ctrl+W) — asks to save changes, then goes back to Home")
+        cb.clicked.connect(self.close_doc)
+        h.addWidget(cb)
         h.addSpacing(8)
         from PySide6.QtWidgets import QMenu as _QMenu
         vmb = QToolButton()
@@ -1523,6 +1533,7 @@ class MainWindow(QMainWindow):
         rm = f.addMenu("Open Recent")
         rm.aboutToShow.connect(lambda m=rm: self._fill_recent_menu(m))
         self._fill_recent_menu(rm)
+        act(f, "Close part", self.close_doc, "Ctrl+W")
         act(f, "Save", self.save_doc, QKeySequence.Save)
         act(f, "Save As…", lambda: self.save_doc(as_=True), QKeySequence.SaveAs)
         f.addSeparator()
@@ -1879,6 +1890,23 @@ class MainWindow(QMainWindow):
             self.autosave.discard()
             self._update_title()
             self._leave_home()
+
+    def close_doc(self) -> bool:
+        """Close the open part: save / discard changes, then an empty document and the Home screen."""
+        if self._sketching:
+            self.statusBar().showMessage("Finish or cancel the sketch first", 4000)
+            return False
+        if not self._confirm_discard():
+            return False
+        name = self.doc.path.name if self.doc.path else None
+        self._capture_thumb()
+        self._swap_doc(Document())
+        self._recent_key = None
+        self.autosave.discard()
+        self._update_title()
+        self.show_home()
+        self.statusBar().showMessage(f"Closed {name}" if name else "Closed", 4000)
+        return True
 
     def open_doc(self):
         if not self._confirm_discard():

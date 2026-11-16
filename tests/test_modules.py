@@ -185,3 +185,23 @@ def test_sketch_toolbar_wraps_instead_of_scrolling(qapp):
     for b in list(e.tool_btns.values()) + list(e.rel_btns.values()):
         g = b.geometry()
         assert g.right() <= 500 and g.bottom() <= narrow, b.text()
+
+
+def test_close_part(qapp, tmp_path, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+    from daedalus.core.document import Document
+    from daedalus.ui.main_window import MainWindow
+    w = MainWindow()
+    p = tmp_path / "plate.daedalus"
+    d = Document()
+    d.save(p)
+    w.open_path(str(p), confirmed=True)
+    assert w.doc.path is not None
+    w.doc.dirty = True
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Cancel)
+    assert not w.close_doc() and w.doc.path is not None             # cancel keeps it open
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: QMessageBox.Discard)
+    assert w.close_doc()
+    assert w.doc.path is None and not w.doc.features and w.stack.currentIndex() == w.HOME
+    w.doc.dirty = False
+    w.close()
