@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.10</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.11</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -416,6 +416,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.11** | DIMS Part Profile: part list on the left (Part No., Description, Project, Used In, find box), editable profile on the right |
 | **3.0.10** | DIMS: Parts list and Part Profile on separate tabs (double-click / Enter opens the profile) |
 | **3.0.9** | Ribbon tabs (Surfaces, Features, …) no longer show an empty strip · sketch toolbar wraps onto more rows instead of scrolling · Close part (Ctrl+W, Close button by Home) |
 | **3.0.8** | DIMS: Orders (PO, name, projects; confirm → demand + production; logged change orders) · Production inbox (unread per person, fab PO, PO checklist by vendor for fasteners / powder coat / zinc / purchased with Yes / No / Not needed and split POs, finish estimate) · projects describe one unit · Parts + Engineering in one tab with an editable profile pane, components as their own rows, select all · received qty confirmed and locked, changes logged · fastener grade / material / finish · Icarus Kill (Esc, Esc), history repair, orders / production / calculators in DIMS |
