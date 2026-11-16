@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.13</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.14</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -416,6 +416,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.14** | Ribbon: tabs filled on first show start at the Model tab's height with an icon + label floor, re-measured after styling (Windows showed clipped / empty strips) |
 | **3.0.13** | DIMS Part Numbers merged into Part Profile: + New Part reserves the next number for a prefix and opens a blank profile inline; registry as a Part Numbers list beside Parts; Add Part removed from the Parts tab · Shop quote cost labels |
 | **3.0.12** | DIMS Part Profile search filters: text (all words), type, project, vendor, part-number prefix, structure, stock |
 | **3.0.11** | DIMS Part Profile: part list on the left (Part No., Description, Project, Used In, find box), editable profile on the right |
