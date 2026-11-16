@@ -416,8 +416,8 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
-| **3.0.12** | DIMS Part Profile search filters: text (all words), type, project, vendor, part-number prefix, structure, stock |
 | **3.0.13** | DIMS Part Numbers merged into Part Profile: + New Part reserves the next number for a prefix and opens a blank profile inline; registry as a Part Numbers list beside Parts; Add Part removed from the Parts tab · Shop quote cost labels |
+| **3.0.12** | DIMS Part Profile search filters: text (all words), type, project, vendor, part-number prefix, structure, stock |
 | **3.0.11** | DIMS Part Profile: part list on the left (Part No., Description, Project, Used In, find box), editable profile on the right |
 | **3.0.10** | DIMS: Parts list and Part Profile on separate tabs (double-click / Enter opens the profile) |
 | **3.0.9** | Ribbon tabs (Surfaces, Features, …) no longer show an empty strip · sketch toolbar wraps onto more rows instead of scrolling · Close part (Ctrl+W, Close button by Home) |
