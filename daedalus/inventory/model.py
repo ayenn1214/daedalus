@@ -88,6 +88,12 @@ def find_part(parts, name, part_number="", typ=None):
     return next((p for p in parts if same_part(p, name, part_number, typ)), None)
 
 
+def label(p) -> str:
+    """Name for lists: the part number in front when it has one (M10-0005  FLAT, TAB)."""
+    pn = str(p.get("partNumber") or "").strip()
+    return f"{pn}  {p.get('name') or ''}" if pn else (p.get("name") or "")
+
+
 def uid() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=8)) + \
         format(int(time.time() * 1000), "x")[-4:]

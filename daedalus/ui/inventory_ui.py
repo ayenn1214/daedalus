@@ -556,7 +556,7 @@ class InventoryPage(QWidget):
             it = QTreeWidgetItem(parent)
             emb = stock_override is not None
             stock = stock_override if emb else M.num(p.get("currentStock"))
-            name = ("× " + str(qty_label) + "  " if qty_label is not None else "") + p["name"] + \
+            name = ("× " + str(qty_label) + "  " if qty_label is not None else "") + M.label(p) + \
                 ("  (weldment)" if p.get("isWeldment") and p.get("components") else "") + \
                 ("  [std]" if p.get("stdPartId") else "") + \
                 ("  (discontinued)" if p.get("discontinued") else "") + \
@@ -1317,7 +1317,7 @@ class InventoryPage(QWidget):
                         sl.addWidget(QLabel(txt))
                 if not sups:
                     sl.addWidget(_muted("—", False))
-                name = QTableWidgetItem(p["name"])
+                name = QTableWidgetItem(M.label(p))
                 name.setToolTip(inv.spec_line(p))
                 is_short, is_low = p["id"] in short, M.num(p.get("currentStock")) <= M.num(p.get("reorderPoint"))
                 why = QTableWidgetItem(" + ".join(x for x, on in (("Short", is_short), ("Below RP", is_low)) if on))

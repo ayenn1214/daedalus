@@ -36,3 +36,34 @@ def test_import_keeps_both_when_numbers_differ():
     added, updated = inv.import_rows([{"Name": "WLDMT, SCISSOR ASSM (renamed)", "Type": "manufactured",
                                        "Part Number": "M30-0008"}])
     assert added == 0 and updated == 1
+
+
+def test_label_puts_part_number_first():
+    assert M.label(M.new_part(name="FLAT, TAB", partNumber="M10-0005")) == "M10-0005  FLAT, TAB"
+    assert M.label(M.new_part(name="3/8 Nyloc Nut")) == "3/8 Nyloc Nut"
+
+
+def test_parts_and_reorder_show_part_numbers(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QTableWidget, QTreeWidget
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv.parts = [M.new_part(id="t", name="FLAT, TAB", partNumber="M10-0005", type="manufactured",
+                               currentStock=1, reorderPoint=4),
+                    M.new_part(id="n", name="Nut", currentStock=1, reorderPoint=5)]
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.show()
+    texts = set()
+    for key in ("parts", "reorder"):
+        page.goto(key)
+        app.processEvents()
+        w = page.pages[key].widget()
+        for t in w.findChildren(QTreeWidget):
+            texts |= {t.topLevelItem(i).text(0) for i in range(t.topLevelItemCount())}
+        for t in w.findChildren(QTableWidget):
+            texts |= {t.item(r, 1).text() for r in range(t.rowCount()) if t.item(r, 1)}
+    assert "M10-0005  FLAT, TAB" in texts and "Nut" in texts
