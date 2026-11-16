@@ -78,16 +78,26 @@ class PartsBrowser(QWidget):
         pl = QWidget()
         plv = QVBoxLayout(pl)
         plv.setContentsMargins(14, 10, 4, 14)
-        plv.addLayout(self._picker_filters())
+        self.new_bar = QVBoxLayout()                       # + New Part (filled by the engineering view)
+        self.new_bar.setContentsMargins(0, 0, 0, 0)
+        plv.addLayout(self.new_bar)
+        self.left_tabs = QTabWidget()
+        self.left_tabs.setDocumentMode(True)
+        pw = QWidget()
+        pwv = QVBoxLayout(pw)
+        pwv.setContentsMargins(0, 6, 0, 0)
+        pwv.addLayout(self._picker_filters())
         # its own list: every part (the Parts tab's filters don't apply here), by part number
         self.pick_parts = sorted(self.inv.parts, key=lambda p: ((p.get("partNumber") or "~").upper(),
                                                                  p["name"].lower()))
         self.picker = self._picker(self.pick_parts)
-        plv.addWidget(self.picker, 1)
+        pwv.addWidget(self.picker, 1)
         self.pick_count = QLabel()
         self.pick_count.setObjectName("muted")
-        plv.addWidget(self.pick_count)
+        pwv.addWidget(self.pick_count)
         self._filter_picker()
+        self.left_tabs.addTab(pw, "Parts")
+        plv.addWidget(self.left_tabs, 1)
         self.profile_page.addWidget(pl)
         right = QWidget()
         self.rv = QVBoxLayout(right)
@@ -101,12 +111,20 @@ class PartsBrowser(QWidget):
         self.setMinimumHeight(640)
         pid = page.parts_sel
         if pid == "__new__":
-            self.show_new()
+            self.show_new(getattr(page, "_new_preset", None))
         elif pid and self.inv.part(pid):
             self.show_part(pid)
             self._mark_row(pid)
         else:
             self._empty()
+
+    def install_numbers(self, bar, numbers):
+        """Part numbers live with the profile: the + New Part bar on top, the registry as a second list."""
+        self.new_bar.addWidget(bar)
+        self.left_tabs.addTab(numbers, "Part Numbers")
+        st = self.page.mrp_state
+        self.left_tabs.setCurrentIndex(min(st.get("pp_left", 0), self.left_tabs.count() - 1))
+        self.left_tabs.currentChanged.connect(lambda i: st.__setitem__("pp_left", i))
 
     # ------------------------------------------------------------ list
     def _list(self, parts):
@@ -400,7 +418,7 @@ class PartsBrowser(QWidget):
 
     def _empty(self):
         self._clear()
-        lab = QLabel("Pick a part on the Parts tab to see and edit its profile — or + Add Part.")
+        lab = QLabel("Pick a part on the left to see and edit its profile — or + New Part.")
         lab.setObjectName("muted")
         lab.setAlignment(Qt.AlignCenter)
         self.rv.addWidget(lab, 1)
@@ -501,6 +519,7 @@ class PartsBrowser(QWidget):
             msg = f"Added {p['name']}"
         R.sync_assignments(self.inv)
         self.page.parts_sel = p["id"]
+        self.page._new_preset = None
         self.mark_clean()
         self._clean = None                                     # the page rebuilds with the saved values
         self.editor = None

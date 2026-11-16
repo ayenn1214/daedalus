@@ -63,7 +63,7 @@ class EngineeringView(QWidget):
     edit_part = Signal(str)
     new_part = Signal(dict)
 
-    def __init__(self, page, parent=None, parts_widget=None, profile_widget=None):
+    def __init__(self, page, parent=None, parts_widget=None, profile_widget=None, browser=None):
         super().__init__(parent)
         self.page = page
         self.inv = page.inv
@@ -76,8 +76,13 @@ class EngineeringView(QWidget):
             self.tabs.addTab(parts_widget, "Parts")
         if profile_widget is not None:
             self.tabs.addTab(profile_widget, "Part Profile")
-        for name, fn in (("Part Numbers", self.numbers), ("BOM Workbench", self.bom), ("Where Used", self.used),
-                         ("Job Order && Kit", self.job), ("Material Needs", self.materials)):
+        if browser is not None:                      # part numbers merged into the Part Profile tab
+            browser.install_numbers(self.new_part_bar(), self.numbers())
+        tabs = [("BOM Workbench", self.bom), ("Where Used", self.used),
+                ("Job Order && Kit", self.job), ("Material Needs", self.materials)]
+        if browser is None:
+            tabs.insert(0, ("Part Numbers", self.numbers))
+        for name, fn in tabs:
             self.tabs.addTab(fn(), name)
         self.tabs.setCurrentIndex(self.st.get("eng_tab", 0))
         self.tabs.currentChanged.connect(lambda i: self.st.__setitem__("eng_tab", i))
@@ -93,6 +98,47 @@ class EngineeringView(QWidget):
         self.page.commit(msg)
 
     # ------------------------------------------------------------ part numbers
+    def new_part_bar(self):
+        """Pick a prefix → the next number is reserved and a blank profile opens with its type preset."""
+        inv = self.inv
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        pre = QComboBox()
+        pre.addItem("No number (purchased / fastener)", "")
+        for p in R.all_prefixes(inv):
+            lab = R.describe_prefix(inv, p)["label"]
+            pre.addItem(p + (f" — {lab}" if lab else ""), p)
+        pre.setCurrentIndex(max(0, pre.findData(self.st.get("new_prefix", ""))))
+        nxt = QLabel()
+        nxt.setStyleSheet(f"color:{theme.ACCENT_TEXT}; font-weight:600")
+
+        def preview(*_a):
+            try:
+                nxt.setText(R.next_numbers(inv, pre.currentData(), 1)[0] if pre.currentData() else "")
+            except ValueError:
+                nxt.setText("")
+        pre.currentIndexChanged.connect(preview)
+        preview()
+
+        def go():
+            prefix = pre.currentData()
+            self.st["new_prefix"] = prefix
+            if not prefix:
+                return self.page.new_part_from({})
+            try:
+                got = self.reserve(prefix, 1, None, "new part")
+            except Exception as e:  # noqa: BLE001
+                return QMessageBox.warning(self, "Part numbers", str(e))
+            self.create_profile(got[0]["id"])
+        b = _btn("+ New Part", go, "Reserve the next number for this prefix and open a blank profile", primary=True)
+        self.new_btn, self.new_prefix = b, pre
+        h.addWidget(QLabel("New"))
+        h.addWidget(pre, 1)
+        h.addWidget(nxt)
+        h.addWidget(b)
+        return w
+
     def numbers(self):
         w, v = self._page()
         inv = self.inv
@@ -141,12 +187,8 @@ class EngineeringView(QWidget):
         v.addLayout(_hrow(_muted("Numbers are PREFIX-####, counting up from the highest in use for that prefix "
                                  "(released numbers aren't reused). On the team server the database hands them out, "
                                  "so two people never get the same one."), _btn("Prefixes…", self.edit_prefixes)))
-        row = QHBoxLayout()
-        for x in (QLabel("Prefix"), pre, count, proj, note):
-            row.addWidget(x)
-        row.addWidget(nxt, 1)
-        row.addWidget(res)
-        v.addLayout(row)
+        v.addLayout(_hrow(pre, count, nxt, res))                    # two rows: fits the profile side panel
+        v.addLayout(_hrow(note, proj))
         # registry
         fpre = QComboBox()
         fpre.addItem("All prefixes", None)
@@ -203,9 +245,9 @@ class EngineeringView(QWidget):
     def create_profile(self, number):
         pre, _s = R.split_number(number)
         d = R.describe_prefix(self.inv, pre)
-        self.new_part.emit({"partNumber": number, "type": d["type"] or "manufactured",
-                            **({"isAssembly": True} if d["bom"] == "assembly" else
-                               {"isWeldment": True} if d["bom"] == "weldment" else {})})
+        self.page.new_part_from({"partNumber": number, "type": d["type"] or "manufactured",
+                                 **({"isAssembly": True} if d["bom"] == "assembly" else
+                                    {"isWeldment": True} if d["bom"] == "weldment" else {})})
 
     def assign(self, number):
         d = QDialog(self)

@@ -1114,7 +1114,6 @@ class InventoryPage(QWidget):
         row.addWidget(disc)
         row.addWidget(_btn("MFG revisions…", self.revision_check, "Check manufactured parts against their model / "
                                                                   "drawing files for newer revisions"))
-        row.addWidget(_btn("+ Add Part", self.add_part_inline, primary=True))
         v.addLayout(row)
         lst = list(inv.parts)
         if f["type"] != "all":
@@ -1153,18 +1152,20 @@ class InventoryPage(QWidget):
         self._browser = PartsBrowser(self, lst, w)
         QTimer.singleShot(0, lambda: (self.q.setFocus(), self.q.setCursorPosition(len(self.q.text())))
                           if f["q"] else None)
-        ev = EngineeringView(self, parts_widget=self._browser, profile_widget=self._browser.profile_page)
+        ev = EngineeringView(self, parts_widget=self._browser, profile_widget=self._browser.profile_page,
+                            browser=self._browser)
         self._browser.open_profile = lambda: ev.tabs.setCurrentWidget(self._browser.profile_page)
         ev.edit_part.connect(self.edit_part)
         ev.new_part.connect(self.new_part_from)
         return ev
 
-    def add_part_inline(self):
+    def add_part_inline(self, preset=None):
         br = getattr(self, "_browser", None)
         if br is not None and br.dirty() and QMessageBox.question(
                 self, "Unsaved changes", "Discard your changes to the open part?") != QMessageBox.Yes:
             return
         self.parts_sel = "__new__"
+        self._new_preset = preset or None
         if br is not None:
             br._clean = None
         self.refresh_current()
@@ -1833,6 +1834,8 @@ class InventoryPage(QWidget):
         """Add Part, starting from a reserved number (type from its prefix) or as a new line of a BOM."""
         from ..inventory import mrp as R
         parent = preset.pop("_bom_parent", None)
+        if parent is None and self.current_key() == "parts":     # new parts open in the Part Profile editor
+            return self.add_part_inline(preset)
         d = D.PartDialog(self.inv, None, self, preset=preset)
         if not d.exec():
             return

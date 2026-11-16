@@ -132,5 +132,20 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     app.processEvents()
     assert page._browser.editor is not None and page._browser.editor.part is None
     assert page.pages["parts"].widget().tabs.currentWidget() is page._browser.profile_page
+    assert page.pages["parts"].widget().tabs.tabText(2) == "BOM Workbench"      # Part Numbers merged into the profile
+    br = page._browser
+    assert [br.left_tabs.tabText(i) for i in range(br.left_tabs.count())] == ["Parts", "Part Numbers"]
+    eng = page.pages["parts"].widget()
+    eng.new_prefix.setCurrentIndex(eng.new_prefix.findData("M10"))
+    eng.new_btn.click()                                                    # reserve next M10 + open a blank profile
+    app.processEvents()
+    ed = page._browser.editor
+    assert ed.part is None and ed.pn.text().startswith("M10-")
+    num = ed.pn.text()
+    assert any(r["id"] == num and r.get("status") == "reserved" for r in st.inv.partNumbers)
+    ed.name.setText("FLAT, NEW")
+    page._browser._save(ed, None)
+    app.processEvents()
+    assert next(p for p in st.inv.parts if p.get("partNumber") == num)["name"] == "FLAT, NEW"
     page.goto("engineering")
     assert page.current_key() == "parts"

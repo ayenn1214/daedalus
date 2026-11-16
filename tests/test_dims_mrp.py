@@ -216,7 +216,7 @@ def test_screens(tmp_path, monkeypatch):
     eng = page.pages["parts"].widget()
     got = eng.reserve("C20", 2, None, "test")
     assert [r["id"] for r in got] == ["C20-0002", "C20-0003"]
-    page.mrp_state["eng_tab"] = 5                      # Job Order & Kit (Parts 0, Part Profile 1)
+    page.mrp_state["eng_tab"] = 4                      # Job Order & Kit (Parts 0, Part Profile 1)
     page.refresh_current()
     eng = page.pages["parts"].widget()
     eng.log_orders()
