@@ -18,6 +18,23 @@ COLS = ["", "Part No.", "Name", "Description", "Type", "Used In", "Project", "Ve
         "Reorder Pt", "Bin"]
 
 
+def _mark(it, mark, page, main: bool):
+    """A recently updated part: tinted row (stronger until you've opened it), what changed in the tooltip."""
+    if not mark:
+        return
+    e, unseen = mark
+    c = QColor(theme.INFO)
+    c.setAlpha(70 if unseen else 30)
+    it.setBackground(c)
+    if main:
+        it.setToolTip(page.update_tip(e) + ("\n(new to you — open it to clear the highlight)" if unseen else ""))
+        it.setForeground(QColor(theme.INFO))                # the text stays the part's own (search, links)
+        if unseen:
+            f = it.font()
+            f.setBold(True)
+            it.setFont(f)
+
+
 def _fingerprint(w) -> tuple:
     """Current values of every input inside w — to tell whether the editor has unsaved changes."""
     out = []
@@ -143,6 +160,7 @@ class PartsBrowser(QWidget):
         t.setSelectionMode(QTableWidget.SingleSelection)
         t.setAlternatingRowColors(True)
         t.setIconSize(QSize(28, 28))
+        marks = page.update_marks() if hasattr(page, "update_marks") else {}
         for i, p in enumerate(parts):
             cb = QTableWidgetItem()
             cb.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
@@ -181,6 +199,7 @@ class PartsBrowser(QWidget):
                     it.setFont(f)
                 if j == 5 and used:
                     it.setToolTip("Inside: " + ", ".join(sorted(set(used))))
+                _mark(it, marks.get(p["id"]), page, j == 2)
                 t.setItem(i, j, it)
             t.setCellWidget(i, 9, Gauge(inv.stock_ratio(p), inv.level(p)))
         h = t.horizontalHeader()
@@ -212,6 +231,7 @@ class PartsBrowser(QWidget):
         t.setSelectionMode(QTableWidget.SingleSelection)
         t.setAlternatingRowColors(True)
         t.setIconSize(QSize(22, 22))
+        marks = self.page.update_marks() if hasattr(self.page, "update_marks") else {}
         for i, p in enumerate(parts):
             desc = p.get("description") or p["name"]
             used = sorted(parents.get(p["id"], ()))
@@ -226,6 +246,7 @@ class PartsBrowser(QWidget):
                     it.setToolTip("Inside: " + ", ".join(used))
                 if p.get("discontinued"):
                     it.setForeground(QColor(theme.MUTED))
+                _mark(it, marks.get(p["id"]), self.page, j == 1)
                 t.setItem(i, j, it)
         h = t.horizontalHeader()
         for c in range(len(hdr)):
@@ -437,6 +458,8 @@ class PartsBrowser(QWidget):
         self._open(None, preset)
 
     def show_part(self, pid):
+        if hasattr(self.page, "mark_update_seen"):
+            self.page.mark_update_seen(pid)
         self._open(self.inv.part(pid))
 
     def _open(self, p, preset=None):

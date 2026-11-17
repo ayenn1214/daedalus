@@ -86,6 +86,13 @@ class InventoryStore:
     def save(self):
         self.path.parent.mkdir(parents=True, exist_ok=True)
         values = self.inv.dump_values()
+        mine = []
+        try:                                       # part changes made here (vs. the copy we last read / wrote)
+            from . import updates as U
+            before = json.loads((self.base or {}).get("parts") or "[]")
+            mine = U.entries_between(before, self.inv.parts, self.inv.userName or "unknown", self.inv)
+        except Exception:  # noqa: BLE001
+            mine = []
         try:                                       # someone else saved the shared file since we read it: merge
             m = self.path.stat().st_mtime
             if self._mtime is not None and m > self._mtime + 1e-6:
@@ -102,6 +109,12 @@ class InventoryStore:
         tmp.write_text(json.dumps(data, indent=1), encoding="utf-8")
         os.replace(tmp, self.path)
         self._mtime = self.path.stat().st_mtime
+        if mine:
+            try:
+                from . import updates as U
+                U.append(self, mine)
+            except OSError:
+                pass
         self.base = values
         for fn in list(self.listeners):
             try:

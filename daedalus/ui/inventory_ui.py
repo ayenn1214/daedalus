@@ -3,6 +3,7 @@ reorder (incl. project shortages), activity log, import / export)."""
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 import re
 from pathlib import Path
@@ -376,6 +377,7 @@ class InventoryPage(QWidget):
     closed = Signal()
     status = Signal(str)
     _fetched = Signal(object)                 # background team-server check → UI thread
+    _upd_fetched = Signal(object)             # part update history from the team server
     backup_due = Signal(bool)                 # weekly Excel backup reminder on / off
     send_bom_requested = Signal()
     insert_std_requested = Signal(str)        # standard part id → insert into the open model
@@ -2209,10 +2211,166 @@ class InventoryPage(QWidget):
 
     def build_log(self):
         w, v = self._page()
+        tabs = QTabWidget()
+        tabs.setDocumentMode(True)
+        moves = QWidget()
+        mv = QVBoxLayout(moves)
+        mv.setContentsMargins(0, 6, 0, 0)
         e = list(reversed(self.inv.transactions))
-        v.addWidget(self.log_table(e) if e else _muted("No activity logged yet."))
-        v.addStretch(1)
+        mv.addWidget(self.log_table(e) if e else _muted("No activity logged yet."))
+        mv.addStretch(1)
+        tabs.addTab(moves, "Stock moves")
+        tabs.addTab(self._updates_view(), "Updates")
+        tabs.setCurrentIndex(self.mrp_state.get("log_tab", 0))
+        tabs.currentChanged.connect(lambda i: self.mrp_state.__setitem__("log_tab", i))
+        v.addWidget(tabs, 1)
         return w
+
+    # ------------------------------------------------------------ part updates (who changed which profile)
+    UPDATE_DAYS = 7                                    # parts changed this recently are highlighted
+
+    def part_updates(self) -> list:
+        """Newest first. File: read the log; team server: cached, refreshed in the background."""
+        from ..inventory import updates as U
+        if getattr(self.store, "kind", "file") != "supabase":
+            try:
+                return U.read_file(self.store, days=90)
+            except OSError:
+                return []
+        c = getattr(self, "_upd", None)
+        if c is None:
+            c = self._upd = {"at": 0, "entries": [], "busy": False, "error": "", "store": None}
+            self._upd_fetched.connect(self._on_upd)
+        import time as _t
+        if c["store"] is not self.store:
+            c.update(entries=[], at=0, store=self.store, error="")
+        if not c["busy"] and _t.time() - c["at"] > 120 and getattr(self.store, "signed_in", False):
+            c["busy"] = True
+            st, inv = self.store, self.inv
+
+            def work():
+                try:
+                    self._upd_fetched.emit(("ok", st, U.read_server(st, inv, days=90)))
+                except Exception as e:  # noqa: BLE001
+                    self._upd_fetched.emit(("err", st, e))
+            import threading
+            threading.Thread(target=work, daemon=True).start()
+        return c["entries"]
+
+    def _on_upd(self, res):
+        import time as _t
+        kind, st, payload = res
+        c = self._upd
+        c["busy"], c["at"] = False, _t.time()
+        if st is not self.store:
+            return
+        if kind == "err":
+            c["error"] = str(payload)
+            return
+        changed = [e["at"] for e in payload[:1]] != [e["at"] for e in c["entries"][:1]]
+        c["entries"], c["error"] = payload, ""
+        if changed and self.current_key() in ("parts", "log"):
+            self.refresh_current()
+
+    def _seen(self) -> dict:
+        try:
+            return json.loads(self.settings.value("dims/seen_updates") or "{}")
+        except ValueError:
+            return {}
+
+    def mark_update_seen(self, pid):
+        seen = self._seen()
+        last = next((e["at"] for e in self.part_updates() if e["partId"] == pid), None)
+        if last and seen.get(pid, 0) < last:
+            seen[pid] = last
+            cut = M.now_ms() - 120 * 86400_000
+            seen = {k: v for k, v in seen.items() if v > cut}
+            self.settings.setValue("dims/seen_updates", json.dumps(seen))
+
+    def update_marks(self) -> dict:
+        """{partId: (newest entry, not seen yet)} for parts changed in the last UPDATE_DAYS days by someone else
+        (or by you on another PC)."""
+        from ..inventory import updates as U
+        cut = M.now_ms() - self.UPDATE_DAYS * 86400_000
+        me = self.inv.userName or ""
+        seen = self._seen()
+        out = {}
+        for pid, e in U.last_by_part(self.part_updates()).items():
+            if e["at"] < cut or e["action"] == "deleted":
+                continue
+            out[pid] = (e, e["at"] > seen.get(pid, 0) and e.get("by") != me)
+        return out
+
+    @staticmethod
+    def update_tip(e) -> str:
+        when = dt.datetime.fromtimestamp(e["at"] / 1000).strftime("%b %d %H:%M")
+        if e["action"] == "added":
+            return f"Added {when} by {e.get('by') or '?'}"
+        lines = [f"Updated {when} by {e.get('by') or '?'}"] + [
+            f"  {c['label']}: {c['old']} → {c['new']}" for c in e.get("changes", [])[:8]]
+        return "\n".join(lines)
+
+    def _updates_view(self):
+        w = QWidget()
+        v = QVBoxLayout(w)
+        v.setContentsMargins(0, 6, 0, 0)
+        f = self.mrp_state.setdefault("upd_filter", {"days": 30, "q": ""})
+        row = QHBoxLayout()
+        days = QComboBox()
+        for d, lab in ((7, "Last 7 days"), (30, "Last 30 days"), (90, "Last 90 days")):
+            days.addItem(lab, d)
+        days.setCurrentIndex(max(0, days.findData(f["days"])))
+        days.currentIndexChanged.connect(lambda _i: (f.__setitem__("days", days.currentData()),
+                                                     QTimer.singleShot(0, self.refresh_current)))
+        q = QLineEdit(f["q"])
+        q.setPlaceholderText("Filter by part, person or field…")
+        q.textChanged.connect(lambda t: (f.__setitem__("q", t), QTimer.singleShot(400, self._upd_refilter)))
+        self._upd_q = q
+        row.addWidget(days)
+        row.addWidget(q, 1)
+        v.addLayout(row)
+        entries = self.part_updates()
+        cut = M.now_ms() - f["days"] * 86400_000
+        words = f["q"].lower().split()
+        rows = []
+        for e in entries:
+            if e["at"] < cut:
+                continue
+            what = "Added" if e["action"] == "added" else "Deleted" if e["action"] == "deleted" else \
+                "; ".join(f"{c['label']}: {c['old']} → {c['new']}" for c in e.get("changes", []))
+            hay = f"{e.get('pn', '')} {e.get('part', '')} {e.get('by', '')} {what}".lower()
+            if words and not all(x in hay for x in words):
+                continue
+            part = QTableWidgetItem((e.get("pn") + "  " if e.get("pn") else "") + (e.get("part") or ""))
+            tag(part, "part", e["partId"])
+            part.setData(Qt.UserRole, e["partId"])
+            wi = QTableWidgetItem(what)
+            wi.setToolTip(self.update_tip(e))
+            if e["action"] != "updated":
+                wi.setForeground(QBrush(QColor(theme.OK if e["action"] == "added" else theme.ERROR)))
+            rows.append([dt.datetime.fromtimestamp(e["at"] / 1000).strftime("%Y-%m-%d %H:%M"), part,
+                         e.get("by") or "", wi])
+        err = (getattr(self, "_upd", None) or {}).get("error") if getattr(self.store, "kind", "") == "supabase" else ""
+        if rows:
+            t = self.table(["When", "Part", "By", "What changed"], rows, 3)
+            t.cellDoubleClicked.connect(lambda r, _c, t=t: self.open_link("part", t.item(r, 1).data(Qt.UserRole)))
+            v.addWidget(t, 1)
+        else:
+            busy = (getattr(self, "_upd", None) or {}).get("busy")
+            v.addWidget(_muted(err or ("Loading the update history…" if busy else
+                                       "No part profile changes in this period.")))
+        v.addWidget(_muted("Changes to part profiles (stock moves are under Stock moves). Double-click to open the "
+                           "part. Parts changed in the last 7 days are highlighted in Parts until you open them."))
+        v.addStretch(0)
+        return w
+
+    def _upd_refilter(self):
+        if getattr(self, "_upd_q", None) is not None and self.current_key() == "log":
+            pos = self._upd_q.cursorPosition()
+            self.refresh_current()
+            if getattr(self, "_upd_q", None) is not None:
+                self._upd_q.setFocus()
+                self._upd_q.setCursorPosition(pos)
 
     # ========================================================= import/export
     def build_sync(self):
