@@ -7,7 +7,7 @@ import os
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSettings, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -54,6 +54,37 @@ def _small(text, fn, tip="", danger=False, icon=None):
         b.setToolTip(tip)
     if danger:
         b.setStyleSheet(f"color:{theme.ERROR}")
+    return b
+
+
+ROW_ACT = {   # row action → (icon, fallback glyph, tooltip)
+    "use": ("minus-circle", "−", "Use — take stock out"),
+    "receive": ("plus-circle", "+", "Receive — add stock"),
+    "edit": ("pencil-simple", "✎", "Edit part"),
+    "unassign": ("link-break", "✕", "Unassign from this project"),
+    "profile": ("identification-card", "ⓘ", "Profile — everything about this part"),
+    "history": ("clock-counter-clockwise", "⟲", "History — stock moves and changes"),
+}
+
+
+def _ibtn(kind, fn, danger=False):
+    """Compact icon button for table rows; the tooltip says what it does."""
+    from . import icons
+    ico, glyph, tip = ROW_ACT[kind]
+    b = QToolButton()
+    b.setAutoRaise(True)
+    b.setToolTip(tip)
+    b.setAccessibleName(tip.split(" — ")[0])
+    i = icons.icon(ico, theme.ERROR if danger else None) if icons.available() else None
+    if i is not None and not i.isNull():
+        b.setIcon(i)
+        b.setIconSize(QSize(18, 18))
+    else:
+        b.setText(glyph)
+        if danger:
+            b.setStyleSheet(f"color:{theme.ERROR}")
+    b.setFixedSize(28, 28)
+    b.clicked.connect(fn)
     return b
 
 
@@ -641,11 +672,11 @@ class InventoryPage(QWidget):
                 it.setCheckState(0, Qt.Checked if p["id"] in self.sel_parts else Qt.Unchecked)
             t.setItemWidget(it, off + 5, Gauge(inv.stock_ratio(p, stock), inv.level(p, stock)))
             if actions:
-                btns = [_small("Profile", lambda _=False, i=p["id"]: self.profile(i), "Everything about this part"),
-                        _small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
-                        _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
-                        _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i)),
-                        _small("History", lambda _=False, i=p["id"]: D.HistoryDialog(self.inv, i, self).exec())]
+                btns = [_ibtn("profile", lambda _=False, i=p["id"]: self.profile(i)),
+                        _ibtn("use", lambda _=False, i=p["id"]: self.move(i, "usage")),
+                        _ibtn("receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
+                        _ibtn("edit", lambda _=False, i=p["id"]: self.edit_part(i)),
+                        _ibtn("history", lambda _=False, i=p["id"]: D.HistoryDialog(self.inv, i, self).exec())]
                 if p.get("drawingUrl"):
                     btns.append(_small("📄", lambda _=False, u=p["drawingUrl"]: _open_link(u), "Open drawing", icon="file"))
                 if p.get("stdPartId"):
@@ -772,6 +803,9 @@ class InventoryPage(QWidget):
                              "unit — demand comes from confirmed orders (Orders tab). Edit Qty/Unit right in the "
                              "table."), 1)
         row.addWidget(_btn("Send BOM from design…", self.send_bom_requested.emit))
+        all_shut = bool(inv.active_projects()) and all(pr["id"] in self.collapsed for pr in inv.active_projects())
+        row.addWidget(_btn("Expand all" if all_shut else "Collapse all", lambda: QTimer.singleShot(
+            0, lambda: self.collapse_all(not all_shut)), "Fold or unfold every project"))
         row.addWidget(_btn("Export Projects…", lambda: self.export_projects(),
                            "Excel workbook: summary, BOM by type, build list, purchasing by vendor, MFG list"))
         row.addWidget(_btn("+ Add Project", self.add_project, primary=True))
@@ -979,11 +1013,11 @@ class InventoryPage(QWidget):
         short_c = num_cells(lambda kp, nd, oh, emb: (f"−{nd - oh:g}" if nd > oh else "—",
                                                      theme.ERROR if nd > oh else None, nd > oh))
         cost_c = num_cells(lambda kp, nd, oh, emb: (M.fmt_money(kp.get("unitCost")), None, False))
-        acts = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
-                _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
-                _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i))]
+        acts = [_ibtn("use", lambda _=False, i=p["id"]: self.move(i, "usage")),
+                _ibtn("receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
+                _ibtn("edit", lambda _=False, i=p["id"]: self.edit_part(i))]
         if a:
-            acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid), danger=True))
+            acts.append(_ibtn("unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid), danger=True))
         act_w = QWidget()
         act_w.setObjectName("weldcell")
         act_w.setStyleSheet("QWidget#weldcell { background: transparent; }")
@@ -1058,12 +1092,12 @@ class InventoryPage(QWidget):
                 q.editingFinished.connect(lambda q=q, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, q.value()))
             else:
                 q = "—"
-            acts = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
-                    _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
-                    _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i))]
+            acts = [_ibtn("use", lambda _=False, i=p["id"]: self.move(i, "usage")),
+                    _ibtn("receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
+                    _ibtn("edit", lambda _=False, i=p["id"]: self.edit_part(i))]
             if depth == 0 and inv.allocation(p, pr["id"]):
-                acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid),
-                                   danger=True))
+                acts.append(_ibtn("unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid),
+                                  danger=True))
             tr.append([tag(QTableWidgetItem(p.get("partNumber") or ""), "part", p["id"]), name, q, _num_item(need),
                        _num_item(on_hand, None) if not emb else _num_item(f"{on_hand:g} *"),
                        _num_item(f"−{short:g}" if short > 0 else "—", theme.ERROR if short > 0 else None,
@@ -1224,6 +1258,14 @@ class InventoryPage(QWidget):
         pr.pop("totalQtyNeeded", None)
         self.commit(f"{pr['name']}: old plan of {old} units removed",
                     undo=lambda: (pr.__setitem__("totalQtyNeeded", old), self.commit("Undone")))
+
+    def collapse_all(self, shut: bool):
+        ids = {pr["id"] for pr in self.inv.active_projects()}
+        if shut:
+            self.collapsed |= ids
+        else:
+            self.collapsed -= ids
+        self.refresh_current()
 
     def customize_project(self, pid):
         from .project_custom_ui import ProjectCustomizerDialog

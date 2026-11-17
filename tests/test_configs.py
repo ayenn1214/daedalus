@@ -110,3 +110,29 @@ def test_customizer_and_order_ui(tmp_path, monkeypatch):
     assert any(ln["part"]["id"] == "b1308" for ln in bom.d["tree"])
     bom.close()
     page.close()
+
+
+def test_collapse_all_and_icon_row_actions(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QPushButton, QToolButton
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv, pid, *_ = rfp()
+    inv.find_or_create_project("Other")
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.goto("projects")
+    app.processEvents()
+    w = page.pages["projects"].widget()
+    tips = {b.toolTip() for b in w.findChildren(QToolButton)}
+    assert "Use — take stock out" in tips and "Unassign from this project" in tips
+    page.collapse_all(True)
+    assert page.collapsed == {pr["id"] for pr in inv.active_projects()}
+    w = page.pages["projects"].widget()
+    assert any(b.text() == "Expand all" for b in w.findChildren(QPushButton))
+    page.collapse_all(False)
+    assert not page.collapsed
+    page.close()
