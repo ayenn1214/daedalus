@@ -39,6 +39,18 @@ def main():
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
     _win = {}
+    if "--pdf" in flags:                             # PDF window only (no CAD kernel): python -m daedalus --pdf [file]
+        try:
+            from .ui.crash_ui import install as _crash
+            _crash(lambda: _win.get("w"))
+        except Exception:  # noqa: BLE001
+            pass
+        from .ui import theme as _theme
+        _theme.apply(app)
+        from .ui.pdf_ui import open_pdf
+        w = open_pdf(args[0] if args else None)
+        _win["w"] = w
+        sys.exit(app.exec() if w else 1)
     try:                                              # crash reports: any unhandled error → report + window
         from .ui.crash_ui import install as _crash
         _crash(lambda: _win.get("w"))
@@ -120,7 +132,11 @@ def _auto_update(w):
 
 
 def _startup_lite(w, args):
-    """A 2D file or a .daedalus file on the command line → its drawings."""
+    """A 2D file or a .daedalus file on the command line → its drawings; a PDF → the PDF window."""
+    if args and args[0].lower().endswith(".pdf"):
+        from .ui.pdf_ui import open_pdf
+        open_pdf(args[0], w)
+        return
     if not args or w.drawing_page is None:
         return
     from pathlib import Path

@@ -253,6 +253,17 @@ imports with one click; servers without the tables keep working in the old singl
 - Export to vector PDF, DXF (R12–R2018), SVG, PNG and DWG.
 - Edit DXF, DWG, SVG and HPGL files directly.
 
+### PDF
+- **Open PDFs natively:** File ▸ PDF ▸ Open PDF… (Ctrl+Alt+O), File ▸ Open, drag a PDF in, `python -m daedalus file.pdf`,
+  or the PDF window on its own: `python -m daedalus --pdf [file]` (Start ▸ Daedalus ▸ Daedalus PDF).
+- **Combine:** File ▸ PDF ▸ Combine PDFs…, *Add files…* in the PDF window, or drop PDFs on it — pages go after the selection.
+- **Pages:** drag thumbnails to reorder; rotate, delete, duplicate, insert blank, move up/down, reverse; extract the
+  selected pages or split (every page, every N pages, or by ranges).
+- **Mark up:** text, highlight, box, arrow, line, freehand pen, cover (white box) and signature / image; select to move,
+  Delete to remove, double-click text to edit. Undo / redo for everything.
+- **Save** writes the pages and draws the mark-ups into them, so any viewer shows them. Also find text, go to page,
+  zoom / fit width, print, properties. The original file is only changed when you save over it.
+
 ### Manufacturing
 - **CAM:**
   - 2.5D operations: facing, pockets, profiles, spot, drill and tap.
@@ -349,7 +360,7 @@ Daedalus can act as an add-on to your main CAD program. Start it with **CAD Link
 | Selection | Click part/face/edge (Ctrl toggle, Shift add) · drag left→right window, right→left crossing · Ctrl+Shift+P/F/E/J filter · H hide · Shift+H show all · I isolate · Esc clear |
 | Sketch | S select · L line · R rectangle · C circle · A arc · G slot · O polygon · N spline · P point · D dimension · H/V · X construction · T trim · E extend · Ctrl+Enter finish |
 | 3D sketch | L line · P spline · A arc · Tab next plane · X/Y/Z lock axis · right-click end chain |
-| App | Ctrl+D drawing · Ctrl+I import · Ctrl+E export · Ctrl+L standard parts · Ctrl+Shift+I inventory · Ctrl+Alt+Q quote · Ctrl+Shift+W CAD Link · Ctrl+Shift+K Icarus panel · Ctrl+Shift+H tool hub · Ctrl+Shift+0 Home |
+| App | Ctrl+Alt+O open PDF · Ctrl+D drawing · Ctrl+I import · Ctrl+E export · Ctrl+L standard parts · Ctrl+Shift+I inventory · Ctrl+Alt+Q quote · Ctrl+Shift+W CAD Link · Ctrl+Shift+K Icarus panel · Ctrl+Shift+H tool hub · Ctrl+Shift+0 Home |
 
 View ▸ Mouse ▸ Classic switches to left-drag rotate.
 

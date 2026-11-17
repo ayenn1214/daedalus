@@ -1547,6 +1547,10 @@ class MainWindow(QMainWindow):
         rm = f.addMenu("Open Recent")
         rm.aboutToShow.connect(lambda m=rm: self._fill_recent_menu(m))
         self._fill_recent_menu(rm)
+        pm = f.addMenu("PDF")
+        act(pm, "Open PDF…", lambda: __import__("daedalus.ui.pdf_ui", fromlist=["x"]).open_dialog(self), "Ctrl+Alt+O")
+        act(pm, "Combine PDFs…", lambda: __import__("daedalus.ui.pdf_ui", fromlist=["x"]).combine_dialog(self))
+        act(pm, "New PDF window", lambda: __import__("daedalus.ui.pdf_ui", fromlist=["x"]).open_pdf(None, self))
         act(f, "Close part", self.close_doc, "Ctrl+W")
         act(f, "Save", self.save_doc, QKeySequence.Save)
         act(f, "Save As…", lambda: self.save_doc(as_=True), QKeySequence.SaveAs)
@@ -1929,12 +1933,18 @@ class MainWindow(QMainWindow):
         if not self._confirm_discard():
             return
         path, _ = QFileDialog.getOpenFileName(
-            self, "Open", self._dir(), f"Daedalus part (*{FILE_EXT} *.strata);;" + self.IMPORT_FILTER.split(";;")[0])
+            self, "Open", self._dir(), f"Daedalus part (*{FILE_EXT} *.strata);;" + self.IMPORT_FILTER.split(";;")[0]
+            + ";;PDF (*.pdf)")
         if path:
             self.open_path(path, confirmed=True)
 
     def open_path(self, path, confirmed=False, show_notes=True):
-        """A .daedalus file opens; any other supported file starts a new document and imports it."""
+        """A .daedalus file opens; any other supported file starts a new document and imports it. PDFs open in
+        their own Daedalus PDF window (the model stays as it is)."""
+        if str(path or "").lower().endswith(".pdf"):
+            from .pdf_ui import open_pdf
+            open_pdf(str(path), self)
+            return
         if not confirmed and not self._confirm_discard():
             return
         if path and not Path(path).exists():
