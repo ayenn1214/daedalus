@@ -445,6 +445,18 @@ class PartDialog(_Base):
                     sp.setVerticalPolicy(_W.QSizePolicy.Preferred
                                          if isinstance(w, (_W.QTextEdit, _W.QPlainTextEdit)) else _W.QSizePolicy.Fixed)
                     w.setSizePolicy(sp)
+        # actions sit right under the last field (the embedded profile adds Revert / Save here too)
+        self.actions_w = QWidget()
+        self.actions = QHBoxLayout(self.actions_w)
+        self.actions.setContentsMargins(0, 10, 0, 4)
+        if part:
+            dl = QPushButton("Delete part")
+            dl.setStyleSheet(f"color:{theme.ERROR}")
+            dl.clicked.connect(self._delete)
+            self.actions.addWidget(dl)
+        self.actions.addStretch(1)
+        self.actions_w.setSizePolicy(_W.QSizePolicy.Preferred, _W.QSizePolicy.Fixed)
+        f.addRow(self.actions_w)
         filler = QWidget()
         filler.setSizePolicy(_W.QSizePolicy.Preferred, _W.QSizePolicy.Expanding)
         f.addRow(filler)
@@ -453,14 +465,6 @@ class PartDialog(_Base):
         sc.setWidget(body)
         self.body_scroll = sc
         self.lay.addWidget(sc)
-        if part:
-            h = QHBoxLayout()
-            dl = QPushButton("Delete part")
-            dl.setStyleSheet(f"color:{theme.ERROR}")
-            dl.clicked.connect(self._delete)
-            h.addWidget(dl)
-            h.addStretch(1)
-            self.lay.addLayout(h)
         self.deleted = False
         self.finish()
         self.type.currentIndexChanged.connect(self._sync)

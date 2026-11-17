@@ -481,16 +481,13 @@ class PartsBrowser(QWidget):
         el = QVBoxLayout(ew)
         el.setContentsMargins(0, 0, 0, 0)
         el.addWidget(ed, 1)
-        bar = QHBoxLayout()
-        bar.addStretch(1)
         rev = QPushButton("Revert")
         rev.clicked.connect(lambda: self.show_part(p["id"]) if p else self._empty())
         save = QPushButton("Save Changes" if p else "Add Part")
         save.setObjectName("primary")
         save.clicked.connect(lambda: self._save(ed, p))
-        bar.addWidget(rev)
-        bar.addWidget(save)
-        el.addLayout(bar)
+        ed.actions.addWidget(rev)                            # right under the last field, beside Delete
+        ed.actions.addWidget(save)
         tabs.addTab(ew, "Profile")
         if p:
             info = profile_tabs(page, p)
