@@ -412,6 +412,22 @@ class PartDialog(_Base):
         if p.get("discontinuedDate"):
             dg.addRow("Since", QLabel(M.fmt_date(p["discontinuedDate"])))
         f.addRow(self.disc_box)
+        # rows keep their natural height; spare height collects below the last row, not between rows
+        from PySide6 import QtWidgets as _W
+        f.setRowWrapPolicy(QFormLayout.DontWrapRows)
+        f.setVerticalSpacing(8)
+        for i in range(f.rowCount()):
+            for role in (QFormLayout.LabelRole, QFormLayout.FieldRole, QFormLayout.SpanningRole):
+                it = f.itemAt(i, role)
+                w = it.widget() if it is not None else None
+                if w is not None:
+                    sp = w.sizePolicy()
+                    sp.setVerticalPolicy(_W.QSizePolicy.Preferred
+                                         if isinstance(w, (_W.QTextEdit, _W.QPlainTextEdit)) else _W.QSizePolicy.Fixed)
+                    w.setSizePolicy(sp)
+        filler = QWidget()
+        filler.setSizePolicy(_W.QSizePolicy.Preferred, _W.QSizePolicy.Expanding)
+        f.addRow(filler)
         sc = QScrollArea()
         sc.setWidgetResizable(True)
         sc.setWidget(body)
