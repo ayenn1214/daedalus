@@ -92,7 +92,9 @@ class EngineeringView(QWidget):
                 ("Job Order && Kit", self.job), ("Material Needs", self.materials)]
         if browser is None:
             tabs.insert(0, ("Part Numbers", self.numbers))
+        self._fns = {}
         for name, fn in tabs:
+            self._fns[self.tabs.count()] = fn
             self.tabs.addTab(fn(), name)
         self.tabs.setCurrentIndex(self.st.get("eng_tab", 0))
         self.tabs.currentChanged.connect(lambda i: self.st.__setitem__("eng_tab", i))
@@ -103,6 +105,32 @@ class EngineeringView(QWidget):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(4, 8, 4, 4)
         return w, lay
+
+    def refresh_tab(self):
+        """Rebuild just the visible engineering tab (Build, pickers …) — after the click that asked for it, and
+        without touching the Part Profile editor (its unsaved edits would otherwise block a full page rebuild)."""
+        QTimer.singleShot(0, self._refresh_tab)
+
+    def _refresh_tab(self):
+        try:
+            i = self.tabs.currentIndex()
+        except RuntimeError:                         # the page was rebuilt meanwhile
+            return
+        fn = self._fns.get(i)
+        if fn is None:
+            return self.page.refresh_current()
+        old = self.tabs.widget(i)
+        label = self.tabs.tabText(i)
+        new = fn()
+        from . import table_prefs as TP
+        TP.apply_all(new, self.page.settings)
+        self.tabs.blockSignals(True)
+        self.tabs.removeTab(i)
+        self.tabs.insertTab(i, new, label)
+        self.tabs.setCurrentIndex(i)
+        self.tabs.blockSignals(False)
+        if old is not None:
+            old.deleteLater()
 
     def _commit(self, msg):
         self.page.commit(msg)
@@ -296,11 +324,11 @@ class EngineeringView(QWidget):
         inv = self.inv
         pk = PartPicker(inv, lambda p: p.get("type") == "manufactured" or R.has_bom(p), w, "— pick an assembly —")
         pk.set_part(self.st.get("bom_part"))
-        pk.activated.connect(lambda _i: (self.st.__setitem__("bom_part", pk.part_id()), self.page.refresh_current()))
+        pk.activated.connect(lambda _i: (self.st.__setitem__("bom_part", pk.part_id()), self.refresh_tab()))
         levels = QComboBox()
         levels.addItems(["1 level", "All levels"])
         levels.setCurrentIndex(self.st.get("bom_levels", 0))
-        levels.currentIndexChanged.connect(lambda i: (self.st.__setitem__("bom_levels", i), self.page.refresh_current()))
+        levels.currentIndexChanged.connect(lambda i: (self.st.__setitem__("bom_levels", i), self.refresh_tab()))
         v.addLayout(_hrow(_muted("Pick an assembly or fabricated part and build its bill of materials from parts that "
                                  "have profiles. Weldment = parts welded in (not stocked separately); assembly = a kit "
                                  "of stocked parts."), QLabel("Assembly"), pk, levels))
@@ -393,7 +421,7 @@ class EngineeringView(QWidget):
         inv = self.inv
         pk = PartPicker(inv, None, w)
         pk.set_part(self.st.get("wu_part"))
-        pk.activated.connect(lambda _i: (self.st.__setitem__("wu_part", pk.part_id()), self.page.refresh_current()))
+        pk.activated.connect(lambda _i: (self.st.__setitem__("wu_part", pk.part_id()), self.refresh_tab()))
         v.addLayout(_hrow(_muted("Where a part belongs: the assemblies it goes into and the projects that need it. "
                                  "Shared = used by more than one assembly or project."), pk))
         pid = self.st.get("wu_part")
@@ -417,7 +445,7 @@ class EngineeringView(QWidget):
         for i, r in enumerate(sh):
             t.item(i, 0).setData(Qt.UserRole + 1, r["id"])
         t.cellDoubleClicked.connect(lambda r_, _c: (self.st.__setitem__("wu_part", t.item(r_, 0).data(Qt.UserRole + 1)),
-                                                    QTimer.singleShot(0, self.page.refresh_current)))
+                                                    self.refresh_tab()))
         v.addWidget(t if sh else _muted("No part is used in more than one place yet."), 1)
         return w
 
@@ -432,7 +460,7 @@ class EngineeringView(QWidget):
         modes.addItem("Single part / assembly", "part")
         modes.setCurrentIndex(max(0, modes.findData(mode)))
         modes.currentIndexChanged.connect(lambda _i: (st.__setitem__("job_mode", modes.currentData()),
-                                                      QTimer.singleShot(0, self.page.refresh_current)))
+                                                      self.refresh_tab()))
         net = QCheckBox("Use stock on hand")
         net.setChecked(st.get("job_net", True))
         kit_mfg = QCheckBox("MFG parts in the kit")
@@ -440,7 +468,7 @@ class EngineeringView(QWidget):
                            "from their bins too")
         kit_mfg.setChecked(bool(st.get("job_kit_mfg")))
         kit_mfg.toggled.connect(lambda on: (st.__setitem__("job_kit_mfg", on),
-                                            QTimer.singleShot(0, self.page.refresh_current)))
+                                            self.refresh_tab()))
         qty = QDoubleSpinBox()
         qty.setRange(0.001, 100000)
         qty.setDecimals(0)
@@ -458,12 +486,12 @@ class EngineeringView(QWidget):
             qty.setValue(st.get("job_units") if st.get("job_units_for") == proj.currentData()
                          and st.get("job_units") else units_default)
             proj.currentIndexChanged.connect(lambda _i: (st.update(job_project=proj.currentData(), job_units=None),
-                                                         QTimer.singleShot(0, self.page.refresh_current)))
+                                                         self.refresh_tab()))
 
             def go():
                 st.update(job_project=proj.currentData(), job_units=qty.value(), job_units_for=proj.currentData(),
                           job_net=net.isChecked())
-                self.page.refresh_current()
+                self.refresh_tab()
             v.addLayout(_hrow(QLabel("Build"), modes, proj, QLabel("Units"), qty, net, kit_mfg,
                               _btn("Build", go, primary=True)))
             v.addWidget(_muted("Every part on the project × units: what to order from whom, and the kit to pull from "
@@ -483,7 +511,7 @@ class EngineeringView(QWidget):
             def go():
                 st.update(job_part=pk.part_id(), job_qty=qty.value(), job_net=net.isChecked(),
                           job_project=proj.currentData())
-                self.page.refresh_current()
+                self.refresh_tab()
             v.addLayout(_hrow(QLabel("Build"), modes, pk, QLabel("Qty"), qty, net, proj, kit_mfg,
                               _btn("Build", go, primary=True)))
             v.addWidget(_muted("Explodes the BOM (all levels) and routes every requirement to who supplies it: "
@@ -602,7 +630,7 @@ class EngineeringView(QWidget):
         src.addItem("Active projects × their units", "projects")
         src.setCurrentIndex(max(0, src.findData(self.st.get("mat_src", "orders"))))
         src.currentIndexChanged.connect(lambda _i: (self.st.__setitem__("mat_src", src.currentData()),
-                                                    self.page.refresh_current()))
+                                                    self.refresh_tab()))
         if self.st.get("mat_src", "orders") == "orders":
             dem = R.open_demands(inv)
         else:
@@ -706,6 +734,32 @@ class TimePhasedView(QWidget):
         lay = QVBoxLayout(w)
         lay.setContentsMargins(4, 8, 4, 4)
         return w, lay
+
+    def refresh_tab(self):
+        """Rebuild just the visible engineering tab (Build, pickers …) — after the click that asked for it, and
+        without touching the Part Profile editor (its unsaved edits would otherwise block a full page rebuild)."""
+        QTimer.singleShot(0, self._refresh_tab)
+
+    def _refresh_tab(self):
+        try:
+            i = self.tabs.currentIndex()
+        except RuntimeError:                         # the page was rebuilt meanwhile
+            return
+        fn = self._fns.get(i)
+        if fn is None:
+            return self.page.refresh_current()
+        old = self.tabs.widget(i)
+        label = self.tabs.tabText(i)
+        new = fn()
+        from . import table_prefs as TP
+        TP.apply_all(new, self.page.settings)
+        self.tabs.blockSignals(True)
+        self.tabs.removeTab(i)
+        self.tabs.insertTab(i, new, label)
+        self.tabs.setCurrentIndex(i)
+        self.tabs.blockSignals(False)
+        if old is not None:
+            old.deleteLater()
 
     def incoming(self):
         w, v = self._page()

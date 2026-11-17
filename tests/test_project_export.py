@@ -158,3 +158,36 @@ def test_job_order_and_kit_by_project(tmp_path):
     eng = page.pages["parts"].widget()
     assert any(r["Group"] == "MFG parts" for r in eng._job["kit"])
     page.close()
+
+
+def test_job_build_works_while_a_part_is_open_with_unsaved_edits(tmp_path):
+    """Build rebuilds only the Job tab — an unsaved Part Profile used to block it (nothing happened)."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QDoubleSpinBox, QPushButton
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv, pid = shop()
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.resize(1400, 900)
+    page.show()
+    page.parts_sel = "bolt"
+    page.goto("parts")
+    app.processEvents()
+    page._browser.editor.name.setText("edited, not saved")
+    assert page._browser.dirty()
+    eng = page.pages["parts"].widget()
+    eng.tabs.setCurrentIndex(4)
+    app.processEvents()
+    tab = eng.tabs.currentWidget()
+    tab.findChildren(QDoubleSpinBox)[0].setValue(7)
+    QTest.mouseClick(next(b for b in tab.findChildren(QPushButton) if b.text() == "Build"), Qt.LeftButton)
+    for _ in range(3):
+        app.processEvents()
+    assert eng._job["qty"] == 7 and eng.tabs.currentIndex() == 4
+    assert page._browser.editor.name.text() == "edited, not saved"              # the open edit survives
+    page.close()
