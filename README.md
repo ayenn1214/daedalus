@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.23</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.24</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -432,6 +432,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.24** | DIMS Read drawings… (title block, BOM, revisions and notes from drawing PDFs, matched to parts by part number; pick what goes into the profile) · Projects: Weldments Nested / Flat / Hidden, straight connected tree lines · Chat pops out into its own window (remembered, keep on top, dock back) |
 | **3.0.23** | PDF: open PDFs natively (File ▸ PDF, File ▸ Open, command line, drag-drop, `--pdf` window + Start-menu shortcut) · combine, reorder, rotate, delete, duplicate, blank pages, extract, split · mark-ups (text, highlight, box, arrow, line, pen, cover, signature) saved into the pages · undo, find, zoom, print |
 | **3.0.22** | Crash reports (saved + shown once; Email report, details, copy, Report… pre-filled; hard crashes offered at next start; Help ▸ Crash reports folder…) · DIMS user guide rewritten for every tab, scrollable · Projects: Qty/Unit boxes all the same size, Unit Cost right-aligned |
 | **3.0.21** | Project customizer (pick-one options e.g. 1006 / 1308 / short, add-ons e.g. 4th beam; configurations on orders, production, kits, BOM export, finishing) · Finishing tab: Zinc Plating ($/lb × weight) and Powder Coating (reused quotes), Excel export · Row actions as icons with hover labels · Projects: Collapse / Expand all · Fix: Job Order & Kit Build doing nothing · Part profile spacing · Running app checks for updates every 2 h |
