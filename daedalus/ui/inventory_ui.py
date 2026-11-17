@@ -2533,7 +2533,20 @@ class InventoryPage(QWidget):
         self._table_dlg = d
 
     def guide(self):
-        QMessageBox.information(self, "DIMS", D.GUIDE)
+        """The user guide — scrollable, so it fits on any screen."""
+        from PySide6.QtWidgets import QDialogButtonBox, QTextBrowser
+        d = QDialog(self)
+        d.setWindowTitle("DIMS — user guide")
+        d.resize(720, 760)
+        lay = QVBoxLayout(d)
+        tb = QTextBrowser()
+        tb.setOpenExternalLinks(True)
+        tb.setHtml(D.GUIDE)
+        lay.addWidget(tb)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(d.reject)
+        lay.addWidget(bb)
+        d.exec()
 
     def keyPressEvent(self, e):
         if e.text() == "/" and not isinstance(QApplication.focusWidget(), (QLineEdit,)):

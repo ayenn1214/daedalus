@@ -1064,17 +1064,99 @@ class SendBomDialog(_Base):
             raise ValueError("Enter a project name")
 
 
-GUIDE = """<h3>DIMS — Daedalus Inventory Management System</h3>
-<p><b>Parts</b> — fasteners, purchased and manufactured parts with stock, reorder point/qty, unit cost (CAD/USD),
-up to three suppliers, bin location, drawing link. Fastener names fill in from the spec. Manufactured parts can be
-weldments made of other parts. <b>Use</b> deducts stock, <b>Receive</b> adds it — every move is logged, and the
-toast offers Undo.</p>
-<p><b>Projects</b> — set <i>Total Qty Needed</i> (units to build); each part's qty is per unit, so the totals scale.
-<b>Send BOM</b> (Inventory tab in the toolbelt, or here) turns the open design into a project: library fasteners
-and bearings are matched by spec, modelled parts by part number.</p>
-<p><b>Reorder</b> lists parts at or below their reorder point with a suggested qty, best supplier and cost; place
-part orders (expected date from the vendor's lead time), batch order / receive, and export the list to Excel.
-<b>Shortages</b> adds up demand across all projects. <b>Production</b> schedules builds with fab/finishing
-timelines; <b>Vendors</b> keeps contacts, lead times and an on-time scorecard; <b>Clients</b> tracks orders.</p>
-<p><b>Data</b> lives in one file (Import / Export tab shows where). Put it on a shared drive and point every
-Daedalus at it — changes from other PCs appear within seconds. Import/export the master Excel workbook any time.</p>"""
+GUIDE = """<h2>DIMS — user guide</h2>
+<p>Daedalus Inventory Management System: parts, projects, orders, production and purchasing in one place. Everyone
+on the team server sees the same data; changes from other PCs show up within seconds.</p>
+
+<h3>Moving around</h3>
+<ul>
+<li><b>/</b> jumps to Parts and puts the cursor in search.</li>
+<li><b>Shift-click</b> anything (a part, project, production order, vendor, bin, or any cell) to drop a link to it in
+the chat. Clicking a link in chat opens that record.</li>
+<li>Row icons (hover for the label): <b>use</b>, <b>receive</b>, <b>edit</b>, <b>unassign</b>, <b>profile</b>,
+<b>history</b>. Every stock move is logged, and the toast offers <b>Undo</b>.</li>
+</ul>
+
+<h3>Dashboard</h3>
+<p>Part counts by type, stock value, low stock and recent activity. The red <b>Need Reorder</b> button in the header
+opens Reorder.</p>
+
+<h3>Projects</h3>
+<ul>
+<li>One table per project, split into <b>MFG parts</b>, <b>Purchased parts</b>, <b>Fasteners</b> and <b>Other</b>.
+Edit <b>Qty/Unit</b> in place; totals follow the units to build.</li>
+<li>Weldments show as one row with their parts inside (├─ / └─). <b>▾ / ▸</b> folds one;
+<b>Weldments: nested / flat</b> lists the parts at the top level instead. <b>Collapse all / Expand all</b> folds every
+project.</li>
+<li><b>Customize…</b> adds options: <i>pick-one</i> groups (e.g. length 1006 / 1308 / short) and <i>add-ons</i>
+(e.g. 4th beam). Each choice adds parts per unit. Orders, production, kits, BOM export and finishing all use the
+chosen configuration.</li>
+<li><b>BOM / Export</b>: MFG hierarchy, fasteners, purchased parts and a buy list; copy as a table or export to
+Excel. <b>Export Projects…</b> does several at once.</li>
+<li><b>Send BOM</b> (from the CAD side) turns the open design into a project: library fasteners and bearings are
+matched by spec, modelled parts by part number.</li>
+</ul>
+
+<h3>Orders</h3>
+<p>Client orders: lines are project × qty × configuration. <b>Confirm</b>, then <b>Send to production</b> to
+create the production orders. History shows every change.</p>
+
+<h3>Production</h3>
+<p>One card per production order. Open it for the <b>Dates</b> card (type a date directly: <i>11/20</i>, <i>Nov 20</i>,
+<i>fri</i>, <i>tomorrow</i>, <i>+10</i>, <i>2w</i>), fab and finishing POs by vendor (Yes / No / Not needed, move a line to another vendor to
+split a PO), and progress. <b>+ Add Order</b> makes an internal order without a client.</p>
+
+<h3>Finishing</h3>
+<ul>
+<li><b>Zinc Plating</b>: weight per part × qty × the shared $/lb rate. Type weights in place; they are kept on the
+part. Change the rate at the top (everyone uses the same one).</li>
+<li><b>Powder Coating</b>: priced by quote per part. The last quote is reused; history is kept, and
+<b>Copy quote request</b> lists the parts still needing one.</li>
+<li>Pick a project × units or a production order. Copy or export to Excel in the plater's layout.</li>
+</ul>
+
+<h3>Locations</h3>
+<p>Racks, shelves and bins (with A/B/C sections). <b>Print binning list</b> gives every bin with its parts and
+stock.</p>
+
+<h3>Parts</h3>
+<ul>
+<li>Left: the parts list and <b>Part Numbers</b> (reserve the next number by prefix). Right: the <b>Part
+Profile</b>: stock, reorder point/qty, unit cost (CAD/USD), weight, location, up to three suppliers, drawing link,
+material and finish. Fastener names fill in from the spec.</li>
+<li><b>BOM Workbench</b>: build and edit multi-level BOMs. <b>Where Used</b>: every assembly and project a part
+is in.</li>
+<li><b>Job Order &amp; Kit</b>: pick a project + units (or a single part). You get a combined order by vendor and a
+kit split into <b>Fasteners</b>, <b>Purchased parts</b> (bin items, with bin coverage) and <b>Other</b>; MFG parts
+go in the kit with the toggle.</li>
+<li><b>Material Needs</b>: stock material to buy for the open demand.</li>
+</ul>
+
+<h3>Vendors</h3>
+<p>Contacts, lead times and an on-time scorecard. <b>Import vendors…</b> and <b>Import prices…</b> load them from
+Excel / CSV.</p>
+
+<h3>Reorder</h3>
+<p>Parts at or below their reorder point with a suggested qty, best supplier and cost. Place part orders (the
+expected date comes from the vendor's lead time), batch order / receive, filter by project or vendor. Switch to
+<b>Buy List</b> for a copyable table to paste into an order sheet, or export to Excel (all, or per project).</p>
+
+<h3>Time-Phased · Analytics · Activity Log</h3>
+<ul>
+<li><b>Time-Phased</b>: what's incoming and when, projected stock over time, and the part-order log.</li>
+<li><b>Analytics</b>: usage trends, cost analysis, vendor price comparison, production history, discontinued
+parts.</li>
+<li><b>Activity Log</b>: every stock move and who made it.</li>
+</ul>
+
+<h3>Chat</h3>
+<p>Team chat on the right, shared through the team server. Shift-click to share items (shown in colour by
+status, with a hover card); <b>@name</b> mentions highlight for that person.</p>
+
+<h3>Import / Export &amp; data</h3>
+<p>Data lives on the team server (or one shared file, shown in Import / Export). Import or export the master Excel
+workbook any time; a weekly Excel backup reminder appears when one is due.</p>
+
+<h3>Updates</h3>
+<p>Daedalus checks for a new release at start-up and every 2 hours while open. When one is out, an
+<b>Update</b> button appears at the bottom right.</p>"""
