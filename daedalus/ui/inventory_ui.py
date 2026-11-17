@@ -1587,9 +1587,26 @@ class InventoryPage(QWidget):
             row.addWidget(_muted(f"{len(lst)} of {len(all_low)} parts", False), 1)
             row.addWidget(_btn("Export All (per project)", self.export_reorder_by_project))
             row.addWidget(_btn("Export List (.xlsx)", self.export_reorder))
-            row.addWidget(_btn("Buy List", self.buy_list, "Copyable buy list — vendor, part no., vendor PN, spec, "
-                               "qty, price, links — paste into Excel, an email or a PO", primary=True))
             v.addLayout(row)
+            view = f.get("view", "list")                 # Reorder List ⇄ Buy List (same filters)
+            vr = QHBoxLayout()
+            for k, lab, tip in (("list", "Reorder List", "Why each part needs buying, suppliers, order / receive"),
+                                ("buy", "Buy List", "One line per part, ready to copy into Excel, an email or a PO")):
+                b = _btn(lab, lambda _=False, k=k: (f.__setitem__("view", k), self.refresh_current()), tip,
+                         primary=view == k)
+                b.setCheckable(True)
+                b.setChecked(view == k)
+                vr.addWidget(b)
+            vr.addStretch(1)
+            v.addLayout(vr)
+            if view == "buy":
+                from .project_bom import BuyListWidget
+                need = (lambda p: inv.needed_for_project(p, f["project"])) if f["project"] != "all" \
+                    else inv.total_needed
+                self.buy_panel = BuyListWidget(self, lst, need, f["vendor"] if f["vendor"] != "all" else None)
+                self.buy_panel.setMinimumHeight(420)
+                v.addWidget(self.buy_panel, 1)
+                lst = []
             if self.sel_reorder:
                 b = QHBoxLayout()
                 b.addWidget(_muted(f"{len(self.sel_reorder)} selected", False), 1)
@@ -1640,11 +1657,13 @@ class InventoryPage(QWidget):
                              _actions(_small("Order", lambda _=False, pp=p, q=sq: self.order_part(pp, q)),
                                       _small("Mark Received", lambda _=False, i=p["id"]: self.move(i, "receiving")))])
             nh = "Needed (this project)" if f["project"] != "all" else "Needed (projects)"
-            v.addWidget(_muted("Everything to buy: parts short for their projects (combined demand of every project "
-                               "they're on) and parts at or below their reorder point. Suggested qty covers both."))
-            v.addWidget(self.table(["", "Part", "Why", "Type", "On Hand", "Reorder Pt", nh, "Suggested Qty",
-                                    "Competing Projects", "Suppliers", "Est. Cost", ""], rows, 9) if rows
-                        else _muted("No parts match this filter."))
+            if view != "buy":
+                v.addWidget(_muted("Everything to buy: parts short for their projects (combined demand of every "
+                                   "project they're on) and parts at or below their reorder point. Suggested qty "
+                                   "covers both."))
+                v.addWidget(self.table(["", "Part", "Why", "Type", "On Hand", "Reorder Pt", nh, "Suggested Qty",
+                                        "Competing Projects", "Suppliers", "Est. Cost", ""], rows, 9) if rows
+                            else _muted("No parts match this filter."))
         else:
             v.addWidget(_muted("Nothing to reorder — every part is above its reorder point and covers its projects."))
         oo = inv.open_part_orders()

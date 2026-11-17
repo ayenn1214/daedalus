@@ -7,7 +7,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtGui import QBrush, QColor, QFont, QGuiApplication
 from PySide6.QtWidgets import (
     QAbstractItemView, QDialog, QDoubleSpinBox, QHBoxLayout, QHeaderView, QLabel, QPushButton, QTableWidget,
-    QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QTableWidgetItem, QTabWidget, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from ..inventory import model as M
@@ -217,23 +217,25 @@ def buy_list(inv: M.Inventory, parts, need_fn, vendor=None):
     return cols, rows
 
 
-class BuyListDialog(QDialog):
-    def __init__(self, page, parts, need_fn, vendor=None, title="Buy List"):
-        super().__init__(page)
+class BuyListWidget(QWidget):
+    """The buy list as a panel (Reorder tab) — table + copy / export."""
+
+    def __init__(self, page, parts, need_fn, vendor=None, closable=False, parent=None):
+        super().__init__(parent)
         self.page = page
-        self.setWindowTitle(title)
-        self.resize(1250, 640)
-        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
         from PySide6.QtWidgets import QCheckBox
         self.all_parts, self.need_fn, self.vendor = list(parts), need_fn, vendor
         v = QVBoxLayout(self)
+        v.setContentsMargins(0, 0, 0, 0)
         top = QHBoxLayout()
         self.head = QLabel()
         self.head.setWordWrap(True)
         top.addWidget(self.head, 1)
         self.mfg = QCheckBox("Include MFG parts")
         self.mfg.setToolTip("Manufactured parts are made, not bought — tick to list them too (e.g. outsourced fab)")
-        self.mfg.toggled.connect(lambda *_: self.fill())
+        self.mfg.setChecked(bool(page.reorder_filter.get("buy_mfg")) if hasattr(page, "reorder_filter") else False)
+        self.mfg.toggled.connect(lambda on: (page.reorder_filter.__setitem__("buy_mfg", on)
+                                             if hasattr(page, "reorder_filter") else None, self.fill()))
         top.addWidget(self.mfg)
         v.addLayout(top)
         self.box = QVBoxLayout()
@@ -250,9 +252,10 @@ class BuyListDialog(QDialog):
             if lab == "Copy all":
                 b.setObjectName("primary")
             row.addWidget(b)
-        close = QPushButton("Close")
-        close.clicked.connect(self.close)
-        row.addWidget(close)
+        if closable:
+            close = QPushButton("Close")
+            close.clicked.connect(lambda: self.window().close())
+            row.addWidget(close)
         v.addLayout(row)
         self.fill()
 
@@ -290,3 +293,20 @@ class BuyListDialog(QDialog):
         if path:
             M.write_xlsx(path, [("Buy List", [dict(zip(self.cols, r)) for r in self.rows])], link_col="Website")
             self.page.toast.show_msg("Exported the buy list")
+
+
+class BuyListDialog(QDialog):
+    def __init__(self, page, parts, need_fn, vendor=None, title="Buy List"):
+        super().__init__(page)
+        self.setWindowTitle(title)
+        self.resize(1250, 640)
+        self.setWindowFlag(Qt.WindowMaximizeButtonHint, True)
+        v = QVBoxLayout(self)
+        self.panel = BuyListWidget(page, parts, need_fn, vendor, closable=True, parent=self)
+        v.addWidget(self.panel)
+
+    def __getattr__(self, name):                 # rows / cols / table / copy_* live on the panel
+        panel = self.__dict__.get("panel") if "panel" in self.__dict__ else None
+        if panel is None:
+            raise AttributeError(name)
+        return getattr(panel, name)

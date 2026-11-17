@@ -112,4 +112,13 @@ def test_bom_window_and_buy_list(tmp_path, monkeypatch):
     b.copy_selected()
     assert len(QGuiApplication.clipboard().text().splitlines()) == 2
     b.close()
+    page.reorder_filter["view"] = "buy"                                   # Buy List inside the Reorder tab
+    page.refresh_current()
+    app.processEvents()
+    bp = page.buy_panel
+    assert bp.rows and bp.table.rowCount() == len(bp.rows)
+    bp.copy_all()
+    assert QGuiApplication.clipboard().text().startswith("Vendor\tPart No.\tVendor PN")
+    bp.mfg.setChecked(True)
+    assert page.reorder_filter["buy_mfg"] and len(bp.rows) > 4
     page.close()
