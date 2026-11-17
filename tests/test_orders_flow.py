@@ -237,7 +237,10 @@ def test_project_weldments_nested_or_flat(tmp_path):
     def texts(w):
         return [x.text() for x in w.findChildren(QLabel)]
     w = weld_cell()                                                        # the weldment is ONE row …
-    assert any("WLDMT, FRAME" in x for x in texts(w)) and "└─ FLAT, TAB" in texts(w)   # … with its parts in it
+    assert any("WLDMT, FRAME" in x for x in texts(w)) and "FLAT, TAB" in texts(w)   # … with its parts in it
+    from daedalus.ui.inventory_ui import TreeLabel
+    tl = next(x for x in w.findChildren(TreeLabel) if x.text() == "FLAT, TAB")   # drawn tree line, not ├─ text
+    assert tl.depth == 1 and tl.more is False and tl.contentsMargins().left() == tl.indent_px
     qty = table().cellWidget(table().indexAt(w.pos()).row(), 2)
     assert "× 4" in texts(qty)
     from PySide6.QtWidgets import QSpinBox
@@ -253,11 +256,21 @@ def test_project_weldments_nested_or_flat(tmp_path):
         for _ in range(3):
             app.processEvents()
         assert (f"{pid}:frame" in page.mrp_state.get("weld_shut", [])) is expect_shut
-        assert ("└─ FLAT, TAB" in texts(weld_cell())) is (not expect_shut)
+        assert ("FLAT, TAB" in texts(weld_cell())) is (not expect_shut)
     page.toggle_nest(pid)                                                  # flat: tab at the top level
     t = table()
     n = [t.item(i, 1).text() for i in range(t.rowCount()) if t.item(i, 1)]
     assert any(x.strip().startswith("FLAT, TAB") and "(in M30-0001)" in x for x in n)
     page.toggle_nest(pid)
-    assert weld_cell() is not None
+    assert weld_cell() is not None and "FLAT, TAB" not in texts(weld_cell())     # still folded by hand
+    page.toggle_weld(pid, "frame")
+    assert "FLAT, TAB" in texts(weld_cell())
+    page.set_weld_mode(pid, "hidden")                                     # hidden: top level only
+    assert page.weld_mode(pid) == "hidden"
+    w = weld_cell()
+    assert any("WLDMT, FRAME" in x for x in texts(w)) and "FLAT, TAB" not in texts(w)
+    t = table()
+    assert not any(t.item(i, 1) and "FLAT, TAB" in t.item(i, 1).text() for i in range(t.rowCount()))
+    page.set_weld_mode(pid, "nested")
+    assert "FLAT, TAB" in texts(weld_cell())
     page.close()

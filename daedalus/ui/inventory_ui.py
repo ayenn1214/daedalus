@@ -297,6 +297,54 @@ def project_group(p) -> str:
             "fastener": "Fasteners"}.get(p.get("type"), "Other")
 
 
+class TreeLabel(QLabel):
+    """A part inside a weldment: straight, connected tree lines painted to the left of its name."""
+    X0, STEP, TICK = 10, 16, 9                  # first branch x (under the weldment's ▾), indent per level, ─ length
+
+    def __init__(self, text, depth, open_levels, more, has_kids=False):
+        super().__init__(text)
+        self.depth, self.open_levels, self.more, self.has_kids = depth, list(open_levels), more, has_kids
+        self.indent_px = self.X0 + (depth - 1) * self.STEP + self.TICK + 5
+        self.setContentsMargins(self.indent_px, 0, 0, 0)
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        p = QPainter(self)
+        p.setPen(QPen(QColor(theme.MUTED), 1))
+        h, mid = self.height(), self.height() // 2
+        for lvl, still in enumerate(self.open_levels, 1):          # │ for ancestors that continue below
+            if still:
+                x = self.X0 + (lvl - 1) * self.STEP
+                p.drawLine(x, 0, x, h)
+        x = self.X0 + (self.depth - 1) * self.STEP
+        p.drawLine(x, 0, x, h if self.more else mid)                # ├ or └
+        p.drawLine(x, mid, x + self.TICK, mid)                      # ─
+        if self.has_kids:                                          # trunk down to its own parts
+            p.drawLine(x + self.STEP, mid + 7, x + self.STEP, h)
+        p.end()
+
+
+class WeldHead(QWidget):
+    """The weldment's own line: ▾ / ▸ and its name; draws the trunk down from the caret when open."""
+
+    def __init__(self, caret, open_):
+        super().__init__()
+        self.caret, self.open_ = caret, open_
+        self.setObjectName("weldcell")
+        self.setStyleSheet("QWidget#weldcell { background: transparent; }")
+
+    def paintEvent(self, e):
+        super().paintEvent(e)
+        if not self.open_:
+            return
+        p = QPainter(self)
+        p.setPen(QPen(QColor(theme.MUTED), 1))
+        g = self.caret.geometry()
+        x = g.left() + TreeLabel.X0
+        p.drawLine(x, g.center().y() + 7, x, self.height())
+        p.end()
+
+
 class InventoryPage(QWidget):
     closed = Signal()
     status = Signal(str)
@@ -846,12 +894,7 @@ class InventoryPage(QWidget):
             lab.setToolTip("Shift-click to link this project in chat")
             hdr.addWidget(lab, 1)
             if any(p.get("isWeldment") and p.get("components") for p in inv.parts_for_project(pr["id"])):
-                flat_now = pr["id"] in self.mrp_state.get("proj_flat", [])
-                nb = _small("Weldments: flat" if flat_now else "Weldments: nested",
-                            lambda _=False, i=pr["id"]: QTimer.singleShot(0, lambda: self.toggle_nest(i)),
-                            "Nested: weldment parts sit under their weldment (▾ / ▸ to fold). Flat: every MFG part "
-                            "at the top level with its total per unit")
-                hdr.addWidget(nb)
+                hdr.addWidget(self._weld_mode_bar(pr["id"]))
             if pr.get("folderPath"):
                 hdr.addWidget(_small("📁", lambda _=False, f=pr["folderPath"]: _open_link(f), pr["folderPath"], icon="folder"))
             up = _small("▲", lambda _=False, i=pr["id"]: (inv.move_project(i, -1), self.commit()), "Move up")
@@ -877,7 +920,8 @@ class InventoryPage(QWidget):
             v.addLayout(hdr)
             if pr["id"] in self.collapsed:
                 continue
-            flat = pr["id"] in self.mrp_state.setdefault("proj_flat", [])
+            mode = self.weld_mode(pr["id"])
+            flat = mode == "flat"
             rows = inv.project_rows(pr["id"], per_unit=True, nest=not flat)
             if not rows:
                 v.addWidget(_muted("No parts assigned yet."))
@@ -900,7 +944,7 @@ class InventoryPage(QWidget):
                 if grows:
                     ordered.append(("hdr", gname, sum(1 for r in grows if r[1] == 0)))
                     ordered.extend(grows)
-            v.addWidget(self._project_table(pr, ordered, flat))
+            v.addWidget(self._project_table(pr, ordered, flat, hide_all=mode == "hidden"))
             opt = self._options_table(pr)
             if opt is not None:
                 v.addWidget(opt)
@@ -926,10 +970,53 @@ class InventoryPage(QWidget):
         v.addStretch(1)
         return w
 
-    def toggle_nest(self, pid):
+    WELD_MODES = (("nested", "Nested", "Weldment parts listed under their weldment (▾ / ▸ folds one)"),
+                  ("flat", "Flat", "Every MFG part at the top level with its total per unit"),
+                  ("hidden", "Hidden", "Top level only — weldments without their parts"))
+
+    def weld_mode(self, pid) -> str:
+        modes = self.mrp_state.setdefault("weld_mode", {})
+        if pid not in modes and pid in self.mrp_state.get("proj_flat", []):      # older setting
+            modes[pid] = "flat"
+        return modes.get(pid, "nested")
+
+    def set_weld_mode(self, pid, mode):
+        self.mrp_state.setdefault("weld_mode", {})[pid] = mode
         flat = self.mrp_state.setdefault("proj_flat", [])
-        flat.remove(pid) if pid in flat else flat.append(pid)
+        if pid in flat:
+            flat.remove(pid)
         self.refresh_current()
+
+    def toggle_nest(self, pid):
+        """Nested ⇄ flat (kept for callers that only know the two)."""
+        self.set_weld_mode(pid, "nested" if self.weld_mode(pid) == "flat" else "flat")
+
+    def _weld_mode_bar(self, pid):
+        w = QWidget()
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(0)
+        lab = QLabel("Weldments ")
+        lab.setStyleSheet(f"color:{theme.MUTED}")
+        h.addWidget(lab)
+        cur = self.weld_mode(pid)
+        for i, (key, text, tip) in enumerate(self.WELD_MODES):
+            b = QToolButton()
+            b.setText(text)
+            b.setToolTip(tip)
+            b.setCheckable(True)
+            b.setChecked(key == cur)
+            b.setObjectName("weldmode")
+            rad = ("border-top-left-radius:5px;border-bottom-left-radius:5px;" if i == 0 else
+                   "border-top-right-radius:5px;border-bottom-right-radius:5px;" if i == len(self.WELD_MODES) - 1
+                   else "")
+            b.setStyleSheet(f"QToolButton#weldmode {{ border:1px solid {theme.BORDER}; padding:2px 9px; {rad}"
+                            f"{'' if i == 0 else 'border-left:0;'} }}"
+                            f"QToolButton#weldmode:checked {{ background:{theme.ACCENT}; color:{theme.ON_ACCENT}; }}")
+            b.clicked.connect(lambda _=False, k=key: QTimer.singleShot(0, lambda: self.set_weld_mode(pid, k)))
+            h.addWidget(b)
+        w.setProperty("weldModes", True)
+        return w
 
     def toggle_weld(self, pid, part_id):
         key = f"{pid}:{part_id}"
@@ -937,7 +1024,7 @@ class InventoryPage(QWidget):
         shut.remove(key) if key in shut else shut.append(key)
         self.refresh_current()
 
-    def _weld_row(self, pr, block, folded):
+    def _weld_row(self, pr, block, folded, hide_caret=False):
         """A weldment and everything in it as ONE table row: the parts listed under its name with tree lines
         (├─ / └─), each with its × qty, stock and cost on the same line."""
         inv = self.inv
@@ -955,11 +1042,11 @@ class InventoryPage(QWidget):
                 if k[1] == lvl:
                     return True
             return False
-        prefixes = []
+        branches = []                                # per part: (depth, ancestor levels still open, more at own level)
         for i, k in enumerate(kids):
             d = k[1]
-            anc = "".join("│   " if more_at(i, lvl) else "    " for lvl in range(1, d))
-            prefixes.append(anc + ("├─ " if more_at(i, d) else "└─ "))
+            branches.append((d, [more_at(i, lvl) for lvl in range(1, d)], more_at(i, d),
+                             i + 1 < len(kids) and kids[i + 1][1] > d))
 
         def stack(cells, align=Qt.AlignLeft | Qt.AlignVCenter):
             w = QWidget()
@@ -973,15 +1060,15 @@ class InventoryPage(QWidget):
                 if isinstance(c, QWidget):
                     if hasattr(c, "spin"):                       # Qty/Unit: same box and position as plain rows
                         c.layout().setContentsMargins(0, 0, 0, 0)
-                    c.setFixedHeight(hgt if hasattr(c, "spin") else hgt - 4)
+                    c.setFixedHeight(hgt if hasattr(c, "spin") or isinstance(c, WeldHead) else hgt - 4)
                     lay.addWidget(c)
                     continue
-                txt, col, bold = c if isinstance(c, tuple) else (c, None, False)
-                lab = QLabel(txt)
+                txt, col, bold, *br = c if isinstance(c, tuple) else (c, None, False)
+                lab = TreeLabel(txt, *br[0]) if br and br[0] else QLabel(txt)
                 lab.setFixedHeight(hgt)
                 bf = lab.font()
                 bf.setBold(True)                                 # measured bold: styles apply after sizing
-                lab.setMinimumWidth(QFontMetrics(bf).horizontalAdvance(txt) + 8)
+                lab.setMinimumWidth(QFontMetrics(bf).horizontalAdvance(txt) + 8 + getattr(lab, "indent_px", 0))
                 lab.setAlignment(align)
                 css = (f"color:{col};" if col else "") + ("font-weight:600;" if bold else "")
                 if css:
@@ -997,11 +1084,15 @@ class InventoryPage(QWidget):
         caret = QToolButton()
         caret.setText("▸" if folded else "▾")
         caret.setAutoRaise(True)
+        caret.setFixedWidth(TreeLabel.X0 * 2)
+        caret.setStyleSheet("QToolButton { padding: 0; margin: 0; border: 0; }")
         caret.setToolTip("Show / hide the parts in this weldment")
         caret.clicked.connect(lambda _=False: QTimer.singleShot(0, lambda: self.toggle_weld(pr["id"], p["id"])))
-        head = QWidget()
-        head.setObjectName("weldcell")
-        head.setStyleSheet("QWidget#weldcell { background: transparent; }")
+        if hide_caret:
+            caret.setEnabled(False)
+            caret.setText("")
+            caret.setToolTip("Weldments: Hidden — switch to Nested to see the parts")
+        head = WeldHead(caret, bool(kids))
         hh = QHBoxLayout(head)
         hh.setContentsMargins(0, 0, 0, 0)
         hh.setSpacing(4)
@@ -1010,8 +1101,8 @@ class InventoryPage(QWidget):
         nm.setProperty("dimsLink", f"part:{p['id']}")
         nm.setToolTip(inv.spec_line(p))
         hh.addWidget(nm, 1)
-        part_cells = [(head, None)] + [((f"{pre}{k[0]['name']}", None, False), k[0]["id"])
-                                       for pre, k in zip(prefixes, kids)]
+        part_cells = [(head, None)] + [((k[0]["name"], None, False, br), k[0]["id"])
+                                       for br, k in zip(branches, kids)]
         pn = [((p.get("partNumber") or "", None, True), p["id"])] + \
              [((k[0].get("partNumber") or "", theme.MUTED, False), k[0]["id"]) for k in kids]
         a = inv.allocation(p, pr["id"])
@@ -1050,7 +1141,7 @@ class InventoryPage(QWidget):
         row[1].setProperty("weldId", p["id"])
         return row, sum(heights) + 6, ids
 
-    def _project_table(self, pr, rows, flat=False):
+    def _project_table(self, pr, rows, flat=False, hide_all=False):
         inv = self.inv
         shut = set(self.mrp_state.get("weld_shut", []))
         hidden_under = None                                     # depth of a collapsed weldment we're inside
@@ -1064,7 +1155,8 @@ class InventoryPage(QWidget):
                 end = ri + 1                                     # the weldment + everything under it → one row
                 while end < len(rows) and rows[end][0] != "hdr" and rows[end][1] > 0:
                     end += 1
-                cells, hgt, _ids = self._weld_row(pr, rows[ri:end], f"{pr['id']}:{row[0]['id']}" in shut)
+                cells, hgt, _ids = self._weld_row(pr, rows[ri:end], hide_all or f"{pr['id']}:{row[0]['id']}" in shut,
+                                                  hide_caret=hide_all)
                 tall[len(tr)] = hgt
                 tr.append(cells)
                 skip_to = end
