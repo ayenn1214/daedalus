@@ -155,3 +155,38 @@ def test_shift_click_anything(tmp_path):
     shift_click(lab, lab.rect().center())                                         # any label → linked or quoted
     assert page.chat.input.text().strip() != ""
     page.close()
+
+
+def test_chat_pops_out_and_docks(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    QSettings("Daedalus", "Daedalus").setValue("dims/chat_popped", False)
+    st = InventoryStore(tmp_path / "inv.json")
+    page = InventoryPage(st, lite=True)
+    page.show()
+    page.toggle_chat(True)
+    assert page.chat.isVisible() and page.split.indexOf(page.chat) >= 0
+    page.pop_chat(True)
+    app.processEvents()
+    w = page._chat_win
+    assert w is not None and w.isVisible() and page.chat.window() is w and page.split.indexOf(page.chat) < 0
+    assert page.chat.pop_btn.text().endswith("Dock") and page.chat.pin_btn.isVisible()
+    page.chat.pin_btn.setChecked(True)
+    assert w.windowFlags() & __import__("PySide6.QtCore", fromlist=["Qt"]).Qt.WindowStaysOnTopHint
+    page.toggle_chat(False)                                   # 💬 hides the window …
+    assert not w.isVisible() and not page.chat_btn.isChecked()
+    page.toggle_chat(True)                                    # … and brings it back popped out
+    assert w.isVisible()
+    assert page.link_to_chat("project", "nope") in (True, False)
+    page.pop_chat(False)
+    app.processEvents()
+    assert page._chat_win is None and page.split.indexOf(page.chat) >= 0 and page.chat.isVisible()
+    assert page.chat.pop_btn.text().endswith("Pop out")
+    QSettings("Daedalus", "Daedalus").setValue("dims/chat_popped", False)
+    QSettings("Daedalus", "Daedalus").setValue("dims/chat_visible", False)
+    page.close()

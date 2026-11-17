@@ -39,11 +39,20 @@ def tag(item, kind: str, id_: str):
 class ChatPanel(QWidget):
     open_link = Signal(str, str)        # kind, id
     unread_changed = Signal(int)
+    pop_requested = Signal(bool)        # True: own window, False: back beside DIMS
     _fetched = Signal(object)
+
+    def set_popped(self, on: bool):
+        self.popped = on
+        self.pop_btn.setText("⇲ Dock" if on else "⧉ Pop out")
+        self.pop_btn.setToolTip("Put the chat back beside DIMS" if on else
+                                "Open the chat in its own window — move and resize it anywhere, e.g. a second screen")
+        self.pin_btn.setVisible(on)
 
     def __init__(self, page, parent=None):
         super().__init__(parent)
         self.page = page
+        self.popped = False
         self.msgs: list[dict] = []
         self.links: dict[str, str] = {}     # "[label]" in the input → token
         self.unread = 0
@@ -57,6 +66,19 @@ class ChatPanel(QWidget):
         self.status = QLabel()
         self.status.setObjectName("muted")
         head.addWidget(self.status, 1)
+        from PySide6.QtWidgets import QToolButton
+        self.pin_btn = QToolButton()
+        self.pin_btn.setText("📌")
+        self.pin_btn.setCheckable(True)
+        self.pin_btn.setAutoRaise(True)
+        self.pin_btn.setToolTip("Keep the chat window on top of other windows")
+        self.pin_btn.hide()
+        head.addWidget(self.pin_btn)
+        self.pop_btn = QToolButton()
+        self.pop_btn.setAutoRaise(True)
+        self.pop_btn.clicked.connect(lambda: self.pop_requested.emit(not self.popped))
+        head.addWidget(self.pop_btn)
+        self.set_popped(False)
         v.addLayout(head)
         self.view = QTextBrowser()
         self.view.setOpenLinks(False)

@@ -297,6 +297,33 @@ def project_group(p) -> str:
             "fastener": "Fasteners"}.get(p.get("type"), "Other")
 
 
+class _ChatWindow(QWidget):
+    """The team chat in its own window. Closing it hides the chat (the 💬 button brings it back popped out);
+    ⇲ Dock puts it back beside DIMS."""
+
+    def __init__(self, page):
+        super().__init__(page.window(), Qt.Window)            # owned by the main window: closes with it
+        self.page, self.docking = page, False
+        self.setWindowTitle("DIMS — Team chat")
+        if page.window() and not page.window().windowIcon().isNull():
+            self.setWindowIcon(page.window().windowIcon())
+
+    def closeEvent(self, e):
+        if not self.docking:
+            self.page.settings.setValue("dims/chat_geometry", self.saveGeometry())
+            self.page.chat_btn.setChecked(False)
+            self.page.settings.setValue("dims/chat_visible", False)
+        super().closeEvent(e)
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        self.page.settings.setValue("dims/chat_geometry", self.saveGeometry())
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        self.page.settings.setValue("dims/chat_geometry", self.saveGeometry())
+
+
 class TreeLabel(QLabel):
     """A part inside a weldment: straight, connected tree lines painted to the left of its name."""
     X0, STEP, TICK = 10, 16, 9                  # first branch x (under the weldment's ▾), indent per level, ─ length
@@ -451,8 +478,11 @@ class InventoryPage(QWidget):
         self.icarus = None
         from .chat_panel import ChatPanel
         self.chat = ChatPanel(self)
-        self.chat.setMinimumWidth(300)
+        self.chat.setMinimumWidth(220)
         self.chat.hide()
+        self.chat.pop_requested.connect(lambda on: QTimer.singleShot(0, lambda: self.pop_chat(on)))
+        self.chat.pin_btn.toggled.connect(self._pin_chat)
+        self._chat_win = None
         self.chat.open_link.connect(self.open_link)
         self.chat.unread_changed.connect(self._chat_unread)
         self.split.addWidget(self.chat)
@@ -460,6 +490,8 @@ class InventoryPage(QWidget):
         QApplication.instance().installEventFilter(self)
         if self.settings.value("dims/chat_visible", False, type=bool):
             QTimer.singleShot(0, lambda: self.toggle_chat(True))
+            if self.settings.value("dims/chat_popped", False, type=bool):
+                QTimer.singleShot(50, lambda: self.pop_chat(True))
         if self.settings.value("dims/icarus_visible", False, type=bool):
             QTimer.singleShot(0, lambda: self.toggle_icarus(True))
         self.toast = Toast(self)
@@ -2484,8 +2516,18 @@ class InventoryPage(QWidget):
     # ============================================================== chat
     def toggle_chat(self, on=None):
         if on is None:
-            on = not self.chat.isVisible()
+            on = not (self._chat_win.isVisible() if self._chat_win else self.chat.isVisible())
         on = bool(on)
+        if self._chat_win is not None:                       # popped out: show / hide its window
+            self._chat_win.setVisible(on)
+            if on:
+                self._chat_win.raise_()
+                self._chat_win.activateWindow()
+                self.chat.mark_read()
+            self.chat_btn.setChecked(on)
+            self._chat_unread(self.chat.unread)
+            self.settings.setValue("dims/chat_visible", on)
+            return
         self.chat.setVisible(on)
         if on:
             sizes = self.split.sizes()
@@ -2499,12 +2541,59 @@ class InventoryPage(QWidget):
         self._chat_unread(self.chat.unread)
         self.settings.setValue("dims/chat_visible", on)
 
+    def pop_chat(self, on: bool):
+        """Chat in its own window (move / resize anywhere, remembered) or back beside DIMS."""
+        if on and self._chat_win is None:
+            win = _ChatWindow(self)
+            lay = QVBoxLayout(win)
+            lay.setContentsMargins(0, 0, 0, 0)
+            self.chat.setParent(None)
+            lay.addWidget(self.chat)
+            self.chat.show()
+            geo = self.settings.value("dims/chat_geometry")
+            if geo is not None:
+                win.restoreGeometry(geo)
+            else:
+                win.resize(380, 620)
+                tl = self.mapToGlobal(self.rect().topRight())
+                win.move(max(0, tl.x() - 400), tl.y() + 60)
+            self._chat_win = win
+            self.chat.set_popped(True)
+            pin = self.settings.value("dims/chat_pinned", False, type=bool)
+            self.chat.pin_btn.setChecked(pin)
+            self._pin_chat(pin)
+            win.show()
+            self.chat.mark_read()
+        elif not on and self._chat_win is not None:
+            win, self._chat_win = self._chat_win, None
+            self.settings.setValue("dims/chat_geometry", win.saveGeometry())
+            self.chat.setParent(None)
+            self.split.addWidget(self.chat)
+            win.docking = True
+            win.close()
+            win.deleteLater()
+            self.chat.set_popped(False)
+            self.chat.show()
+            self.toggle_chat(True)
+        self.settings.setValue("dims/chat_popped", bool(on))
+        self.chat_btn.setChecked(self.chat.isVisible())
+
+    def _pin_chat(self, on):
+        self.settings.setValue("dims/chat_pinned", bool(on))
+        w = self._chat_win
+        if w is None:
+            return
+        vis = w.isVisible()
+        w.setWindowFlag(Qt.WindowStaysOnTopHint, bool(on))
+        if vis:
+            w.show()
+
     def _chat_unread(self, n):
         self.chat_btn.setText(f"💬 Chat · {n}" if n else "💬 Chat")
         self.chat_btn.setStyleSheet(f"color:{theme.INFO}; font-weight:600;" if n else "")
 
     def link_to_chat(self, kind, id_) -> bool:
-        if not self.chat.isVisible():
+        if not self.chat.isVisible() or (self._chat_win is not None and not self._chat_win.isVisible()):
             self.toggle_chat(True)
         ok = self.chat.insert_link(kind, id_)
         if ok:
