@@ -7,6 +7,11 @@ keeps links. The label is a snapshot; clicking the link opens the live record.
 Backends:
 * FileChat  — a .chat.jsonl file next to the inventory file (works on a shared folder too; append-only).
 * ServerChat — the dims_chat table on the team server (supabase/migrations/*_dims_chat.sql).
+
+Rooms: 'general' is the team room. Direct messages and group chats are rooms with a member list
+(dims_chat_rooms on the server — only members can read or post, the server enforces it). A DM's id is the same
+for both people (a hash of the two members), so starting a DM twice lands in the same conversation.
+In a plain shared file there are no accounts: rooms list members by name and anyone with the file can read them.
 """
 from __future__ import annotations
 
@@ -192,6 +197,42 @@ def tooltip(inv: M.Inventory, kind: str, id_: str) -> str:
     return ""
 
 
+GENERAL = "general"
+
+
+def dm_id(a: str, b: str) -> str:
+    import hashlib
+    return "dm-" + hashlib.sha1("|".join(sorted([str(a), str(b)])).encode()).hexdigest()[:20]
+
+
+def new_room(kind: str, members, name: str = "", me=None) -> dict:
+    members = list(dict.fromkeys(str(m) for m in members if m))
+    if me and str(me) not in members:
+        members.insert(0, str(me))
+    if kind == "dm":
+        if len(members) != 2:
+            raise ValueError("A direct message is between two people")
+        rid = dm_id(*members)
+    else:
+        if len(members) < 2:
+            raise ValueError("Pick at least one other person for a group")
+        if not (name or "").strip():
+            raise ValueError("Give the group a name")
+        rid = "grp-" + M.uid()
+    return {"id": rid, "kind": kind, "name": (name or "").strip()[:80], "members": members,
+            "createdBy": str(me) if me else None}
+
+
+def room_title(room: dict | None, me, names: dict) -> str:
+    """'# Team', '@ Daniel', '◆ Shop floor' — names: member id → display name."""
+    if not room or room.get("id") == GENERAL:
+        return "# Team"
+    if room.get("kind") == "dm":
+        other = next((m for m in room.get("members") or [] if str(m) != str(me)), None)
+        return "@ " + (names.get(other) or str(other or "?"))
+    return "◆ " + (room.get("name") or "Group")
+
+
 def new_message(by: str, body: str, channel: str = "general") -> dict:
     body = (body or "").strip()
     if not body:
@@ -251,6 +292,8 @@ class FileChat:
                     m = json.loads(line)
                 except ValueError:
                     continue
+                if "room" in m:
+                    continue
                 if m.get("deleted"):
                     out = [x for x in out if x["id"] != m["id"]]
                     continue
@@ -268,6 +311,45 @@ class FileChat:
         with self.path.open("a", encoding="utf-8") as f:
             f.write(json.dumps({"id": msg_id, "deleted": True}) + "\n")
 
+    # rooms: members are names (no accounts in a shared file)
+    rooms_ready = True
+    private = False
+
+    def me(self, inv=None):
+        return (inv.userName if inv is not None else "") or "unknown"
+
+    def people(self, inv=None) -> list[dict]:
+        names = set()
+        for m in self.fetch(0):
+            if m.get("by"):
+                names.add(m["by"])
+        for r in self.rooms():
+            names.update(r.get("members") or [])
+        if inv is not None and inv.userName:
+            names.add(inv.userName)
+        return [{"id": n, "name": n} for n in sorted(names, key=str.lower)]
+
+    def rooms(self, me=None) -> list[dict]:
+        if not self.path.exists():
+            return []
+        rooms = {}
+        with self.path.open(encoding="utf-8") as f:
+            for line in f:
+                try:
+                    m = json.loads(line)
+                except ValueError:
+                    continue
+                if "room" in m:
+                    rooms[m["room"]["id"]] = m["room"]
+        out = list(rooms.values())
+        return [r for r in out if me is None or str(me) in [str(x) for x in r.get("members") or []]]
+
+    def save_room(self, room: dict) -> dict:
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with self.path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps({"room": room}, ensure_ascii=False) + "\n")
+        return room
+
 
 class ServerChat:
     """The dims_chat table (needs the chat update on the server: dims_schema_version() >= 3)."""
@@ -280,6 +362,48 @@ class ServerChat:
     @property
     def ready(self) -> bool:
         return getattr(self.store, "schema", 0) >= 3
+
+    private = True
+
+    @property
+    def rooms_ready(self) -> bool:
+        return getattr(self.store, "schema", 0) >= 4
+
+    def me(self, inv=None):
+        """The signed-in user's id (from the session token)."""
+        import base64
+        tok = (getattr(self.store, "session", {}) or {}).get("access_token") or ""
+        try:
+            part = tok.split(".")[1]
+            data = json.loads(base64.urlsafe_b64decode(part + "=" * (-len(part) % 4)))
+            return data.get("sub")
+        except (IndexError, ValueError):
+            return None
+
+    def people(self, inv=None) -> list[dict]:
+        code, rows = self.store._rest("GET", "/rest/v1/dims_profiles?select=user_id,display_name,email")
+        if code != 200 or not isinstance(rows, list):
+            return []
+        return sorted([{"id": r["user_id"], "name": r.get("display_name") or (r.get("email") or "?").split("@")[0]}
+                       for r in rows], key=lambda p: p["name"].lower())
+
+    def rooms(self, me=None) -> list[dict]:
+        if not self.rooms_ready:
+            return []
+        code, rows = self.store._rest("GET", "/rest/v1/dims_chat_rooms?select=*")
+        if code != 200 or not isinstance(rows, list):
+            return []
+        return [{"id": r["id"], "kind": r["kind"], "name": r.get("name") or "", "members": r.get("members") or [],
+                 "createdBy": r.get("created_by")} for r in rows]
+
+    def save_room(self, room: dict) -> dict:
+        body = {"id": room["id"], "kind": room["kind"], "name": room.get("name") or "", "members": room["members"]}
+        code, res = self.store._rest("POST", "/rest/v1/dims_chat_rooms?on_conflict=id", body,
+                                     {"Prefer": "resolution=merge-duplicates,return=representation"})
+        if code == 409 or (code >= 400 and room["kind"] == "dm"):      # the DM is already there
+            return room
+        self.store._check_write(code, res, "chat room")
+        return room
 
     @staticmethod
     def _row(r: dict) -> dict:

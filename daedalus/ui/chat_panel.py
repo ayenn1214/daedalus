@@ -9,10 +9,12 @@ import threading
 from PySide6.QtCore import QPoint, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QCursor
 from PySide6.QtWidgets import (
-    QHBoxLayout, QLabel, QLineEdit, QMenu, QPushButton, QTextBrowser, QToolTip, QVBoxLayout, QWidget,
+    QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit, QListWidget, QListWidgetItem, QMenu, QPushButton,
+    QTextBrowser, QToolTip, QVBoxLayout, QWidget,
 )
 
 from ..inventory import chat as C
+from ..inventory.chat import GENERAL
 from . import theme
 
 # item "rarity" colours (dark theme, light theme)
@@ -80,6 +82,31 @@ class ChatPanel(QWidget):
         head.addWidget(self.pop_btn)
         self.set_popped(False)
         v.addLayout(head)
+        from PySide6.QtWidgets import QComboBox
+        rooms_row = QHBoxLayout()
+        self.room_box = QComboBox()
+        self.room_box.setToolTip("Team room, direct messages and groups")
+        self.room_box.activated.connect(lambda i: self.switch_room(self.room_box.itemData(i)))
+        rooms_row.addWidget(self.room_box, 1)
+        self.elsewhere = QLabel()
+        self.elsewhere.setToolTip("Unread in your other conversations — pick them in the list")
+        rooms_row.addWidget(self.elsewhere)
+        self.new_btn = QToolButton()
+        self.new_btn.setText("+ New")
+        self.new_btn.setToolTip("Direct message one person, or start a group")
+        self.new_btn.clicked.connect(self.new_conversation)
+        rooms_row.addWidget(self.new_btn)
+        self.more_btn = QToolButton()
+        self.more_btn.setText("⋯")
+        self.more_btn.setToolTip("Rename the group, add people, or leave it")
+        self.more_btn.clicked.connect(self._room_menu)
+        rooms_row.addWidget(self.more_btn)
+        v.addLayout(rooms_row)
+        self.room = GENERAL
+        self.rooms: dict[str, dict] = {}
+        self.people: dict[str, str] = {}          # id → name
+        self.unread_by: dict[str, int] = {}
+        self._polls = 0
         self.view = QTextBrowser()
         self.view.setOpenLinks(False)
         self.view.setOpenExternalLinks(False)
@@ -114,9 +141,146 @@ class ChatPanel(QWidget):
         """(Re)attach to the page's current store (it changes when switching file ⇄ team server)."""
         self.backend = C.chat_for(self.page.store)
         self._key = self._store_key()
-        self.msgs, self.unread = [], 0
+        self.msgs, self.unread, self.unread_by = [], 0, {}
+        self.rooms, self.people = {}, {}
+        from PySide6.QtCore import QSettings
+        self.room = QSettings("Daedalus", "Daedalus").value("dims/chat_room") or GENERAL
+        self._fill_rooms()
         self.render()
         self.poll()
+        self.load_rooms()
+
+    # ------------------------------------------------------------ rooms
+    def me(self):
+        be = self.backend
+        return be.me(self.page.inv) if be is not None else None
+
+    def load_rooms(self, then=None):
+        """People and rooms from the backend (a thread for the server)."""
+        be = self.backend
+        if be is None or not getattr(be, "rooms_ready", False):
+            self._fill_rooms()
+            return
+        me = self.me()
+
+        def work():
+            try:
+                res = ("rooms", be, (be.people(self.page.inv), be.rooms(me)))
+            except Exception as e:  # noqa: BLE001
+                res = ("rooms-err", be, e)
+            self._fetched.emit(res + ((then,) if then else ()))
+        if isinstance(be, C.FileChat):
+            work()
+        else:
+            threading.Thread(target=work, daemon=True).start()
+
+    def _fill_rooms(self):
+        me = self.me()
+        box = self.room_box
+        box.blockSignals(True)
+        box.clear()
+        items = [(GENERAL, None)] + sorted(
+            [(r["id"], r) for r in self.rooms.values()],
+            key=lambda x: (x[1]["kind"] != "dm", C.room_title(x[1], me, self.people).lower()))
+        for rid, r in items:
+            n = self.unread_by.get(rid, 0)
+            box.addItem(C.room_title(r, me, self.people) + (f"   ● {n}" if n else ""), rid)
+        if self.room not in [rid for rid, _ in items]:
+            self.room = GENERAL
+        box.setCurrentIndex(max(0, box.findData(self.room)))
+        box.blockSignals(False)
+        other = sum(n for rid, n in self.unread_by.items() if rid != self.room)
+        self.elsewhere.setText(f"<b style='color:{theme.INFO}'>● {other}</b>" if other else "")
+        ok = self.backend is not None and getattr(self.backend, "rooms_ready", False)
+        self.new_btn.setEnabled(ok)
+        self.new_btn.setToolTip("Direct message one person, or start a group" if ok else
+                                "Direct messages need the chat update on the team server")
+        r = self.rooms.get(self.room)
+        self.more_btn.setVisible(bool(r and r.get("kind") == "group"))
+        if hasattr(self, "input"):
+            self.input.setPlaceholderText(
+                "Message the team…  (@name to mention)" if self.room == GENERAL else
+                f"Message {C.room_title(r, me, self.people)[2:]}…")
+
+    def switch_room(self, rid):
+        self.room = rid or GENERAL
+        from PySide6.QtCore import QSettings
+        QSettings("Daedalus", "Daedalus").setValue("dims/chat_room", self.room)
+        self.unread_by.pop(self.room, None)
+        self._recount()
+        self._fill_rooms()
+        self._rendered = False
+        self.render()
+
+    def _recount(self):
+        self.unread = sum(self.unread_by.values())
+        self.unread_changed.emit(self.unread)
+
+    def new_conversation(self):
+        be = self.backend
+        if be is None or not getattr(be, "rooms_ready", False):
+            return
+        d = NewChatDialog(self, [p for p in (be.people(self.page.inv) or []) if str(p["id"]) != str(self.me())])
+        if not d.exec():
+            return
+        ids, name = d.result_people(), d.name.text().strip()
+        try:
+            room = C.new_room("dm" if len(ids) == 1 else "group", ids, name, me=self.me())
+            room = be.save_room(room)
+        except Exception as e:  # noqa: BLE001
+            self.status.setText(f"couldn't start it — {e}")
+            return
+        self.rooms[room["id"]] = room
+        for p in d.all_people:
+            self.people.setdefault(p["id"], p["name"])
+        self.switch_room(room["id"])
+        self.input.setFocus()
+
+    def _room_menu(self):
+        r = self.rooms.get(self.room)
+        if not r or r.get("kind") != "group":
+            return
+        m = QMenu(self)
+        m.addAction("Rename…", self._rename_room)
+        m.addAction("Add people…", self._add_people)
+        m.addAction("Members: " + ", ".join(self.people.get(x, str(x)[:8]) for x in r["members"])).setEnabled(False)
+        m.addSeparator()
+        m.addAction("Leave group", self._leave_room)
+        m.exec(self.more_btn.mapToGlobal(self.more_btn.rect().bottomLeft()))
+
+    def _save_room(self, r):
+        try:
+            self.backend.save_room(r)
+        except Exception as e:  # noqa: BLE001
+            self.status.setText(f"not saved — {e}")
+            return False
+        self.rooms[r["id"]] = r
+        self._fill_rooms()
+        return True
+
+    def _rename_room(self):
+        from PySide6.QtWidgets import QInputDialog
+        r = dict(self.rooms[self.room])
+        name, ok = QInputDialog.getText(self, "Rename group", "Name:", text=r.get("name") or "")
+        if ok and name.strip():
+            r["name"] = name.strip()[:80]
+            self._save_room(r)
+
+    def _add_people(self):
+        r = dict(self.rooms[self.room])
+        have = {str(x) for x in r["members"]}
+        d = NewChatDialog(self, [p for p in self.backend.people(self.page.inv) if str(p["id"]) not in have],
+                          adding=True)
+        if d.exec() and d.result_people():
+            r["members"] = list(r["members"]) + d.result_people()
+            self._save_room(r)
+
+    def _leave_room(self):
+        r = dict(self.rooms[self.room])
+        r["members"] = [x for x in r["members"] if str(x) != str(self.me())]
+        if self._save_room(r) is not False:
+            self.rooms.pop(r["id"], None)
+            self.switch_room(GENERAL)
 
     def _store_key(self):
         st = self.page.store
@@ -137,6 +301,9 @@ class ChatPanel(QWidget):
             return
         if self._busy:
             return
+        self._polls += 1
+        if self._polls % 8 == 0:
+            self.load_rooms()
         since = self._since()
         if isinstance(be, C.FileChat):                    # local disk: quick, no thread
             try:
@@ -154,7 +321,17 @@ class ChatPanel(QWidget):
         threading.Thread(target=work, daemon=True).start()
 
     def _on_fetched(self, res):
-        kind, be, payload = res
+        kind, be, payload = res[:3]
+        if kind in ("rooms", "rooms-err"):
+            if be is not self.backend:
+                return
+            if kind == "rooms":
+                people, rooms = payload
+                self.people = {p["id"]: p["name"] for p in people}
+                self.rooms = {r["id"]: r for r in rooms}
+            self._fill_rooms()
+            self.render()
+            return
         self._busy = False
         if be is not self.backend:
             return
@@ -173,9 +350,16 @@ class ChatPanel(QWidget):
         self.msgs.extend(new)
         self.msgs.sort(key=lambda m: m["at"])
         me = self.page.inv.userName or ""
-        if not first and not (self.isVisible() and self.window().isActiveWindow()):
-            self.unread += sum(1 for m in new if m.get("by") != me)
-            self.unread_changed.emit(self.unread)
+        if any(m.get("channel", GENERAL) not in self.rooms and m.get("channel", GENERAL) != GENERAL for m in new):
+            self.load_rooms()                                   # added to a new DM / group
+        if not first:
+            looking = self.isVisible() and self.window().isActiveWindow()
+            for m in new:
+                ch = m.get("channel") or GENERAL
+                if m.get("by") != me and not (looking and ch == self.room):
+                    self.unread_by[ch] = self.unread_by.get(ch, 0) + 1
+            self._recount()
+            self._fill_rooms()
         self.render()
 
     # ------------------------------------------------------------ view
@@ -183,7 +367,8 @@ class ChatPanel(QWidget):
         inv = self.page.inv
         me = inv.userName or ""
         out, last_day = [], None
-        for m in self.msgs[-400:]:
+        here = [m for m in self.msgs if (m.get("channel") or GENERAL) == self.room]
+        for m in here[-400:]:
             t = dt.datetime.fromtimestamp(m["at"] / 1000)
             if t.date() != last_day:
                 last_day = t.date()
@@ -202,7 +387,10 @@ class ChatPanel(QWidget):
                        f"<b style='color:{who_col}'>{html.escape(m.get('by') or '?')}</b>: {''.join(body)}</p>")
         if not out:
             out.append(f"<p style='color:{theme.MUTED}'>No messages yet. Say hi — or Shift-click a part to ask "
-                       "about it.</p>")
+                       "about it.</p>" if self.room == GENERAL else
+                       f"<p style='color:{theme.MUTED}'>Start the conversation."
+                       + ("" if getattr(self.backend, "private", True) else
+                          " (In a shared file anyone with the file can read this.)") + "</p>")
         sb = self.view.verticalScrollBar()
         at_end = sb.value() >= sb.maximum() - 4
         self.view.setHtml("".join(out))
@@ -227,9 +415,10 @@ class ChatPanel(QWidget):
         self.render()
 
     def mark_read(self):
-        if self.unread:
-            self.unread = 0
-            self.unread_changed.emit(0)
+        """Seen the open room (others keep their count)."""
+        if self.unread_by.pop(self.room, None) or self.unread != sum(self.unread_by.values()):
+            self._recount()
+            self._fill_rooms()
 
     # ------------------------------------------------------------ links
     def insert_link(self, kind: str, id_: str) -> bool:
@@ -285,7 +474,7 @@ class ChatPanel(QWidget):
     def _menu(self, pos):
         menu = self.view.createStandardContextMenu()
         me = self.page.inv.userName or ""
-        mine = [m for m in self.msgs if m.get("by") == me][-5:]
+        mine = [m for m in self.msgs if m.get("by") == me and (m.get("channel") or GENERAL) == self.room][-5:]
         if mine and self.backend is not None:
             sub = QMenu("Delete my message", menu)
             for m in reversed(mine):
@@ -299,7 +488,7 @@ class ChatPanel(QWidget):
         if not text or self.backend is None:
             return
         try:
-            msg = C.new_message(self.page.inv.userName or "unknown", self._encode(text))
+            msg = C.new_message(self.page.inv.userName or "unknown", self._encode(text), self.room)
             got = self.backend.post(msg)
         except Exception as e:  # noqa: BLE001
             self.status.setText(f"not sent — {e}")
@@ -318,3 +507,57 @@ class ChatPanel(QWidget):
             return
         self.msgs = [x for x in self.msgs if x["id"] != m["id"]]
         self.render()
+
+
+class NewChatDialog(QDialog):
+    """Pick one person (direct message) or several (group, with a name)."""
+
+    def __init__(self, parent, people, adding=False):
+        super().__init__(parent)
+        self.all_people = people
+        self.setWindowTitle("Add people" if adding else "New conversation")
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("Pick people to add:" if adding else
+                           "Pick one person for a direct message, or several for a group:"))
+        self.list = QListWidget()
+        for p in people:
+            it = QListWidgetItem(p["name"])
+            it.setData(Qt.UserRole, p["id"])
+            it.setFlags(it.flags() | Qt.ItemIsUserCheckable)
+            it.setCheckState(Qt.Unchecked)
+            self.list.addItem(it)
+        if not people:
+            v.addWidget(QLabel("No one else yet — teammates appear once they've signed in to DIMS."))
+        v.addWidget(self.list, 1)
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("Group name, e.g. Shop floor, RFP 1308 build")
+        self.name.setVisible(not adding)
+        v.addWidget(self.name)
+        self.bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        self.bb.accepted.connect(self._ok)
+        self.bb.rejected.connect(self.reject)
+        v.addWidget(self.bb)
+        self.adding = adding
+        self.list.itemChanged.connect(lambda _i: self._sync())
+        self._sync()
+
+    def result_people(self):
+        return [self.list.item(i).data(Qt.UserRole) for i in range(self.list.count())
+                if self.list.item(i).checkState() == Qt.Checked]
+
+    def _sync(self):
+        n = len(self.result_people())
+        ok = self.bb.button(QDialogButtonBox.Ok)
+        if self.adding:
+            ok.setText("Add")
+        else:
+            ok.setText("Message" if n == 1 else "Start group")
+            self.name.setEnabled(n > 1)
+        ok.setEnabled(n >= 1)
+
+    def _ok(self):
+        if not self.adding and len(self.result_people()) > 1 and not self.name.text().strip():
+            self.name.setFocus()
+            self.name.setPlaceholderText("Name the group first")
+            return
+        self.accept()

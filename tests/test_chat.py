@@ -190,3 +190,96 @@ def test_chat_pops_out_and_docks(tmp_path):
     QSettings("Daedalus", "Daedalus").setValue("dims/chat_popped", False)
     QSettings("Daedalus", "Daedalus").setValue("dims/chat_visible", False)
     page.close()
+
+
+def test_rooms_dm_and_group_model(tmp_path):
+    from daedalus.inventory import chat as C
+    a = C.new_room("dm", ["dan"], me="ankur")
+    b = C.new_room("dm", ["ankur"], me="dan")
+    assert a["id"] == b["id"] and a["id"].startswith("dm-") and len(a["id"]) <= 40     # same DM both ways
+    import pytest
+    with pytest.raises(ValueError):
+        C.new_room("group", ["dan", "sam"], "", me="ankur")
+    g = C.new_room("group", ["dan", "sam"], "Shop floor", me="ankur")
+    assert g["members"] == ["ankur", "dan", "sam"] and g["id"].startswith("grp-")
+    names = {"dan": "Daniel"}
+    assert C.room_title(None, "ankur", names) == "# Team" and C.room_title(a, "ankur", names) == "@ Daniel"
+    assert C.room_title(g, "ankur", names) == "◆ Shop floor"
+    fc = C.FileChat(tmp_path / "inv.chat.jsonl")
+    fc.save_room(g)
+    fc.post(C.new_message("Ankur", "team hello"))
+    fc.post(C.new_message("Ankur", "group hello", g["id"]))
+    assert [m["channel"] for m in fc.fetch(0)] == ["general", g["id"]]
+    assert fc.rooms("dan") == [g] and fc.rooms("zed") == []
+    assert {p["name"] for p in fc.people()} >= {"Ankur", "dan", "sam"}
+
+
+def test_server_rooms_and_people_requests():
+    import base64
+    import json
+    from daedalus.inventory import chat as C
+    calls = []
+
+    class Store:
+        schema = 4
+        session = {"access_token": "x." + base64.urlsafe_b64encode(json.dumps({"sub": "u1"}).encode()).decode()
+                   .rstrip("=") + ".y"}
+
+        def _rest(self, method, path, body=None, headers=None):
+            calls.append((method, path, body))
+            if "dims_profiles" in path:
+                return 200, [{"user_id": "u2", "display_name": "Daniel"}, {"user_id": "u1", "email": "ankur@x.com"}]
+            if method == "GET" and "dims_chat_rooms" in path:
+                return 200, [{"id": "dm-1", "kind": "dm", "name": "", "members": ["u1", "u2"]}]
+            if method == "POST":
+                return 201, [body]
+            return 200, []
+
+        def _check_write(self, code, res, what):
+            assert code < 400
+
+    sc = C.ServerChat(Store())
+    assert sc.me() == "u1" and sc.rooms_ready
+    assert [p["name"] for p in sc.people()] == ["ankur", "Daniel"]
+    assert sc.rooms()[0]["members"] == ["u1", "u2"]
+    r = C.new_room("dm", ["u2"], me="u1")
+    sc.save_room(r)
+    m, path, body = calls[-1]
+    assert m == "POST" and "dims_chat_rooms" in path and body["members"] == ["u1", "u2"]
+    Store.schema = 3
+    assert not sc.rooms_ready and sc.rooms() == []
+
+
+def test_panel_switches_rooms_and_counts_unread_per_room(tmp_path):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.inventory import chat as C
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    QSettings("Daedalus", "Daedalus").setValue("dims/chat_room", "general")
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv.userName = "Ankur"
+    page = InventoryPage(st, lite=True)
+    page.inv.userName = "Ankur"
+    ch = page.chat
+    fc = ch.backend
+    g = fc.save_room(C.new_room("group", ["Dan"], "Shop floor", me="Ankur"))
+    fc.post(C.new_message("Dan", "team note"))
+    ch.poll()
+    ch.load_rooms()
+    assert g["id"] in ch.rooms and ch.room_box.count() == 2
+    fc.post(C.new_message("Dan", "in the group", g["id"]))
+    ch.poll()
+    assert ch.unread_by.get(g["id"]) == 1 and "● 1" in ch.room_box.itemText(ch.room_box.findData(g["id"]))
+    assert "in the group" not in ch.view.toPlainText()
+    ch.switch_room(g["id"])
+    assert "in the group" in ch.view.toPlainText() and "team note" not in ch.view.toPlainText()
+    assert g["id"] not in ch.unread_by and ch.more_btn.isVisibleTo(ch)
+    ch.input.setText("reply")
+    ch.send()
+    assert fc.fetch(0)[-1]["channel"] == g["id"]
+    QSettings("Daedalus", "Daedalus").setValue("dims/chat_room", "general")
+    page.close()
