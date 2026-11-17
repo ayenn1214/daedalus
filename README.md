@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.26</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.27</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -432,6 +432,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.27** | Activity Log ▸ Updates: every part profile change (who, when, field old → new) from the server's audit trail or the file's updates log · Parts: parts changed in the last 7 days highlighted (bold until you open them, changes in the tooltip) |
 | **3.0.26** | Part profile: Update button on revision warnings (file changed → same or next revision; newer Rev in the folder → switch to it; rev mismatch → take the file's letter) |
 | **3.0.25** | DIMS chat: direct messages and group chats (members only, enforced on the server) · tabs in work order (Projects → Parts → Orders → Production → Reorder → Time-Phased → Vendors → Finishing → Locations) · Read drawings: whole folders, newest Rev only, bulk tick / select, projects for new parts · revisions checked in automatically, no false 'changed' from Dropbox · file links saved as ~/… so they open from everyone's folder · revision history on every part · profile Save / Revert / Delete under the last field |
 | **3.0.24** | DIMS Read drawings… (title block, BOM, revisions and notes from drawing PDFs, matched to parts by part number; pick what goes into the profile) · Projects: Weldments Nested / Flat / Hidden, straight connected tree lines · Chat pops out into its own window (remembered, keep on top, dock back) |

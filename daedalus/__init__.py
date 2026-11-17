@@ -1,5 +1,5 @@
 """Daedalus — parametric desktop CAD with a Claude copilot."""
-__version__ = "3.0.26"
+__version__ = "3.0.27"
 APP_NAME = "Daedalus"
 FILE_EXT = ".daedalus"
 LEGACY_EXTS = (".strata",)                  # files saved by Strata CAD (pre-rename) open unchanged
