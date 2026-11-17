@@ -207,7 +207,9 @@ def test_production_dates_inline(monkeypatch):
 
 def test_project_weldments_nested_or_flat(tmp_path):
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtWidgets import QApplication, QTableWidget
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QLabel, QTableWidget, QToolButton
     app = QApplication.instance() or QApplication([])
     from daedalus.inventory.store import InventoryStore
     from daedalus.ui.inventory_ui import InventoryPage
@@ -219,46 +221,36 @@ def test_project_weldments_nested_or_flat(tmp_path):
     st.inv = inv
     st.save()
     page = InventoryPage(st, lite=True)
-    page.goto("projects")
-    app.processEvents()
-
-    def names():
-        t = next(x for x in page.pages["projects"].widget().findChildren(QTableWidget) if x.rowCount() > 3)
-        return [t.item(i, 1).text() for i in range(t.rowCount()) if t.item(i, 1)]
-    n = names()
-    assert any("▾ WLDMT, FRAME" in x and "[weldment · 1]" in x for x in n) and any("× 4  FLAT, TAB" in x for x in n)
-    page.toggle_weld(pid, "frame")                                         # fold the weldment
-    assert any("▸ WLDMT, FRAME" in x for x in names()) and not any("FLAT, TAB" in x for x in names())
-    page.toggle_weld(pid, "frame")
-    page.toggle_nest(pid)                                                  # flat: tab at the top level
-    n = names()
-    assert any(x.strip().startswith("FLAT, TAB") and "(in M30-0001)" in x for x in n)
-    page.toggle_nest(pid)
-    assert any("× 4  FLAT, TAB" in x for x in names())
-
-
-def test_clicking_a_weldment_folds_it_without_crashing(tmp_path):
-    """Real mouse click on the weldment row: the table rebuilds after the click, not inside it (Qt crash)."""
-    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
-    from PySide6.QtCore import Qt
-    from PySide6.QtTest import QTest
-    from PySide6.QtWidgets import QApplication, QTableWidget
-    app = QApplication.instance() or QApplication([])
-    from daedalus.inventory.store import InventoryStore
-    from daedalus.ui.inventory_ui import InventoryPage
-    st = InventoryStore(tmp_path / "inv.json")
-    st.inv, pid = shop()
-    st.save()
-    page = InventoryPage(st, lite=True)
     page.resize(1300, 800)
     page.show()
     page.goto("projects")
     app.processEvents()
-    for expect in (True, False, True):
-        t = next(x for x in page.pages["projects"].widget().findChildren(QTableWidget) if x.rowCount() > 3)
-        r = next(i for i in range(t.rowCount()) if t.item(i, 1) and "WLDMT, FRAME" in t.item(i, 1).text())
-        QTest.mouseClick(t.viewport(), Qt.LeftButton, Qt.NoModifier, t.visualItemRect(t.item(r, 1)).center())
+
+    def table():
+        return next(x for x in page.pages["projects"].widget().findChildren(QTableWidget) if x.rowCount() > 3)
+
+    def weld_cell():
+        t = table()
+        return next(t.cellWidget(i, 1) for i in range(t.rowCount())
+                    if t.cellWidget(i, 1) is not None and t.cellWidget(i, 1).property("weldId") == "frame")
+
+    def texts(w):
+        return [x.text() for x in w.findChildren(QLabel)]
+    w = weld_cell()                                                        # the weldment is ONE row …
+    assert any("WLDMT, FRAME" in x for x in texts(w)) and "└─ FLAT, TAB" in texts(w)   # … with its parts in it
+    qty = table().cellWidget(table().indexAt(w.pos()).row(), 2)
+    assert "× 4" in texts(qty)
+    for expect_shut in (True, False, True):                               # ▾ / ▸ folds it, no crash
+        b = next(x for x in weld_cell().findChildren(QToolButton) if x.text() in ("▾", "▸"))
+        QTest.mouseClick(b, Qt.LeftButton)
         for _ in range(3):
             app.processEvents()
-        assert (f"{pid}:frame" in page.mrp_state.get("weld_shut", [])) is expect
+        assert (f"{pid}:frame" in page.mrp_state.get("weld_shut", [])) is expect_shut
+        assert ("└─ FLAT, TAB" in texts(weld_cell())) is (not expect_shut)
+    page.toggle_nest(pid)                                                  # flat: tab at the top level
+    t = table()
+    n = [t.item(i, 1).text() for i in range(t.rowCount()) if t.item(i, 1)]
+    assert any(x.strip().startswith("FLAT, TAB") and "(in M30-0001)" in x for x in n)
+    page.toggle_nest(pid)
+    assert weld_cell() is not None
     page.close()

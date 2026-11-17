@@ -8,7 +8,7 @@ import re
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSettings, Qt, QTimer, QUrl, Signal
-from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QPainter, QPen
+from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
@@ -873,12 +873,139 @@ class InventoryPage(QWidget):
         shut.remove(key) if key in shut else shut.append(key)
         self.refresh_current()
 
+    def _weld_row(self, pr, block, folded):
+        """A weldment and everything in it as ONE table row: the parts listed under its name with tree lines
+        (├─ / └─), each with its × qty, stock and cost on the same line."""
+        inv = self.inv
+        top = block[0]
+        p, _d, _ql, need, on_hand, _emb = top
+        kids = [] if folded else block[1:]
+        fm = self.fontMetrics()
+        h_top, h_kid = max(30, fm.height() + 14), max(20, fm.height() + 6)
+        heights = [h_top] + [h_kid] * len(kids)
+        # tree prefixes: │ continues a branch, ├─ / └─ for a part (last one at its level gets └─)
+        def more_at(i, lvl):                         # another part at this level before the branch closes?
+            for k in kids[i + 1:]:
+                if k[1] < lvl:
+                    return False
+                if k[1] == lvl:
+                    return True
+            return False
+        prefixes = []
+        for i, k in enumerate(kids):
+            d = k[1]
+            anc = "".join("│   " if more_at(i, lvl) else "    " for lvl in range(1, d))
+            prefixes.append(anc + ("├─ " if more_at(i, d) else "└─ "))
+
+        def stack(cells, align=Qt.AlignLeft | Qt.AlignVCenter):
+            w = QWidget()
+            w.setObjectName("weldcell")
+            w.setAttribute(Qt.WA_StyledBackground, True)
+            w.setStyleSheet("QWidget#weldcell { background: transparent; } QLabel { background: transparent; }")
+            lay = QVBoxLayout(w)
+            lay.setContentsMargins(6, 2, 6, 2)
+            lay.setSpacing(0)
+            for (c, link), hgt in zip(cells, heights):
+                if isinstance(c, QWidget):
+                    c.setFixedHeight(hgt - 4)
+                    lay.addWidget(c)
+                    continue
+                txt, col, bold = c if isinstance(c, tuple) else (c, None, False)
+                lab = QLabel(txt)
+                lab.setFixedHeight(hgt)
+                bf = lab.font()
+                bf.setBold(True)                                 # measured bold: styles apply after sizing
+                lab.setMinimumWidth(QFontMetrics(bf).horizontalAdvance(txt) + 8)
+                lab.setAlignment(align)
+                css = (f"color:{col};" if col else "") + ("font-weight:600;" if bold else "")
+                if css:
+                    lab.setStyleSheet(css)
+                if link:
+                    lab.setProperty("dimsLink", f"part:{link}")
+                    lab.setToolTip(inv.spec_line(inv.part(link)) or "Shift-click to share in chat")
+                lay.addWidget(lab)
+            lay.addStretch(1)
+            return w
+        right = Qt.AlignRight | Qt.AlignVCenter
+        ids = [p["id"]] + [k[0]["id"] for k in kids]
+        caret = QToolButton()
+        caret.setText("▸" if folded else "▾")
+        caret.setAutoRaise(True)
+        caret.setToolTip("Show / hide the parts in this weldment")
+        caret.clicked.connect(lambda _=False: QTimer.singleShot(0, lambda: self.toggle_weld(pr["id"], p["id"])))
+        head = QWidget()
+        head.setObjectName("weldcell")
+        head.setStyleSheet("QWidget#weldcell { background: transparent; }")
+        hh = QHBoxLayout(head)
+        hh.setContentsMargins(0, 0, 0, 0)
+        hh.setSpacing(4)
+        hh.addWidget(caret)
+        nm = QLabel(f"<b>{p['name']}</b>  <span style='color:{theme.MUTED}'>· weldment</span>")
+        nm.setProperty("dimsLink", f"part:{p['id']}")
+        nm.setToolTip(inv.spec_line(p))
+        hh.addWidget(nm, 1)
+        part_cells = [(head, None)] + [((f"{pre}{k[0]['name']}", None, False), k[0]["id"])
+                                       for pre, k in zip(prefixes, kids)]
+        pn = [((p.get("partNumber") or "", None, True), p["id"])] + \
+             [((k[0].get("partNumber") or "", theme.MUTED, False), k[0]["id"]) for k in kids]
+        a = inv.allocation(p, pr["id"])
+        if a:
+            q = QSpinBox()
+            q.setRange(0, 1_000_000)
+            q.setValue(int(M.num(a.get("qty"))))
+            q.editingFinished.connect(lambda q=q, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, q.value()))
+            qty = [(q, None)]
+        else:
+            qty = [(("—", None, False), None)]
+        qty += [((f"× {M.num(k[2]):g}", None, False), None) for k in kids]
+
+        def num_cells(f):
+            out = []
+            for i, (kp, _d2, _q2, nd, oh, emb) in enumerate([top] + kids):
+                out.append(((f(kp, nd, oh, emb)), None))
+            return out
+        need_c = num_cells(lambda kp, nd, oh, emb: (f"{nd:g}", None, kp is p))
+        hand_c = num_cells(lambda kp, nd, oh, emb: (f"{oh:g}" + (" *" if emb else ""),
+                                                    theme.ERROR if oh < nd else None, False))
+        short_c = num_cells(lambda kp, nd, oh, emb: (f"−{nd - oh:g}" if nd > oh else "—",
+                                                     theme.ERROR if nd > oh else None, nd > oh))
+        cost_c = num_cells(lambda kp, nd, oh, emb: (M.fmt_money(kp.get("unitCost")), None, False))
+        acts = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
+                _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
+                _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i))]
+        if a:
+            acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid), danger=True))
+        act_w = QWidget()
+        act_w.setObjectName("weldcell")
+        act_w.setStyleSheet("QWidget#weldcell { background: transparent; }")
+        al = QVBoxLayout(act_w)
+        al.setContentsMargins(0, 0, 0, 0)
+        al.addWidget(_actions(*acts))
+        al.addStretch(1)
+        row = [stack(pn), stack(part_cells), stack(qty, right), stack(need_c, right), stack(hand_c, right),
+               stack(short_c, right), stack(cost_c, right), act_w]
+        row[1].setProperty("weldId", p["id"])
+        return row, sum(heights) + 6, ids
+
     def _project_table(self, pr, rows, flat=False):
         inv = self.inv
         shut = set(self.mrp_state.get("weld_shut", []))
         hidden_under = None                                     # depth of a collapsed weldment we're inside
-        tr, heads = [], []
-        for row in rows:
+        tr, heads, tall = [], [], {}
+        skip_to = -1
+        for ri, row in enumerate(rows):
+            if ri < skip_to:
+                continue
+            if row[0] != "hdr" and not flat and row[1] == 0 and row[0].get("type") == "manufactured" and \
+                    row[0].get("isWeldment") and row[0].get("components"):
+                end = ri + 1                                     # the weldment + everything under it → one row
+                while end < len(rows) and rows[end][0] != "hdr" and rows[end][1] > 0:
+                    end += 1
+                cells, hgt, _ids = self._weld_row(pr, rows[ri:end], f"{pr['id']}:{row[0]['id']}" in shut)
+                tall[len(tr)] = hgt
+                tr.append(cells)
+                skip_to = end
+                continue
             if row[0] == "hdr":
                 hidden_under = None
                 it = QTableWidgetItem(f"{row[1]}  ·  {row[2]}")
@@ -934,6 +1061,8 @@ class InventoryPage(QWidget):
                                  short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
         t = self.table(["Part No.", "Part", "Qty/Unit", "For 1 Unit", "On Hand", "Short (1 unit)",
                         "Unit Cost", ""], tr, 1)
+        for i, hgt in tall.items():                                 # weldment rows hold their parts
+            t.setRowHeight(i, hgt)
         for i in heads:                                             # type header rows span the table
             t.setSpan(i, 0, 1, t.columnCount())
             t.item(i, 0).setBackground(QBrush(QColor(theme.PANEL)))
