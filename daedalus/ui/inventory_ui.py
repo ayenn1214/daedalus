@@ -128,6 +128,27 @@ def _num_item(v, color=None, bold=False):
     return it
 
 
+QTY_W, QTY_H = 88, 26
+
+
+def _qty_spin(value, done):
+    """Qty/Unit editor — the same size on every row (plain, weldment, any row height)."""
+    q = QSpinBox()
+    q.setRange(0, 1_000_000)
+    q.setValue(int(value))
+    q.setFixedSize(QTY_W, QTY_H)
+    q.editingFinished.connect(lambda: done(q.value()))
+    w = QWidget()
+    w.setObjectName("weldcell")
+    w.setStyleSheet("QWidget#weldcell { background: transparent; }")
+    h = QHBoxLayout(w)
+    h.setContentsMargins(6, 0, 6, 0)
+    h.addWidget(q, 0, Qt.AlignLeft | Qt.AlignVCenter)
+    h.addStretch(1)
+    w.spin = q
+    return w
+
+
 def _open_link(target: str):
     t = (target or "").strip()
     if not t:
@@ -950,7 +971,9 @@ class InventoryPage(QWidget):
             lay.setSpacing(0)
             for (c, link), hgt in zip(cells, heights):
                 if isinstance(c, QWidget):
-                    c.setFixedHeight(hgt - 4)
+                    if hasattr(c, "spin"):                       # Qty/Unit: same box and position as plain rows
+                        c.layout().setContentsMargins(0, 0, 0, 0)
+                    c.setFixedHeight(hgt if hasattr(c, "spin") else hgt - 4)
                     lay.addWidget(c)
                     continue
                 txt, col, bold = c if isinstance(c, tuple) else (c, None, False)
@@ -993,10 +1016,7 @@ class InventoryPage(QWidget):
              [((k[0].get("partNumber") or "", theme.MUTED, False), k[0]["id"]) for k in kids]
         a = inv.allocation(p, pr["id"])
         if a:
-            q = QSpinBox()
-            q.setRange(0, 1_000_000)
-            q.setValue(int(M.num(a.get("qty"))))
-            q.editingFinished.connect(lambda q=q, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, q.value()))
+            q = _qty_spin(M.num(a.get("qty")), lambda v, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, v))
             qty = [(q, None)]
         else:
             qty = [(("—", None, False), None)]
@@ -1086,10 +1106,8 @@ class InventoryPage(QWidget):
             tag(name, "part", p["id"])
             if depth == 0 and inv.allocation(p, pr["id"]):
                 a = inv.allocation(p, pr["id"])
-                q = QSpinBox()
-                q.setRange(0, 1_000_000)
-                q.setValue(int(M.num(a.get("qty") if a else 0)))
-                q.editingFinished.connect(lambda q=q, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, q.value()))
+                q = _qty_spin(M.num(a.get("qty") if a else 0),
+                              lambda v, pp=p, pid=pr["id"]: self.set_alloc(pp, pid, v))
             else:
                 q = "—"
             acts = [_ibtn("use", lambda _=False, i=p["id"]: self.move(i, "usage")),
@@ -1101,7 +1119,7 @@ class InventoryPage(QWidget):
             tr.append([tag(QTableWidgetItem(p.get("partNumber") or ""), "part", p["id"]), name, q, _num_item(need),
                        _num_item(on_hand, None) if not emb else _num_item(f"{on_hand:g} *"),
                        _num_item(f"−{short:g}" if short > 0 else "—", theme.ERROR if short > 0 else None,
-                                 short > 0), M.fmt_money(p.get("unitCost")), _actions(*acts)])
+                                 short > 0), _num_item(M.fmt_money(p.get("unitCost"))), _actions(*acts)])
         t = self.table(["Part No.", "Part", "Qty/Unit", "For 1 Unit", "On Hand", "Short (1 unit)",
                         "Unit Cost", ""], tr, 1)
         for i, hgt in tall.items():                                 # weldment rows hold their parts

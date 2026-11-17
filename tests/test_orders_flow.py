@@ -240,6 +240,13 @@ def test_project_weldments_nested_or_flat(tmp_path):
     assert any("WLDMT, FRAME" in x for x in texts(w)) and "└─ FLAT, TAB" in texts(w)   # … with its parts in it
     qty = table().cellWidget(table().indexAt(w.pos()).row(), 2)
     assert "× 4" in texts(qty)
+    from PySide6.QtWidgets import QSpinBox
+    t = table()
+    spins = [x for i in range(t.rowCount()) for x in ((t.cellWidget(i, 2).findChildren(QSpinBox)
+             if t.cellWidget(i, 2) else []))]
+    assert len(spins) >= 2 and len({(x.width(), x.height()) for x in spins}) == 1     # every Qty/Unit box the same
+    costs = [t.item(i, 6) for i in range(t.rowCount()) if t.item(i, 6) and "$" in t.item(i, 6).text()]
+    assert costs and all(c.textAlignment() & Qt.AlignRight for c in costs)          # Unit Cost right-aligned
     for expect_shut in (True, False, True):                               # ▾ / ▸ folds it, no crash
         b = next(x for x in weld_cell().findChildren(QToolButton) if x.text() in ("▾", "▸"))
         QTest.mouseClick(b, Qt.LeftButton)
