@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
 
 from ..inventory import finishing as F
 from ..inventory import model as M
+from ..inventory import orders as O
 from ..inventory import mrp as R
 from ..inventory import project_export as PX
 from . import theme
@@ -74,7 +75,7 @@ class FinishingView(QWidget):
         for o in self.inv.productionOrders:
             if o.get("status") in ("Complete", "Cancelled"):
                 continue
-            nm = self.inv.project_name(o.get("projectId")) or "?"
+            nm = O.line_name(self.inv, o.get("projectId"), o.get("config"))
             self.src.addItem(f"Production: {nm} × {M.num(o.get('qty')):g}" + (f" · PO {o['poNumber']}"
                                                                                if o.get("poNumber") else ""),
                              ("production", o["id"]))

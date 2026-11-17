@@ -810,6 +810,9 @@ class InventoryPage(QWidget):
                                     "confirmed orders"))
             for b in (*extra, up, dn, _small("+ Add Parts", lambda _=False, i=pr["id"]: self.add_parts_to_project(i)),
                       _small("Duplicate", lambda _=False, i=pr["id"]: self.duplicate_project(i)),
+                      _small("Customize…", lambda _=False, i=pr["id"]: QTimer.singleShot(0, lambda: self.customize_project(i)),
+                             "Configurations: pick-one options (e.g. length) and add-ons (e.g. an extra beam), each "
+                             "adding its own parts"),
                       _small("BOM / Export", lambda _=False, i=pr["id"]: self.project_bom(i),
                              "Parts list: MFG parts as a hierarchy, fasteners and purchased parts — copy or "
                              "export to Excel"),
@@ -843,8 +846,13 @@ class InventoryPage(QWidget):
                     ordered.append(("hdr", gname, sum(1 for r in grows if r[1] == 0)))
                     ordered.extend(grows)
             v.addWidget(self._project_table(pr, ordered, flat))
+            opt = self._options_table(pr)
+            if opt is not None:
+                v.addWidget(opt)
         v.addWidget(_section("Unassigned"))
-        un = [p for p in inv.parts if not inv.allocations(p)]
+        from ..inventory import configs as C
+        in_opts = set().union(*[C.option_parts(pr) for pr in inv.projects]) if inv.projects else set()
+        un = [p for p in inv.parts if not inv.allocations(p) and p["id"] not in in_opts]
         v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower())) if un
                     else _muted("Every part is assigned to at least one project."))
         arch = inv.archived_projects()
@@ -1217,6 +1225,56 @@ class InventoryPage(QWidget):
         self.commit(f"{pr['name']}: old plan of {old} units removed",
                     undo=lambda: (pr.__setitem__("totalQtyNeeded", old), self.commit("Undone")))
 
+    def customize_project(self, pid):
+        from .project_custom_ui import ProjectCustomizerDialog
+        d = ProjectCustomizerDialog(self.inv, pid, self)
+        if d.exec() != QDialog.Accepted:
+            return
+        pr = self.inv.project(pid)
+        pr["options"] = d.result_options
+        n = sum(len(g["choices"]) for g in pr["options"])
+        self.commit(f"{pr['name']}: {len(pr['options'])} option(s), {n} choice(s)")
+
+    def _options_table(self, pr):
+        """The project's options under its parts: each choice and the parts it adds per unit."""
+        from ..inventory import configs as C
+        if not C.has_options(pr):
+            return None
+        inv = self.inv
+        rows, heads = [], []
+        for g in C.groups(pr):
+            heads.append(len(rows))
+            kind = "pick one" if g.get("kind", C.ONE) == C.ONE else "add-ons"
+            rows.append([f"Option · {g['name']}  ({kind})", "", "", "", "", ""])
+            for c in g.get("choices") or []:
+                lines = [ln for ln in c.get("lines") or [] if inv.part(ln.get("partId"))]
+                first = True
+                for ln in lines or [None]:
+                    p = inv.part(ln["partId"]) if ln else None
+                    rows.append([(c["name"] + ("  ★ default" if c.get("default") else "")) if first else "",
+                                 tag(QTableWidgetItem(p.get("partNumber") or ""), "part", p["id"]) if p else "",
+                                 p["name"] if p else "— adds no parts —",
+                                 f"{M.num(ln['qty']):g}" if ln else "",
+                                 f"{M.num(p.get('currentStock')):g}" if p else "",
+                                 M.TYPE_LABEL.get(p.get("type"), "") if p else ""])
+                    first = False
+        t = self.table(["Choice", "Part No.", "Part", "Qty / Unit", "On Hand", "Type"], rows, 2)
+        for i in heads:
+            t.setSpan(i, 0, 1, t.columnCount())
+            it = t.item(i, 0)
+            if it is not None:
+                f_ = it.font()
+                f_.setBold(True)
+                it.setFont(f_)
+                it.setForeground(QBrush(QColor(theme.ACCENT_TEXT)))
+                it.setBackground(QBrush(QColor(theme.PANEL)))
+        from PySide6.QtWidgets import QAbstractScrollArea, QSizePolicy
+        t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        t.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+        t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        t.setMinimumHeight(0)
+        return t
+
     def duplicate_project(self, pid):
         clone, n = self.inv.duplicate_project(pid)
         self.commit(f"Duplicated with {n} part(s)")
@@ -1271,7 +1329,7 @@ class InventoryPage(QWidget):
                 dot.setForeground(QBrush(QColor(theme.INFO)))
                 dot.setTextAlignment(Qt.AlignCenter)
                 cells = [o.get("orderName") or "—", o.get("poNumber") or "—",
-                         inv.project_name(o.get("projectId")) or "(deleted project)", f"{M.num(o.get('qty')):g}",
+                         O.line_name(inv, o.get("projectId"), o.get("config")), f"{M.num(o.get('qty')):g}",
                          O.stage(inv, o), M.fmt_date(o.get("finishBy") or o.get("dueDate"))]
                 items = []
                 for c in cells:

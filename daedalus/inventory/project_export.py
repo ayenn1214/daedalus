@@ -75,8 +75,10 @@ def _sort_key(p):
     return (p.get("partNumber") or "~").upper(), p["name"].lower()
 
 
-def top_level(inv, pid):
-    """Project parts that aren't inside another project part's BOM, with their qty per unit."""
+def top_level(inv, pid, config=None):
+    """Project parts that aren't inside another project part's BOM, with their qty per unit — plus what the
+    chosen options add (config; defaults when None)."""
+    from .configs import lines as option_lines
     on = inv.parts_for_project(pid)
     inside = set()
     for p in on:
@@ -90,10 +92,19 @@ def top_level(inv, pid):
         q = M.num(a.get("qty")) if a else 0
         if q > 0:
             out.append((p, q))
+    have = {p["id"]: i for i, (p, _q) in enumerate(out)}
+    for part_id, q in option_lines(inv.project(pid), config).items():
+        p = inv.part(part_id)
+        if p is None:
+            continue
+        if part_id in have:
+            out[have[part_id]] = (p, out[have[part_id]][1] + q)
+        else:
+            out.append((p, q))
     return sorted(out, key=lambda x: _sort_key(x[0]))
 
 
-def mfg_tree(inv, pid, units: float) -> list[dict]:
+def mfg_tree(inv, pid, units: float, config=None) -> list[dict]:
     """Manufactured parts as a hierarchy. Each line: item, level, part, qty (per parent), perUnit, total."""
     lines: list[dict] = []
 
@@ -114,18 +125,18 @@ def mfg_tree(inv, pid, units: float) -> list[dict]:
             walk(ch, q, per_unit * q, level + 1, f"{item}.{i}", seen | {p["id"]})
 
     n = 0
-    for p, q in top_level(inv, pid):
+    for p, q in top_level(inv, pid, config):
         if p.get("type") == "manufactured":
             n += 1
             walk(p, q, q, 0, str(n), set())
     return lines
 
 
-def flat_lists(inv, pid, units: float) -> dict:
+def flat_lists(inv, pid, units: float, config=None) -> dict:
     """{group: [line]} for fasteners / purchased / other — totalled through every BOM level."""
     from .mrp import explode
     per_unit: dict = {}
-    for p, q in top_level(inv, pid):
+    for p, q in top_level(inv, pid, config):
         for part_id, e in explode(inv, p["id"], q, False).items():
             per_unit[part_id] = per_unit.get(part_id, 0.0) + e["gross"]
     out = {g: [] for g in LIST_GROUPS}
@@ -142,14 +153,14 @@ def flat_lists(inv, pid, units: float) -> dict:
     return out
 
 
-def project_data(inv: M.Inventory, pid: str, units: float | None = None) -> dict:
+def project_data(inv: M.Inventory, pid: str, units: float | None = None, config=None) -> dict:
     pr = inv.project(pid)
     if pr is None:
         raise ValueError("No such project")
     on_order = inv.project_qty(pid)
     units = float(units if units is not None else (on_order or 1))
-    tree = mfg_tree(inv, pid, units)
-    lists = flat_lists(inv, pid, units)
+    tree = mfg_tree(inv, pid, units, config)
+    lists = flat_lists(inv, pid, units, config)
     mfg_totals: dict = {}
     for ln in tree:
         mfg_totals[ln["part"]["id"]] = mfg_totals.get(ln["part"]["id"], 0.0) + ln["total"]
@@ -166,7 +177,9 @@ def project_data(inv: M.Inventory, pid: str, units: float | None = None) -> dict
     counts = {"MFG parts": len(mfg_flat), **{g: len(lists[g]) for g in LIST_GROUPS}}
     short = sum(1 for r in mfg_flat if r["short"] > 0) + sum(1 for g in LIST_GROUPS for r in lists[g]
                                                              if r["short"] > 0)
+    from . import configs as C
     return {"project": pr, "units": units, "onOrder": on_order, "tree": tree, "mfg": mfg_flat, "lists": lists,
+            "config": C.normalize(pr, config), "configLabel": C.label(pr, config, short=False),
             "counts": counts, "perUnitCost": per_unit_cost, "short": short}
 
 
@@ -318,12 +331,12 @@ def buy_rows(inv, d):
     return cols, rows
 
 
-def write(path, inv: M.Inventory, pids, units: dict | None = None, by: str = ""):
+def write(path, inv: M.Inventory, pids, units: dict | None = None, by: str = "", configs: dict | None = None):
     """Project BOM workbook. units: {projectId: units} (default: units on open production, else 1)."""
     import openpyxl
     from openpyxl.utils import get_column_letter
     st = _styles()
-    data = [project_data(inv, pid, (units or {}).get(pid)) for pid in pids]
+    data = [project_data(inv, pid, (units or {}).get(pid), (configs or {}).get(pid)) for pid in pids]
     wb = openpyxl.Workbook()
     wb.remove(wb.active)
     multi = len(data) > 1
@@ -350,7 +363,8 @@ def write(path, inv: M.Inventory, pids, units: dict | None = None, by: str = "")
         ws = wb.create_sheet(_sheet_name(wb, pre + "BOM"))
         ws["A1"] = f"{name} — Bill of Materials"
         ws["A1"].font = st["title"]
-        ws["A2"] = (f"{u:g} unit{'s' if u != 1 else ''} · {M.today()}" + (f" · {by}" if by else "")
+        ws["A2"] = (f"{u:g} unit{'s' if u != 1 else ''}" + (f" · {d['configLabel']}" if d.get("configLabel") else "")
+                    + f" · {M.today()}" + (f" · {by}" if by else "")
                     + f" · {d['counts']['MFG parts']} MFG · {d['counts']['Fasteners']} fasteners · "
                       f"{d['counts']['Purchased parts']} purchased")
         ws["A2"].font = st["muted"]

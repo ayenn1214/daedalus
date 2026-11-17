@@ -515,7 +515,10 @@ class Inventory:
         return [p for p in self.parts if self.allocation(p, pid)]
 
     def project_chips(self, p):
-        return [n for n in (self.project_name(a.get("projectId")) for a in self.allocations(p)) if n]
+        from .configs import option_projects
+        ids = [a.get("projectId") for a in self.allocations(p)]
+        ids += [x for x in option_projects(self, p) if x not in ids]          # parts of a project's options
+        return [n for n in (self.project_name(i) for i in ids) if n]
 
     def find_or_create_project(self, name, **extra):
         name = (name or "").strip()
@@ -570,11 +573,14 @@ class Inventory:
         a["order"], c["order"] = tc, ta
 
     def needed_for_project(self, p, pid) -> float:
+        from .configs import option_need
         a = self.allocation(p, pid)
-        return num(a.get("qty")) * self.project_qty(pid) if a else 0.0
+        return (num(a.get("qty")) * self.project_qty(pid) if a else 0.0) + option_need(self, p, pid)
 
     def total_needed(self, p) -> float:
-        return sum(num(a.get("qty")) * self.project_qty(a.get("projectId")) for a in self.allocations(p))
+        from .configs import option_need, option_projects
+        base = sum(num(a.get("qty")) * self.project_qty(a.get("projectId")) for a in self.allocations(p))
+        return base + sum(option_need(self, p, pid) for pid in option_projects(self, p))
 
     def project_rows(self, pid, per_unit=False, nest=True):
         """Rows for a project table, expanding weldments: (part, depth, qty_label, needed, on_hand, embedded).

@@ -33,12 +33,29 @@ def order_name(inv: Inventory, o) -> str:
     return o.get("name") or (inv.client(o.get("clientId")) or {}).get("name") or ""
 
 
-def _lines(lines) -> dict:
+def _lines(lines, inv: Inventory | None = None) -> dict:
+    """{(projectId, config key): qty} — the same project in two configurations stays two lines."""
+    from . import configs as C
     out: dict = {}
     for ln in lines or []:
         if ln.get("projectId") and num(ln.get("qty")) > 0:
-            out[ln["projectId"]] = out.get(ln["projectId"], 0) + num(ln.get("qty"))
+            k = (ln["projectId"], C.key(inv.project(ln["projectId"]), ln.get("config")) if inv else "")
+            out[k] = out.get(k, 0) + num(ln.get("qty"))
     return out
+
+
+def _configs(lines, inv) -> dict:
+    from . import configs as C
+    return {(ln["projectId"], C.key(inv.project(ln["projectId"]), ln.get("config"))):
+            C.normalize(inv.project(ln["projectId"]), ln.get("config"))
+            for ln in lines or [] if ln.get("projectId")}
+
+
+def line_name(inv: Inventory, pid, config=None) -> str:
+    from . import configs as C
+    pr = inv.project(pid)
+    lab = C.label(pr, config) if C.has_options(pr) else ""
+    return (inv.project_name(pid) or "(deleted project)") + (f" ({lab})" if lab else "")
 
 
 def _log(o, by, what, changes=None):
@@ -52,13 +69,15 @@ def save_order(inv: Inventory, o, po: str, name: str, lines: list, by: str = "")
     po, name = (po or "").strip(), (name or "").strip()
     if not name:
         raise ValueError("Enter the order name")
-    new_lines = [{"projectId": p, "qty": q} for p, q in _lines(lines).items()]
+    cfgs = _configs(lines, inv)
+    new_lines = [{"projectId": k[0], "qty": q, **({"config": cfgs[k]} if cfgs.get(k) else {})}
+                 for k, q in _lines(lines, inv).items()]
     if not new_lines:
         raise ValueError("Add at least one project with a quantity")
     if o is None:
         o = {"id": uid(), "poNumber": po, "name": name, "projectLines": new_lines, "status": DRAFT, "rev": 0,
              "orderDate": today(), "createdAt": now_ms()}
-        _log(o, by, "created", [f"{inv.project_name(l['projectId'])} ×{l['qty']:g}" for l in new_lines])
+        _log(o, by, "created", [f"{line_name(inv, l['projectId'], l.get('config'))} ×{l['qty']:g}" for l in new_lines])
         inv.clientOrders.append(o)
         return o
     diff = []
@@ -66,11 +85,13 @@ def save_order(inv: Inventory, o, po: str, name: str, lines: list, by: str = "")
         diff.append(f"PO: {o.get('poNumber') or '—'} → {po or '—'}")
     if name != order_name(inv, o):
         diff.append(f"Name: {order_name(inv, o) or '—'} → {name}")
-    old, new = _lines(o.get("projectLines")), _lines(new_lines)
-    for pid in sorted(set(old) | set(new), key=lambda p: inv.project_name(p) or ""):
-        a, b = old.get(pid, 0), new.get(pid, 0)
+    old, new = _lines(o.get("projectLines"), inv), _lines(new_lines, inv)
+    names = {**{k: line_name(inv, k[0], c) for k, c in _configs(o.get("projectLines"), inv).items()},
+             **{k: line_name(inv, k[0], c) for k, c in _configs(new_lines, inv).items()}}
+    for k in sorted(set(old) | set(new), key=lambda k: names.get(k, "")):
+        a, b = old.get(k, 0), new.get(k, 0)
         if a != b:
-            pn = inv.project_name(pid) or "(deleted project)"
+            pn = names.get(k) or inv.project_name(k[0]) or "(deleted project)"
             diff.append(f"{pn}: added ×{b:g}" if not a else f"{pn}: removed (was ×{a:g})" if not b
                         else f"{pn}: ×{a:g} → ×{b:g}")
     if not diff:
@@ -123,15 +144,19 @@ def linked_production(inv: Inventory, o) -> list[dict]:
 
 def sync_production(inv: Inventory, o, by: str, note: str) -> list[dict]:
     """Make the order's production match its lines: one open production order per project with the order's qty."""
-    want = _lines(o.get("projectLines"))
+    from . import configs as C
+    want = _lines(o.get("projectLines"), inv)
+    cfgs = _configs(o.get("projectLines"), inv)
     have = {}
     for p in linked_production(inv, o):
         if p.get("status") != "Cancelled":
-            have.setdefault(p.get("projectId"), p)
-    for pid, q in want.items():
-        p = have.get(pid)
+            have.setdefault((p.get("projectId"), C.key(inv.project(p.get("projectId")), p.get("config"))), p)
+    for k, q in want.items():
+        pid = k[0]
+        p = have.get(k)
         if p is None:
             p = {"id": uid(), "projectId": pid, "qty": q, "status": "Not Started", "clientOrderId": o["id"],
+                 **({"config": cfgs[k]} if cfgs.get(k) else {}),
                  "poNumber": o.get("poNumber") or "", "orderName": order_name(inv, o), "orderDate": today(),
                  "dueDate": o.get("dueDate") or "", "readBy": [], "createdAt": now_ms()}
             _prod_event(p, by, note)
@@ -140,8 +165,8 @@ def sync_production(inv: Inventory, o, by: str, note: str) -> list[dict]:
             if num(p.get("qty")) != q:
                 _prod_event(p, by, f"{note} (qty {num(p.get('qty')):g} → {q:g})")
             p.update(qty=q, poNumber=o.get("poNumber") or "", orderName=order_name(inv, o), readBy=[])
-    for pid, p in have.items():
-        if pid not in want and p.get("status") not in CLOSED_PROD:
+    for k, p in have.items():
+        if k not in want and p.get("status") not in CLOSED_PROD:
             p["status"] = "Cancelled"
             p["readBy"] = []
             _prod_event(p, by, f"{note} (removed from the order)")
@@ -152,7 +177,7 @@ def progress(inv: Inventory, o) -> list[dict]:
     """Where each project on the order is in production."""
     out = []
     for p in linked_production(inv, o):
-        out.append({"project": inv.project_name(p.get("projectId")) or "(deleted project)", "qty": num(p.get("qty")),
+        out.append({"project": line_name(inv, p.get("projectId"), p.get("config")), "qty": num(p.get("qty")),
                     "status": p.get("status") or "Not Started", "stage": stage(inv, p), "id": p["id"]})
     return out
 
@@ -234,8 +259,12 @@ def group_of(p) -> str | None:
 def requirements(inv: Inventory, p) -> dict:
     """{partId: qty} for the whole build: every part on the project × order qty, through every BOM level."""
     from .mrp import explode
+    from .configs import lines as option_lines
     req: dict = {}
     q = num(p.get("qty"), 1)
+    for pid, n in option_lines(inv.project(p.get("projectId")), p.get("config")).items():
+        for part_id, e in explode(inv, pid, n * q, False).items():
+            req[part_id] = req.get(part_id, 0) + e["gross"]
     comp = inv.component_ids()
     for part in inv.parts_for_project(p.get("projectId")):
         if part["id"] in comp:

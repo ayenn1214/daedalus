@@ -36,13 +36,15 @@ class OrderEntryDialog(_Base):
         self.po.setPlaceholderText("Customer PO #")
         self.name = QLineEdit(O.order_name(inv, r) if o else "")
         self.name.setPlaceholderText("Who / what the order is for")
-        self.lines = QTableWidget(0, 2)
-        self.lines.setHorizontalHeaderLabels(["Project", "Qty"])
+        self.lines = QTableWidget(0, 3)
+        self.lines.setHorizontalHeaderLabels(["Project", "Qty", "Configuration"])
         self.lines.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.lines.setColumnWidth(2, 230)
         self.lines.verticalHeader().hide()
         self.lines.setMinimumHeight(150)
+        self._cfg: dict = {}                                    # row → configuration
         for ln in r.get("projectLines") or []:
-            self._line(ln.get("projectId"), ln.get("qty", 1))
+            self._line(ln.get("projectId"), ln.get("qty", 1), ln.get("config"))
         add = QHBoxLayout()
         self.add_proj = QComboBox()
         for pr in inv.active_projects():
@@ -67,12 +69,17 @@ class OrderEntryDialog(_Base):
             n.setObjectName("muted")
             n.setWordWrap(True)
             self.lay.addWidget(n)
-        self.resize(520, 380)
+        self.resize(640, 400)
         self.finish()
 
-    def _line(self, pid, qty):
-        for r in range(self.lines.rowCount()):                  # same project again: add to its qty
-            if self.lines.item(r, 0).data(Qt.UserRole) == pid:
+    def _line(self, pid, qty, config=None):
+        from ..inventory import configs as C
+        pr = self.inv.project(pid)
+        cfg = C.normalize(pr, config) if C.has_options(pr) else {}
+        k = C.key(pr, cfg)
+        for r in range(self.lines.rowCount()):                  # same project + configuration: add to its qty
+            if self.lines.item(r, 0).data(Qt.UserRole) == pid and \
+                    C.key(pr, self.lines.item(r, 0).data(Qt.UserRole + 1)) == k:
                 w_ = self.lines.cellWidget(r, 1)
                 w_.setValue(w_.value() + int(M.num(qty)))
                 return
@@ -80,9 +87,26 @@ class OrderEntryDialog(_Base):
         self.lines.insertRow(r)
         it = QTableWidgetItem(self.inv.project_name(pid) or "(deleted project)")
         it.setData(Qt.UserRole, pid)
+        it.setData(Qt.UserRole + 1, cfg)
         it.setFlags(it.flags() & ~Qt.ItemIsEditable)
         self.lines.setItem(r, 0, it)
         self.lines.setCellWidget(r, 1, _qty(qty, 1))
+        if C.has_options(pr):
+            b = QPushButton(C.label(pr, cfg) or "Standard")
+            b.setToolTip("Choose this line's configuration")
+
+            def pick(_=False, it=it, b=b, pid=pid):
+                from .project_custom_ui import ConfigDialog
+                d = ConfigDialog(self.inv, pid, it.data(Qt.UserRole + 1), self)
+                if d.exec() == QDialog.Accepted:
+                    it.setData(Qt.UserRole + 1, d.value())
+                    b.setText(C.label(self.inv.project(pid), d.value()) or "Standard")
+            b.clicked.connect(pick)
+            self.lines.setCellWidget(r, 2, b)
+        else:
+            na = QTableWidgetItem("—")
+            na.setFlags(na.flags() & ~Qt.ItemIsEditable)
+            self.lines.setItem(r, 2, na)
 
     def validate(self):
         if not self.name.text().strip():
@@ -93,7 +117,10 @@ class OrderEntryDialog(_Base):
     def values(self):
         return {"po": self.po.text().strip(), "name": self.name.text().strip(),
                 "lines": [{"projectId": self.lines.item(r, 0).data(Qt.UserRole),
-                           "qty": self.lines.cellWidget(r, 1).value()} for r in range(self.lines.rowCount())]}
+                           "qty": self.lines.cellWidget(r, 1).value(),
+                           **({"config": self.lines.item(r, 0).data(Qt.UserRole + 1)}
+                              if self.lines.item(r, 0).data(Qt.UserRole + 1) else {})}
+                          for r in range(self.lines.rowCount())]}
 
 
 class OrderHistoryDialog(QDialog):
@@ -139,7 +166,7 @@ class ProductionDialog(QDialog):
         super().__init__(parent)
         self.inv, self.p, self.save = inv, p, save
         self.by = inv.userName or "unknown"
-        self.setWindowTitle(f"Production — {inv.project_name(p.get('projectId')) or '(deleted project)'} ×"
+        self.setWindowTitle(f"Production — {O.line_name(inv, p.get('projectId'), p.get('config'))} ×"
                             f"{M.num(p.get('qty')):g}")
         self.resize(1000, 760)
         outer = QVBoxLayout(self)
@@ -180,7 +207,7 @@ class ProductionDialog(QDialog):
         v = QVBoxLayout(w)
         head = QLabel(f"<b>{p.get('orderName') or 'Production order'}</b>"
                       + (f" · PO {p['poNumber']}" if p.get("poNumber") else "")
-                      + f" · {inv.project_name(p.get('projectId')) or '(deleted project)'} ×{M.num(p.get('qty')):g}"
+                      + f" · {O.line_name(inv, p.get('projectId'), p.get('config'))} ×{M.num(p.get('qty')):g}"
                       + f"<br><span style='color:{theme.MUTED}'>{O.stage(inv, p)} · status {p.get('status')}</span>")
         head.setProperty("dimsLink", f"production:{p['id']}")
         head.setToolTip("Shift-click to link this production order in chat")
@@ -408,7 +435,7 @@ class ProductionDialog(QDialog):
 
 
 def confirm_order(parent, inv, o) -> bool:
-    lines = "\n".join(f"  {inv.project_name(l['projectId']) or '(deleted project)'} ×{M.num(l.get('qty')):g}"
+    lines = "\n".join(f"  {O.line_name(inv, l['projectId'], l.get('config'))} ×{M.num(l.get('qty')):g}"
                       for l in o.get("projectLines") or [])
     if QMessageBox.question(parent, "Confirm order", f"Confirm {O.order_name(inv, o)}"
                             + (f" (PO {o['poNumber']})" if o.get("poNumber") else "")

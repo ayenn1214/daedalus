@@ -84,6 +84,17 @@ class ProjectBomDialog(QDialog):
         self.units.valueChanged.connect(lambda *_: self.build())
         head.addWidget(self.units)
         v.addLayout(head)
+        from ..inventory import configs as C
+        self.cfg = None
+        if C.has_options(self.inv.project(pid)):                 # which configuration to list
+            from .project_custom_ui import ConfigPicker
+            self.picker = ConfigPicker(self.inv.project(pid), None, self)
+            self.cfg = self.picker.value()
+            self.picker.changed.connect(lambda c: (setattr(self, "cfg", c), self.build()))
+            row = QHBoxLayout()
+            row.addWidget(QLabel("<b>Configuration</b>"))
+            row.addWidget(self.picker, 1)
+            v.addLayout(row)
         self.tabs = QTabWidget()
         v.addWidget(self.tabs, 1)
         row = QHBoxLayout()
@@ -106,7 +117,7 @@ class ProjectBomDialog(QDialog):
     # ------------------------------------------------------------ view
     def build(self):
         keep = self.tabs.currentIndex()
-        self.d = d = PX.project_data(self.inv, self.pid, self.units.value())
+        self.d = d = PX.project_data(self.inv, self.pid, self.units.value(), self.cfg)
         u = d["units"]
         cu = sum(d["perUnitCost"].values())
         self.title.setText(
@@ -192,7 +203,8 @@ class ProjectBomDialog(QDialog):
         path = self.page._save_path(f"{name}-BOM-{M.today()}.xlsx", "Excel (*.xlsx)")
         if not path:
             return
-        PX.write(path, self.inv, [self.pid], {self.pid: self.units.value()}, self.inv.userName or "")
+        PX.write(path, self.inv, [self.pid], {self.pid: self.units.value()}, self.inv.userName or "",
+                 {self.pid: self.cfg} if self.cfg else None)
         self.page.toast.show_msg("Exported the project BOM")
 
 

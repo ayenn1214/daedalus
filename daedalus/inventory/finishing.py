@@ -75,12 +75,12 @@ def build_qty(inv, source: dict) -> dict:
         o = next((x for x in inv.productionOrders if x.get("id") == source.get("id")), None)
         if o is None:
             return {}
-        pid, units = o.get("projectId"), M.num(o.get("qty")) or 1
+        pid, units, cfg = o.get("projectId"), M.num(o.get("qty")) or 1, o.get("config")
     else:
-        pid, units = source.get("id"), M.num(source.get("units")) or 1
+        pid, units, cfg = source.get("id"), M.num(source.get("units")) or 1, source.get("config")
     if not pid:
         return {}
-    req = R.explode_many(inv, R.project_demands(inv, pid, units), False)
+    req = R.explode_many(inv, R.project_demands(inv, pid, units, cfg), False)
     return {k: e["gross"] for k, e in req.items() if e["gross"] > 0}
 
 

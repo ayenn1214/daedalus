@@ -595,8 +595,10 @@ def explode_many(inv: Inventory, demands, net: bool = False) -> dict:
     return out
 
 
-def project_demands(inv: Inventory, project_id, units: float) -> list[tuple]:
-    """(partId, qty) for `units` of a project: its top-level parts (not inside another project part's BOM)."""
+def project_demands(inv: Inventory, project_id, units: float, config=None) -> list[tuple]:
+    """(partId, qty) for `units` of a project: its top-level parts (not inside another project part's BOM), plus
+    the parts its chosen options add (config; the defaults when None)."""
+    from .configs import lines as option_lines
     on = inv.parts_for_project(project_id)
     inside = {c.get("partId") for p in on for c in (p.get("components") or [])}
     out = []
@@ -607,6 +609,9 @@ def project_demands(inv: Inventory, project_id, units: float) -> list[tuple]:
         q = num(a.get("qty")) * units if a else 0
         if q > 0:
             out.append((p["id"], q))
+    for part_id, q in option_lines(inv.project(project_id), config).items():
+        if inv.part(part_id) is not None:
+            out.append((part_id, q * units))
     return out
 
 
@@ -618,9 +623,9 @@ def kit_group(p) -> str:
         p.get("type"), "Other")
 
 
-def project_job_order(inv: Inventory, project_id, units: float, net: bool = True) -> dict:
+def project_job_order(inv: Inventory, project_id, units: float, net: bool = True, config=None) -> dict:
     """job_order() for a whole project: every top-level part × units, one combined order and kit."""
-    job = job_order(inv, None, units, net, project_id, demands=project_demands(inv, project_id, units))
+    job = job_order(inv, None, units, net, project_id, demands=project_demands(inv, project_id, units, config))
     job["part"] = inv.project_name(project_id) or "Project"
     job["partNumber"] = ""
     return job
