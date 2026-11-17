@@ -147,7 +147,7 @@ class ProjectBomDialog(QDialog):
         for ln in self.d["tree"]:
             p = ln["part"]
             vals = [ln["item"], p.get("partNumber") or "", p["name"], p.get("description") or "", PX.kind(p),
-                    p.get("material") or "", PX.finish(p), PX._n(ln["qty"]), PX._n(ln["perUnit"]),
+                    PX.material(p), PX.finish(p), PX._n(ln["qty"]), PX._n(ln["perUnit"]),
                     PX._n(ln["total"]), PX._n(p.get("currentStock")),
                     self.inv.location_label_for(p.get("locationId"))]
             it = QTreeWidgetItem([_item_text(x) for x in vals])

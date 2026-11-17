@@ -82,6 +82,18 @@ def describe_prefix(inv, prefix: str) -> dict:
     return out
 
 
+def mat_of(p) -> dict:
+    """part["material"] as a dict (plain text from an import becomes {"grade": text})."""
+    m = (p or {}).get("material")
+    return m if isinstance(m, dict) else ({"grade": str(m)} if m else {})
+
+
+def fin_of(p) -> dict:
+    """part["finish"] as a dict (plain text becomes {"process": text})."""
+    f = (p or {}).get("finish")
+    return f if isinstance(f, dict) else ({"process": str(f)} if f else {})
+
+
 def is_material(p) -> bool:
     """Numbered raw material (####-###) or a part flagged as material."""
     pre, _s = split_number(p.get("partNumber") or "")
@@ -569,12 +581,58 @@ def _material_key(m):
     return (m.get("shape") or "", m.get("grade") or "", m.get("size") or "", m.get("unit") or "")
 
 
-def job_order(inv: Inventory, pid, qty: float, net: bool = True, project_id=None) -> dict:
+def explode_many(inv: Inventory, demands, net: bool = False) -> dict:
+    """explode() for several (partId, qty) at once — stock on hand is shared across all of them."""
+    avail = {p["id"]: max(0.0, num(p.get("currentStock"))) for p in inv.parts}
+    out: dict = {}
+    for pid, q in demands:
+        for part_id, e in explode(inv, pid, q, net, _avail=avail).items():
+            o = out.setdefault(part_id, {"gross": 0.0, "net": 0.0, "level": e["level"], "parents": set()})
+            o["gross"] += e["gross"]
+            o["net"] += e["net"]
+            o["level"] = min(o["level"], e["level"])
+            o["parents"] |= e["parents"]
+    return out
+
+
+def project_demands(inv: Inventory, project_id, units: float) -> list[tuple]:
+    """(partId, qty) for `units` of a project: its top-level parts (not inside another project part's BOM)."""
+    on = inv.parts_for_project(project_id)
+    inside = {c.get("partId") for p in on for c in (p.get("components") or [])}
+    out = []
+    for p in on:
+        if p["id"] in inside:
+            continue
+        a = inv.allocation(p, project_id)
+        q = num(a.get("qty")) * units if a else 0
+        if q > 0:
+            out.append((p["id"], q))
+    return out
+
+
+KIT_GROUPS = ("Fasteners", "Purchased parts", "MFG parts", "Other")
+
+
+def kit_group(p) -> str:
+    return {"fastener": "Fasteners", "purchased": "Purchased parts", "manufactured": "MFG parts"}.get(
+        p.get("type"), "Other")
+
+
+def project_job_order(inv: Inventory, project_id, units: float, net: bool = True) -> dict:
+    """job_order() for a whole project: every top-level part × units, one combined order and kit."""
+    job = job_order(inv, None, units, net, project_id, demands=project_demands(inv, project_id, units))
+    job["part"] = inv.project_name(project_id) or "Project"
+    job["partNumber"] = ""
+    return job
+
+
+def job_order(inv: Inventory, pid, qty: float, net: bool = True, project_id=None, demands=None) -> dict:
     """What it takes to build qty of a part: every requirement routed to who supplies it.
     groups: {vendor: [lines]} — purchased parts to their primary vendor, fabricated parts to their fab / machine
     shop (primary supplier, else 'In-house'), raw material to its material vendor, finishing to the finisher;
-    assemblies are built in-house from their kits. Also the pick list (what comes off the shelf)."""
-    req = explode(inv, pid, qty, net)
+    assemblies are built in-house from their kits. Also the pick list (what comes off the shelf).
+    demands: [(partId, qty)] instead of one part (a project) — then the top-level parts are kit lines too."""
+    req = explode_many(inv, demands, net) if demands is not None else explode(inv, pid, qty, net)
     groups: dict = {}
     pick = []
     materials: dict = {}
@@ -603,7 +661,7 @@ def job_order(inv: Inventory, pid, qty: float, net: bool = True, project_id=None
                      f"Rev {p['revision']}" if p.get("revision") else "",
                      f"includes {len(p['components'])} BOM line(s) — see their own vendors" if has_bom(p) else "")
                      if x))
-            m = p.get("material") or {}
+            m = mat_of(p)
             if m.get("shape") or m.get("size"):
                 k = _material_key(m)
                 mm = materials.setdefault(k, {"qty": 0.0, "vendor": m.get("vendor") or "", "parts": [],
@@ -612,7 +670,7 @@ def job_order(inv: Inventory, pid, qty: float, net: bool = True, project_id=None
                 mm["parts"].append(p.get("partNumber") or p["name"])
                 if m.get("vendor"):
                     mm["vendor"] = m["vendor"]
-            f = p.get("finish") or {}
+            f = fin_of(p)
             if f.get("process"):
                 line(f.get("vendor") or f"Finishing ({f['process']})", "Finish",
                      f"{f['process']}{' — ' + f['spec'] if f.get('spec') else ''}: {p['name']}", need,
@@ -631,16 +689,18 @@ def job_order(inv: Inventory, pid, qty: float, net: bool = True, project_id=None
              (note + "; " if note else "") + "for " + ", ".join(sorted(set(mm["parts"]))))
     for part_id, e in req.items():                   # the kit: what comes off the shelf, what's still missing
         p = inv.part(part_id)
-        if e["level"] == 0 or p is None:
+        if p is None or (e["level"] == 0 and demands is None):
             continue
+        binnable = p.get("type") in ("fastener", "purchased")         # bin items: always on the kit
+        stock = num(p.get("currentStock"))
         take, short = e["gross"] - e["net"], (0.0 if has_bom(p) else e["net"])
-        if take > 0 or short > 0:
+        if take > 0 or short > 0 or binnable:
             pick.append({"Bin": inv.location_label_for(p.get("locationId")) or "—",
                          "Part Number": p.get("partNumber") or "", "Part": p["name"], "Pick": take,
-                         "Unit": p.get("unit") or "ea", "On Hand": num(p.get("currentStock")), "Short": short,
-                         "Level": e["level"]})
+                         "Unit": p.get("unit") or "ea", "On Hand": stock, "Short": short,
+                         "Need": e["gross"], "Level": e["level"], "Group": kit_group(p), "partId": part_id})
     pick.sort(key=lambda r: (r["Bin"] == "—", r["Bin"], r["Part"].lower()))
-    root = inv.part(pid)
+    root = inv.part(pid) if pid else None
     totals = {v: sum(x["Ext"] for x in ls) for v, ls in groups.items()}
     return {"part": root["name"] if root else "", "partNumber": (root or {}).get("partNumber") or "", "qty": qty,
             "net": net, "projectId": project_id, "groups": dict(sorted(groups.items())), "totals": totals,
@@ -657,12 +717,12 @@ def material_needs(inv: Inventory, demands: list[tuple]) -> list[dict]:
                 a = agg.setdefault(("#", p["id"]), {
                     "Material": (f"{p['partNumber']} " if p.get("partNumber") else "") + p["name"],
                     "Unit": p.get("unit") or "", "Qty": 0.0, "Vendor": primary_vendor(inv, p),
-                    "Stock Length": num((p.get("material") or {}).get("stockLength")) or None, "parts": set()})
+                    "Stock Length": num(mat_of(p).get("stockLength")) or None, "parts": set()})
                 a["Qty"] += e["gross"]
                 a["parts"].update((inv.part(x) or {}).get("partNumber") or (inv.part(x) or {}).get("name", "")
                                   for x in e["parents"])
                 continue
-            m = (p or {}).get("material") or {}
+            m = mat_of(p)
             if not (m.get("shape") or m.get("size")) or has_bom(p):
                 continue
             k = _material_key(m)

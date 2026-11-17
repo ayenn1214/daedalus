@@ -30,6 +30,14 @@ def finish(p) -> str:
     return ((f or {}).get("process") if isinstance(f, dict) else f) or ""
 
 
+def material(p) -> str:
+    """Raw material as text — the part profile keeps it as {grade, shape, size, …}; imports may have plain text."""
+    m = p.get("material")
+    if isinstance(m, dict):
+        return " ".join(str(x) for x in (m.get("grade"), m.get("shape"), m.get("size")) if x)
+    return str(m or "")
+
+
 def finisher(p) -> str:
     f = p.get("finish")
     return ((f or {}).get("vendor") if isinstance(f, dict) else "") or ""
@@ -52,7 +60,7 @@ def spec(p) -> str:
         bits = [p.get("size"), p.get("length") and f"L {p['length']}", p.get("grade") and f"Gr {p['grade']}",
                 p.get("fastenerMaterial"), p.get("fastenerFinish")]
         return " · ".join(str(b) for b in bits if b)
-    return " · ".join(str(b) for b in (p.get("material"), finish(p)) if b)
+    return " · ".join(str(b) for b in (material(p), finish(p)) if b)
 
 
 def kind(p) -> str:
@@ -170,7 +178,7 @@ def tree_rows(inv, d):
     for ln in d["tree"]:
         p = ln["part"]
         rows.append([ln["item"], p.get("partNumber") or "", ("    " * ln["level"]) + p["name"],
-                     p.get("description") or "", kind(p), p.get("material") or "", finish(p), _n(ln["qty"]),
+                     p.get("description") or "", kind(p), material(p), finish(p), _n(ln["qty"]),
                      _n(ln["perUnit"]), _n(ln["total"]), _n(p.get("currentStock")),
                      inv.location_label_for(p.get("locationId"))])
     return cols, rows

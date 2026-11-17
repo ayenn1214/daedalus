@@ -222,7 +222,7 @@ class PartDialog(_Base):
                                           "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)")
         f.addRow("Picture", self.img_row)
         from ..inventory import mrp as R
-        m, fin = p.get("material") or {}, p.get("finish") or {}
+        m, fin = R.mat_of(p), R.fin_of(p)
         self.mat_box = QGroupBox("Raw material (per part)")
         mg = QGridLayout(self.mat_box)
         self.m_shape, self.m_grade = QComboBox(), QComboBox()

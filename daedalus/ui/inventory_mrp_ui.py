@@ -59,6 +59,16 @@ class PartPicker(QComboBox):
 
 
 # ================================================================== engineering
+def _fit(t):
+    """Table as tall as its rows — several short tables stack without gaps."""
+    from PySide6.QtWidgets import QAbstractScrollArea, QSizePolicy
+    t.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+    t.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)
+    t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+    t.setMinimumHeight(0)
+    return t
+
+
 class EngineeringView(QWidget):
     edit_part = Signal(str)
     new_part = Signal(dict)
@@ -364,7 +374,7 @@ class EngineeringView(QWidget):
             t.item(r_, 2).data(Qt.UserRole + 1)))
         v.addWidget(t, 1)
         mats = [f"{(x.get('material') or {}).get('shape')} {(x.get('material') or {}).get('size') or ''}"
-                for x in [inv.part(r["id"]) for r in rows] if x and (x.get("material") or {}).get("shape")]
+                for x in [inv.part(r["id"]) for r in rows] if x and R.mat_of(x).get("shape")]
         v.addWidget(_muted(f"{len(rows)} line(s) · raw material on {len(mats)} part(s). Double-click a line for its "
                            "profile; set material and finishing in Edit part."))
         return w
@@ -415,42 +425,111 @@ class EngineeringView(QWidget):
     def job(self):
         w, v = self._page()
         inv = self.inv
-        pk = PartPicker(inv, None, w, "— what to build —")
-        pk.set_part(self.st.get("job_part"))
+        st = self.st
+        mode = st.get("job_mode") or "project"
+        modes = QComboBox()
+        modes.addItem("Project", "project")
+        modes.addItem("Single part / assembly", "part")
+        modes.setCurrentIndex(max(0, modes.findData(mode)))
+        modes.currentIndexChanged.connect(lambda _i: (st.__setitem__("job_mode", modes.currentData()),
+                                                      QTimer.singleShot(0, self.page.refresh_current)))
+        net = QCheckBox("Use stock on hand")
+        net.setChecked(st.get("job_net", True))
+        kit_mfg = QCheckBox("MFG parts in the kit")
+        kit_mfg.setToolTip("Fasteners and purchased parts are always kit (bin) items; tick to pick fabricated parts "
+                           "from their bins too")
+        kit_mfg.setChecked(bool(st.get("job_kit_mfg")))
+        kit_mfg.toggled.connect(lambda on: (st.__setitem__("job_kit_mfg", on),
+                                            QTimer.singleShot(0, self.page.refresh_current)))
         qty = QDoubleSpinBox()
         qty.setRange(0.001, 100000)
         qty.setDecimals(0)
-        qty.setValue(self.st.get("job_qty", 1))
-        net = QCheckBox("Use stock on hand")
-        net.setChecked(self.st.get("job_net", True))
         proj = QComboBox()
-        proj.addItem("For stock", None)
-        for pr in inv.active_projects():
-            proj.addItem(pr["name"], pr["id"])
-        proj.setCurrentIndex(max(0, proj.findData(self.st.get("job_project"))))
+        if mode == "project":
+            for pr in inv.active_projects():
+                proj.addItem(pr["name"], pr["id"])
+            if proj.count() == 0:
+                v.addLayout(_hrow(QLabel("Build"), modes))
+                v.addWidget(_muted("Add a project first."))
+                v.addStretch(1)
+                return w
+            proj.setCurrentIndex(max(0, proj.findData(st.get("job_project"))))
+            units_default = inv.project_qty(proj.currentData()) or 1
+            qty.setValue(st.get("job_units") if st.get("job_units_for") == proj.currentData()
+                         and st.get("job_units") else units_default)
+            proj.currentIndexChanged.connect(lambda _i: (st.update(job_project=proj.currentData(), job_units=None),
+                                                         QTimer.singleShot(0, self.page.refresh_current)))
 
-        def go():
-            self.st.update(job_part=pk.part_id(), job_qty=qty.value(), job_net=net.isChecked(),
-                           job_project=proj.currentData())
-            self.page.refresh_current()
-        v.addLayout(_hrow(_muted("Explodes the BOM (all levels) and routes every requirement to who supplies it: "
-                                 "purchased parts → primary vendor, fabricated parts → their fab / machine shop, raw "
-                                 "material → material vendor, finishing → finisher."), pk, QLabel("Qty"), qty, net,
-                          proj, _btn("Build", go, primary=True)))
-        pid = self.st.get("job_part")
-        if not pid or not inv.part(pid):
-            v.addWidget(_muted("Pick an assembly and a quantity."))
-            v.addStretch(1)
-            return w
-        job = R.job_order(inv, pid, self.st.get("job_qty", 1), self.st.get("job_net", True), self.st.get("job_project"))
+            def go():
+                st.update(job_project=proj.currentData(), job_units=qty.value(), job_units_for=proj.currentData(),
+                          job_net=net.isChecked())
+                self.page.refresh_current()
+            v.addLayout(_hrow(QLabel("Build"), modes, proj, QLabel("Units"), qty, net, kit_mfg,
+                              _btn("Build", go, primary=True)))
+            v.addWidget(_muted("Every part on the project × units: what to order from whom, and the kit to pull from "
+                               "the bins. Units default to what's on open production."))
+            pid_proj = proj.currentData()
+            job = R.project_job_order(inv, pid_proj, qty.value(), st.get("job_net", True))
+            title = f"{qty.value():g} × {inv.project_name(pid_proj)}"
+        else:
+            pk = PartPicker(inv, None, w, "— what to build —")
+            pk.set_part(st.get("job_part"))
+            qty.setValue(st.get("job_qty", 1))
+            proj.addItem("For stock", None)
+            for pr in inv.active_projects():
+                proj.addItem(pr["name"], pr["id"])
+            proj.setCurrentIndex(max(0, proj.findData(st.get("job_project"))))
+
+            def go():
+                st.update(job_part=pk.part_id(), job_qty=qty.value(), job_net=net.isChecked(),
+                          job_project=proj.currentData())
+                self.page.refresh_current()
+            v.addLayout(_hrow(QLabel("Build"), modes, pk, QLabel("Qty"), qty, net, proj, kit_mfg,
+                              _btn("Build", go, primary=True)))
+            v.addWidget(_muted("Explodes the BOM (all levels) and routes every requirement to who supplies it: "
+                               "purchased parts → primary vendor, fabricated parts → their fab / machine shop, raw "
+                               "material → material vendor, finishing → finisher."))
+            pid = st.get("job_part")
+            if not pid or not inv.part(pid):
+                v.addWidget(_muted("Pick an assembly and a quantity."))
+                v.addStretch(1)
+                return w
+            job = R.job_order(inv, pid, st.get("job_qty", 1), st.get("job_net", True), st.get("job_project"))
+            title = f"{job['qty']:g} × {part_label(inv.part(pid))}"
+        show_mfg = bool(st.get("job_kit_mfg"))
+        job["kit"] = [r for r in job["pick"] if show_mfg or r.get("Group") != "MFG parts"]
         self._job = job
         buy = {k: x for k, x in job["groups"].items() if not k.startswith("In-house")}
-        v.addLayout(_hrow(QLabel(f"<b>{job['qty']:g} × {part_label(inv.part(pid))}</b> — {len(buy)} vendor(s), "
+        v.addLayout(_hrow(QLabel(f"<b>{title}</b> — {len(buy)} vendor(s), "
                                  f"est. {M.fmt_money(sum(job['totals'].get(k, 0) for k in buy))}"),
                           _btn("PO drafts…", self.export_pos, "One Excel per vendor, with their address and contact"),
                           _btn("Log as orders", self.log_orders, "Record every vendor's lines as part orders (shows "
                                                                  "on Time-Phased)"),
                           _btn("Pick list…", self.pick_list, "Kit for assembly: what to pull from which bin")))
+        # the kit first: bin items by type
+        v.addWidget(_h("Kit / pick list"))
+        kit_hdr = ["Bin", "Part Number", "Part", "Need", "Pick", "Unit", "On Hand", "Short"]
+        any_kit = False
+        for g in R.KIT_GROUPS:
+            if g == "MFG parts" and not show_mfg:
+                continue
+            lines = [r for r in job["kit"] if r.get("Group") == g]
+            if not lines:
+                continue
+            any_kit = True
+            binned = sum(1 for r in lines if r["Bin"] != "—")
+            v.addWidget(QLabel(f"<b>{g}</b>  <span style='color:{theme.MUTED}'>{len(lines)} line(s) · "
+                               f"{binned} binned" + (f" · <span style='color:{theme.WARN}'>{len(lines) - binned} "
+                                                    "without a bin</span>" if binned < len(lines) else "")
+                               + "</span>"))
+            v.addWidget(_fit(_table(kit_hdr, lines, 2)))
+        if not any_kit:
+            v.addWidget(_muted("Nothing comes off the shelf."))
+        if not show_mfg:
+            n = sum(1 for r in job["pick"] if r.get("Group") == "MFG parts")
+            if n:
+                v.addWidget(_muted(f"{n} MFG part(s) not in the kit — tick “MFG parts in the kit” to pick them too."))
+        v.addWidget(_h("Order by vendor"))
         hdr = ["Kind", "Part Number", "Item", "Vendor Part #", "Qty", "Unit", "Unit Price", "Ext", "Note"]
         for vend, lines in job["groups"].items():
             vr = R.vendor_record(inv, vend) or {}
@@ -459,10 +538,9 @@ class EngineeringView(QWidget):
                            f"{len(lines)} line(s) · {M.fmt_money(job['totals'][vend])}"
                            + (f" · lead {lead}" if lead else "") + (f" · {vr.get('phone')}" if vr.get("phone") else "")
                            + "</span>"))
-            v.addWidget(_table(hdr, lines, 2, money=("Unit Price", "Ext")))
-        v.addWidget(_h("Kit / pick list"))
-        v.addWidget(_table(["Bin", "Part Number", "Part", "Pick", "Unit", "On Hand", "Short"], job["pick"], 2)
-                    if job["pick"] else _muted("Nothing comes off the shelf (or nothing is stocked yet)."))
+            v.addWidget(_fit(_table(hdr, lines, 2, money=("Unit Price", "Ext"))))
+        if not job["groups"]:
+            v.addWidget(_muted("Nothing to order — stock covers it."))
         return w
 
     def export_pos(self):
@@ -483,7 +561,7 @@ class EngineeringView(QWidget):
 
     def pick_list(self):
         job = self._job
-        rows = [{**r, "Picked": ""} for r in job["pick"]]
+        rows = [{**r, "Picked": ""} for r in job.get("kit", job["pick"])]
         from ..inventory import analytics as A
         html = A.binning_html([{"Bin": r["Bin"], "Location": r["Bin"].split(" · ")[0], "Part": r["Part"],
                                 "Part Number": r["Part Number"], "Size": "", "On Hand": r["On Hand"],
@@ -764,7 +842,7 @@ class PartProfileDialog(QDialog):
                  ("Category", p.get("category") or "—"), ("QuickBooks #", p.get("qbPartNumber") or "—")]
         if p.get("discontinued"):
             facts.append(("Discontinued", f"{p.get('discontinuedDate') or ''}" + (f" → {rep['name']}" if rep else "")))
-        m, f = p.get("material") or {}, p.get("finish") or {}
+        m, f = R.mat_of(p), R.fin_of(p)
         if m.get("shape") or m.get("size"):
             facts.append(("Raw material", f"{' '.join(x for x in (m.get('grade'), m.get('shape'), m.get('size')) if x)}"
                                           f" · {M.num(m.get('qty')):g} {m.get('unit') or ''}/part"

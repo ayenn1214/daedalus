@@ -202,7 +202,8 @@ def test_screens(tmp_path, monkeypatch):
     page = InventoryPage(st, lite=True)
     page.resize(1500, 900)
     page.show()
-    page.mrp_state.update(bom_part="c30-0001", wu_part="p00-0001", job_part="c30-0001", job_qty=2)
+    page.mrp_state.update(bom_part="c30-0001", wu_part="p00-0001", job_part="c30-0001", job_qty=2,
+                          job_mode="part")
     for key in ("engineering", "timephased", "vendors", "parts"):
         page.goto(key)
         app.processEvents()

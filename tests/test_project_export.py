@@ -12,7 +12,7 @@ def shop():
     inv = M.Inventory()
     pid = inv.find_or_create_project("RLC")
     tab = M.new_part(id="tab", name="FLAT, TAB", partNumber="M10-0005", type="manufactured", currentStock=2,
-                     material="A36", unitCost=5)
+                     material={"grade": "A36", "shape": "Flat bar", "size": "1/4 x 2"}, unitCost=5)
     gus = M.new_part(id="gus", name="GUSSET", partNumber="M10-0006", type="manufactured", material="A36")
     sub = M.new_part(id="sub", name="WLDMT, LEG", partNumber="M20-0001", type="manufactured", isWeldment=True,
                      components=[{"partId": "gus", "qty": 2}])
@@ -121,4 +121,40 @@ def test_bom_window_and_buy_list(tmp_path, monkeypatch):
     assert QGuiApplication.clipboard().text().startswith("Vendor\tPart No.\tVendor PN")
     bp.mfg.setChecked(True)
     assert page.reorder_filter["buy_mfg"] and len(bp.rows) > 4
+    page.close()
+
+
+def test_job_order_and_kit_by_project(tmp_path):
+    from daedalus.inventory import mrp as R
+    inv, pid = shop()
+    assert sorted(R.project_demands(inv, pid, 3)) == sorted([("frame", 3), ("bolt", 24), ("caster", 12), ("rag", 6)])
+    job = R.project_job_order(inv, pid, 3, net=True)
+    kit = {r["partId"]: r for r in job["pick"]}
+    assert kit["bolt"]["Group"] == "Fasteners" and kit["bolt"]["Pick"] == 10 and kit["bolt"]["Short"] == 14
+    assert kit["nut"]["Group"] == "Fasteners" and kit["nut"]["Need"] == 6        # inside the weldment
+    assert kit["caster"]["Group"] == "Purchased parts" and kit["caster"]["Short"] == 12
+    assert kit["tab"]["Group"] == "MFG parts" and kit["tab"]["Pick"] == 2
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QLabel
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv, pid = shop()
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.mrp_state.update(eng_tab=4, job_mode="project", job_project=pid)
+    page.goto("parts")
+    app.processEvents()
+    eng = page.pages["parts"].widget()
+    assert eng.tabs.tabText(4).startswith("Job Order")
+    heads = [lab.text() for lab in eng.findChildren(QLabel) if lab.text().startswith("<b>")]
+    assert any(h.startswith("<b>Fasteners</b>") for h in heads) and any(h.startswith("<b>Purchased parts</b>")
+                                                                        for h in heads)
+    assert not any(h.startswith("<b>MFG parts</b>") for h in heads)
+    assert all(r["Group"] != "MFG parts" for r in eng._job["kit"])
+    page.mrp_state["job_kit_mfg"] = True                                  # toggle MFG parts into the kit
+    page.refresh_current()
+    eng = page.pages["parts"].widget()
+    assert any(r["Group"] == "MFG parts" for r in eng._job["kit"])
     page.close()
