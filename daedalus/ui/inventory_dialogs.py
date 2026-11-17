@@ -1130,6 +1130,10 @@ is in.</li>
 kit split into <b>Fasteners</b>, <b>Purchased parts</b> (bin items, with bin coverage) and <b>Other</b>; MFG parts
 go in the kit with the toggle.</li>
 <li><b>Material Needs</b>: stock material to buy for the open demand.</li>
+<li><b>Read drawings…</b>: pick drawing PDFs (or a folder). Part number, description, revision, weight, material,
+finish, BOM and revision history are read from each title block and matched to DIMS by part number. For a part
+already in DIMS, tick what to add to its profile (blank fields are ticked for you); new part numbers can be created,
+and the BOM can become the weldment's parts. Also in the PDF window: File ▸ Read into DIMS….</li>
 </ul>
 
 <h3>Vendors</h3>

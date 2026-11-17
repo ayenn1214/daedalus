@@ -467,6 +467,8 @@ class PdfWindow(QMainWindow):
         f.addSeparator()
         f.addAction(self._act("Print…", self.print_, QKeySequence.Print, "printer", bar=tb))
         f.addAction(self._act("Properties", self.properties, None))
+        f.addAction(self._act("Read into DIMS…", self.read_into_dims, None, "database",
+                              "Read this drawing's title block, BOM and revisions into the DIMS part profile"))
         f.addSeparator()
         f.addAction(self._act("Close", self.close, QKeySequence.Close))
 
@@ -888,6 +890,19 @@ class PdfWindow(QMainWindow):
             rows.append(f"<b>Page 1:</b> {w / 72:.2f} × {h / 72:.2f} in ({w * 25.4 / 72:.0f} × {h * 25.4 / 72:.0f} mm)")
         rows += [f"<b>{k}:</b> {v}" for k, v in m.items() if v]
         QMessageBox.information(self, "PDF properties", "<br>".join(rows))
+
+    def read_into_dims(self):
+        from PySide6.QtWidgets import QApplication as _A
+        from .inventory_ui import InventoryPage
+        if self.doc.dirty or not self.doc.path:
+            if QMessageBox.question(self, "Read into DIMS", "Save the PDF first?") != QMessageBox.Yes or not self.save():
+                return
+        page = next((w for top in _A.topLevelWidgets() for w in ([top] + top.findChildren(InventoryPage))
+                     if isinstance(w, InventoryPage)), None)
+        if page is None:
+            QMessageBox.information(self, "Read into DIMS", "Open DIMS (Inventory) first, then try again.")
+            return
+        page.read_drawings([self.doc.path])
 
     def find(self):
         q, ok = QInputDialog.getText(self, "Find text", "Find:", text=getattr(self, "_q", ""))

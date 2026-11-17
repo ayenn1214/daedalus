@@ -151,6 +151,11 @@ imports with one click; servers without the tables keep working in the old singl
   discontinued parts. Every report exports to Excel.
 - **Parts:** sort and filter by vendor, part pictures and wireframe thumbnails of 3D models (STL / STEP /
   .daedalus; SolidWorks files show their saved preview), discontinued parts with a replacement (never reordered).
+- **Read drawings…** (Parts tab, or File ▸ Read into DIMS… in the PDF window): reads drawing PDFs — title block
+  (part number, description, revision, weight, material, finish, drawn by / date, scale), BOM table, revision table
+  and notes — straight from the PDF's text (OCR with Tesseract for scans). Each drawing is matched to DIMS by part
+  number; for an existing part you tick what to add to its profile, new parts can be created, and the BOM can set a
+  weldment's parts.
 - **MFG revisions…** checks manufactured parts against their model and drawing files: a higher "Rev" file in the
   folder, a file saved since it was checked in, or a revision letter that doesn't match.
 - **Locations ▸ Print binning list:** every bin with its parts and stock, with a blank Count column — print, PDF

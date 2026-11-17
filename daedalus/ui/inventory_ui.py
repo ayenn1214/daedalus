@@ -1700,6 +1700,9 @@ class InventoryPage(QWidget):
         row.addWidget(disc)
         row.addWidget(_btn("MFG revisions…", self.revision_check, "Check manufactured parts against their model / "
                                                                   "drawing files for newer revisions"))
+        row.addWidget(_btn("Read drawings…", self.read_drawings, "Pull part number, description, revision, weight, "
+                                                                "material, finish and BOM from drawing PDFs — matched "
+                                                                "to parts already in DIMS, you pick what goes in"))
         v.addLayout(row)
         lst = list(inv.parts)
         if f["type"] != "all":
@@ -2472,6 +2475,10 @@ class InventoryPage(QWidget):
     def print_binning(self):
         from .inventory_extras_ui import BinningDialog
         BinningDialog(self.inv, self).exec()
+
+    def read_drawings(self, paths=None):
+        from .drawing_read_ui import read_drawings
+        read_drawings(self, paths)
 
     def revision_check(self):
         from .inventory_extras_ui import VersionCheckDialog
