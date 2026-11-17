@@ -203,3 +203,35 @@ def test_production_dates_inline(monkeypatch):
     assert f.value() == "" and "border" in f.edit.styleSheet()
     O.set_finish_by(p, "")
     assert "finishBy" not in p
+
+
+def test_project_weldments_nested_or_flat(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QTableWidget
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv, pid = shop()
+    flat = inv.project_rows(pid, per_unit=True, nest=False)
+    tab = next(r for r in flat if r[0]["id"] == "tab")
+    assert tab[1] == 0 and tab[3] == 4 and tab[2] == "in M30-0001"
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.goto("projects")
+    app.processEvents()
+
+    def names():
+        t = next(x for x in page.pages["projects"].widget().findChildren(QTableWidget) if x.rowCount() > 3)
+        return [t.item(i, 1).text() for i in range(t.rowCount()) if t.item(i, 1)]
+    n = names()
+    assert any("▾ WLDMT, FRAME" in x and "[weldment · 1]" in x for x in n) and any("× 4  FLAT, TAB" in x for x in n)
+    page.toggle_weld(pid, "frame")                                         # fold the weldment
+    assert any("▸ WLDMT, FRAME" in x for x in names()) and not any("FLAT, TAB" in x for x in names())
+    page.toggle_weld(pid, "frame")
+    page.toggle_nest(pid)                                                  # flat: tab at the top level
+    n = names()
+    assert any(x.strip().startswith("FLAT, TAB") and "(in M30-0001)" in x for x in n)
+    page.toggle_nest(pid)
+    assert any("× 4  FLAT, TAB" in x for x in names())

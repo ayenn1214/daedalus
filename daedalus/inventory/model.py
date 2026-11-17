@@ -576,11 +576,38 @@ class Inventory:
     def total_needed(self, p) -> float:
         return sum(num(a.get("qty")) * self.project_qty(a.get("projectId")) for a in self.allocations(p))
 
-    def project_rows(self, pid, per_unit=False):
+    def project_rows(self, pid, per_unit=False, nest=True):
         """Rows for a project table, expanding weldments: (part, depth, qty_label, needed, on_hand, embedded).
-        per_unit: needed for one unit instead of the units on order."""
+        per_unit: needed for one unit instead of the units on order.
+        nest=False: flat — every part of the build at the top level, weldment components totalled (qty_label
+        then names the weldment(s) they come from)."""
         out = []
         comp = self.component_ids()
+        if not nest:
+            tot: dict = {}
+            src: dict = {}
+
+            def add(p, needed, via, depth):
+                tot[p["id"]] = tot.get(p["id"], 0.0) + needed
+                if via:
+                    src.setdefault(p["id"], [])
+                    if via not in src[p["id"]]:
+                        src[p["id"]].append(via)
+                if p.get("type") == "manufactured" and p.get("isWeldment") and depth < 20:
+                    for c in p.get("components") or []:
+                        child = self.part(c.get("partId"))
+                        if child:
+                            add(child, needed * num(c.get("qty")), p.get("partNumber") or p["name"], depth + 1)
+            for p in self.parts_for_project(pid):
+                if p["id"] in comp:
+                    continue
+                a = self.allocation(p, pid)
+                add(p, num(a.get("qty")) if per_unit and a else self.needed_for_project(p, pid), None, 0)
+            for part_id, n in tot.items():
+                p = self.part(part_id)
+                out.append((p, 0, ("in " + ", ".join(src[part_id])) if part_id in src else None, n,
+                            num(p.get("currentStock")), False))
+            return sorted(out, key=lambda r: r[0]["name"].lower())
 
         def walk(p, depth, needed, qty_label, stock_override):
             on_hand = stock_override if stock_override is not None else num(p.get("currentStock"))

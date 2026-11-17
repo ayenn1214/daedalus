@@ -789,6 +789,13 @@ class InventoryPage(QWidget):
             lab.setProperty("dimsLink", f"project:{pr['id']}")
             lab.setToolTip("Shift-click to link this project in chat")
             hdr.addWidget(lab, 1)
+            if any(p.get("isWeldment") and p.get("components") for p in inv.parts_for_project(pr["id"])):
+                flat_now = pr["id"] in self.mrp_state.get("proj_flat", [])
+                nb = _small("Weldments: flat" if flat_now else "Weldments: nested",
+                            lambda _=False, i=pr["id"]: self.toggle_nest(i),
+                            "Nested: weldment parts sit under their weldment (▾ / ▸ to fold). Flat: every MFG part "
+                            "at the top level with its total per unit")
+                hdr.addWidget(nb)
             if pr.get("folderPath"):
                 hdr.addWidget(_small("📁", lambda _=False, f=pr["folderPath"]: _open_link(f), pr["folderPath"], icon="folder"))
             up = _small("▲", lambda _=False, i=pr["id"]: (inv.move_project(i, -1), self.commit()), "Move up")
@@ -811,7 +818,8 @@ class InventoryPage(QWidget):
             v.addLayout(hdr)
             if pr["id"] in self.collapsed:
                 continue
-            rows = inv.project_rows(pr["id"], per_unit=True)
+            flat = pr["id"] in self.mrp_state.setdefault("proj_flat", [])
+            rows = inv.project_rows(pr["id"], per_unit=True, nest=not flat)
             if not rows:
                 v.addWidget(_muted("No parts assigned yet."))
                 continue
@@ -833,7 +841,7 @@ class InventoryPage(QWidget):
                 if grows:
                     ordered.append(("hdr", gname, sum(1 for r in grows if r[1] == 0)))
                     ordered.extend(grows)
-            v.addWidget(self._project_table(pr, ordered))
+            v.addWidget(self._project_table(pr, ordered, flat))
         v.addWidget(_section("Unassigned"))
         un = [p for p in inv.parts if not inv.allocations(p)]
         v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower())) if un
@@ -854,11 +862,25 @@ class InventoryPage(QWidget):
         v.addStretch(1)
         return w
 
-    def _project_table(self, pr, rows):
+    def toggle_nest(self, pid):
+        flat = self.mrp_state.setdefault("proj_flat", [])
+        flat.remove(pid) if pid in flat else flat.append(pid)
+        self.refresh_current()
+
+    def toggle_weld(self, pid, part_id):
+        key = f"{pid}:{part_id}"
+        shut = self.mrp_state.setdefault("weld_shut", [])
+        shut.remove(key) if key in shut else shut.append(key)
+        self.refresh_current()
+
+    def _project_table(self, pr, rows, flat=False):
         inv = self.inv
+        shut = set(self.mrp_state.get("weld_shut", []))
+        hidden_under = None                                     # depth of a collapsed weldment we're inside
         tr, heads = [], []
         for row in rows:
             if row[0] == "hdr":
+                hidden_under = None
                 it = QTableWidgetItem(f"{row[1]}  ·  {row[2]}")
                 f_ = it.font()
                 f_.setBold(True)
@@ -869,11 +891,30 @@ class InventoryPage(QWidget):
                 tr.append([it] + [""] * 7)
                 continue
             p, depth, ql, need, on_hand, emb = row
+            if hidden_under is not None:
+                if depth > hidden_under:
+                    continue
+                hidden_under = None
+            is_weld = p.get("type") == "manufactured" and p.get("isWeldment") and p.get("components")
+            open_ = f"{pr['id']}:{p['id']}" not in shut
+            if is_weld and not flat and not open_:
+                hidden_under = depth
             short = max(0.0, need - on_hand)
-            name = QTableWidgetItem(("    " * depth) + (f"× {ql}  " if ql is not None else "") + p["name"])
+            caret = ("▾ " if open_ else "▸ ") if is_weld and not flat else ("   " if not flat else "")
+            label = (f"× {ql}  " if ql is not None and not flat else "") + p["name"]
+            if is_weld:
+                label += f"   [weldment · {len(p.get('components') or [])}]"
+            if flat and ql:
+                label += f"   ({ql})"
+            name = QTableWidgetItem(("    " * depth) + caret + label)
+            if is_weld and not flat:
+                name.setData(Qt.UserRole + 5, p["id"])
+                f_ = name.font()
+                f_.setBold(True)
+                name.setFont(f_)
             name.setToolTip(inv.spec_line(p))
             tag(name, "part", p["id"])
-            if depth == 0:
+            if depth == 0 and inv.allocation(p, pr["id"]):
                 a = inv.allocation(p, pr["id"])
                 q = QSpinBox()
                 q.setRange(0, 1_000_000)
@@ -884,7 +925,7 @@ class InventoryPage(QWidget):
             acts = [_small("Use", lambda _=False, i=p["id"]: self.move(i, "usage")),
                     _small("Receive", lambda _=False, i=p["id"]: self.move(i, "receiving")),
                     _small("Edit", lambda _=False, i=p["id"]: self.edit_part(i))]
-            if depth == 0:
+            if depth == 0 and inv.allocation(p, pr["id"]):
                 acts.append(_small("Unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid),
                                    danger=True))
             tr.append([tag(QTableWidgetItem(p.get("partNumber") or ""), "part", p["id"]), name, q, _num_item(need),
@@ -902,6 +943,13 @@ class InventoryPage(QWidget):
         t.setSizeAdjustPolicy(QAbstractScrollArea.AdjustToContents)  # height follows the rows (also after styling)
         t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         t.setMinimumHeight(0)
+
+        def clicked(r, c):                                          # ▾ / ▸ on a weldment folds its parts
+            it = t.item(r, 1)
+            wid = it.data(Qt.UserRole + 5) if it is not None else None
+            if wid and c == 1 and not (QApplication.keyboardModifiers() & Qt.ShiftModifier):
+                self.toggle_weld(pr["id"], wid)
+        t.cellClicked.connect(clicked)
         return t
 
     def project_bom(self, pid):
