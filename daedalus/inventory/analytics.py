@@ -405,8 +405,55 @@ def _local(path: str) -> Path | None:
 
 
 def file_sig(path: Path) -> dict:
+    from .model import portable_path
     st = path.stat()
-    return {"path": str(path), "mtime": int(st.st_mtime), "size": st.st_size}
+    return {"path": portable_path(str(path)), "mtime": int(st.st_mtime), "size": st.st_size, "sha1": _sha1(path)}
+
+
+def _sha1(path: Path) -> str:
+    import hashlib
+    h = hashlib.sha1()
+    try:
+        with open(path, "rb") as fh:
+            for chunk in iter(lambda: fh.read(1 << 20), b""):
+                h.update(chunk)
+    except OSError:
+        return ""
+    return h.hexdigest()
+
+
+def _file_changed(sig: dict, f: Path) -> bool:
+    """Size differs, or the time differs and so does the content (Dropbox / OneDrive give each PC its own file
+    times, so a different time alone isn't a change)."""
+    st = f.stat()
+    if sig.get("size") != st.st_size:
+        return True
+    if int(st.st_mtime) == sig.get("mtime"):
+        return False
+    return bool(sig.get("sha1")) and _sha1(f) != sig["sha1"] or not sig.get("sha1") and \
+        abs(int(st.st_mtime) - (sig.get("mtime") or 0)) > 2
+
+
+def _same_file(sig_path: str, f: Path) -> bool:
+    """A checked-in path vs this PC's file — the same file from anyone's user folder."""
+    from .model import local_path, portable_path
+    a, b = portable_path(sig_path or ""), portable_path(str(f))
+    return a.replace("\\", "/").lower() == b.replace("\\", "/").lower() or \
+        Path(local_path(sig_path or "")) == f
+
+
+def check_in(p, keys=("cadFile", "drawingUrl")):
+    """Record the linked files as the ones for the part's current revision (only those that exist here)."""
+    sigs = dict(p.get("revisionFiles") or {})
+    rev = (p.get("revision") or "").strip().upper()
+    for k in keys:
+        f = _local(p.get(k) or "")
+        if f is not None and f.exists():
+            sigs[k] = {**file_sig(f), "revision": rev}
+    if sigs:
+        p["revisionFiles"] = sigs
+        p["revisionCheckedAt"] = today()
+    return p
 
 
 def newest_sibling(path: Path):
@@ -457,8 +504,7 @@ def version_status(p) -> dict:
         if not sig:
             worse("unchecked")
             notes.append(f"{what} not checked in yet")
-        elif sig.get("path") != str(f) or sig.get("mtime") != int(f.stat().st_mtime) or \
-                sig.get("size") != f.stat().st_size:
+        elif not _same_file(sig.get("path"), f) or _file_changed(sig, f):
             worse("changed")
             notes.append(f"{what} file changed since Rev {sig.get('revision') or rev or '?'} was checked in "
                          f"({dt.datetime.fromtimestamp(f.stat().st_mtime):%Y-%m-%d %H:%M})")

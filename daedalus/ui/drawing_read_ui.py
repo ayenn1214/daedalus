@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import QSettings, Qt
+from PySide6.QtCore import QSettings, Qt, QTimer
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QDialog, QDialogButtonBox, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
@@ -14,22 +14,87 @@ from PySide6.QtWidgets import (
 )
 
 from ..inventory import drawing_pdf as D
+from ..inventory import model as M
 from . import theme
 
 
+def newest_only(paths) -> list[str]:
+    """Several revisions of one drawing in a folder ('C20-0040 Rev A.pdf', '… Rev B.pdf') → the highest one."""
+    from ..inventory import analytics as A
+    best: dict = {}
+    for p in paths:
+        f = Path(p)
+        key = (str(f.parent).lower(), A._base(f.name))
+        r = A.rev_from_name(f.name) or ""
+        if key not in best or A.rev_key(r) > A.rev_key(best[key][0]):
+            best[key] = (r, p)
+    keep = {v[1] for v in best.values()}
+    return [p for p in paths if p in keep]
+
+
+class PickDialog(QDialog):
+    """Files or a whole folder (with subfolders), newest revision of each drawing only."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Read drawings")
+        self.s = QSettings("Daedalus", "Daedalus")
+        self.paths: list[str] = []
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel("Read the title block, BOM and revisions of drawing PDFs into DIMS."))
+        row = QHBoxLayout()
+        fb = QPushButton("Pick PDF files…")
+        fb.clicked.connect(self.files)
+        db = QPushButton("Read a whole folder…")
+        db.clicked.connect(self.folder)
+        db.setDefault(True)
+        row.addWidget(fb)
+        row.addWidget(db)
+        v.addLayout(row)
+        self.sub = QCheckBox("Include subfolders")
+        self.sub.setChecked(self.s.value("dims/drawing_sub", True, type=bool))
+        self.newest = QCheckBox("Newest revision of each drawing only (skip older 'Rev' copies)")
+        self.newest.setChecked(self.s.value("dims/drawing_newest", True, type=bool))
+        v.addWidget(self.sub)
+        v.addWidget(self.newest)
+        bb = QDialogButtonBox(QDialogButtonBox.Cancel)
+        bb.rejected.connect(self.reject)
+        v.addWidget(bb)
+
+    def _start(self):
+        return self.s.value("dims/drawing_dir") or str(Path.home())
+
+    def _done(self, paths):
+        self.s.setValue("dims/drawing_sub", self.sub.isChecked())
+        self.s.setValue("dims/drawing_newest", self.newest.isChecked())
+        if self.newest.isChecked():
+            paths = newest_only(paths)
+        self.paths = paths
+        if paths:
+            self.s.setValue("dims/drawing_dir", str(Path(paths[0]).parent))
+            self.accept()
+
+    def files(self):
+        paths, _ = QFileDialog.getOpenFileNames(self, "Drawing PDFs", self._start(), "PDF drawings (*.pdf)")
+        if paths:
+            self._done(paths)
+
+    def folder(self):
+        d = QFileDialog.getExistingDirectory(self, "Folder of drawing PDFs", self._start())
+        if not d:
+            return
+        it = Path(d).rglob("*") if self.sub.isChecked() else Path(d).glob("*")
+        paths = sorted(str(p) for p in it if p.suffix.lower() == ".pdf" and p.is_file())
+        if not paths:
+            QMessageBox.information(self, "Read drawings", "No PDFs in that folder.")
+            return
+        self.s.setValue("dims/drawing_dir", d)
+        self._done(paths)
+
+
 def pick_paths(parent) -> list[str]:
-    s = QSettings("Daedalus", "Daedalus")
-    start = s.value("dims/drawing_dir") or str(Path.home())
-    paths, _ = QFileDialog.getOpenFileNames(parent, "Read drawing PDFs (pick one or many — or Cancel to pick a folder)",
-                                            start, "PDF drawings (*.pdf)")
-    if not paths:
-        folder = QFileDialog.getExistingDirectory(parent, "…or read every PDF in a folder", start)
-        if not folder:
-            return []
-        paths = sorted(str(p) for p in Path(folder).rglob("*.pdf"))
-    if paths:
-        s.setValue("dims/drawing_dir", str(Path(paths[0]).parent))
-    return paths
+    d = PickDialog(parent)
+    return d.paths if d.exec() else []
 
 
 def _fmt(v):
@@ -63,12 +128,57 @@ class ReadDrawingsDialog(QDialog):
                 keys = {f["key"] for f in prop["fields"]
                         if not f["same"] and (not exists or str(f["current"] or "").strip() in ("", "-", "—"))}
                 has_comps = bool(exists and prop["part"].get("components"))
-                self.items.append({"path": p, "data": d, "prop": prop, "keys": keys,
-                                   "bom": bool(prop["bom"]) and not has_comps, "missing": False,
-                                   "create": True, "use": bool(prop["partNumber"])})
+                bom = bool(prop["bom"]) and not has_comps
+                state = ("unmatched" if not prop["partNumber"] else "new" if not exists
+                         else "update" if keys or bom or any(not f["same"] for f in prop["fields"]) else "same")
+                self.items.append({"path": p, "data": d, "prop": prop, "keys": keys, "bom": bom, "missing": False,
+                                   "create": True, "state": state,
+                                   "use": state in ("new", "update") and (bool(keys) or bom or state == "new")})
             except Exception as e:  # noqa: BLE001
-                self.items.append({"path": p, "error": str(e), "use": False})
+                self.items.append({"path": p, "error": str(e), "use": False, "state": "error"})
         prog.setValue(len(paths))
+        # the same part number twice: the newest file wins, the others are shown but not applied
+        import os
+        seen = {}
+        for it in self.items:
+            if "error" in it or not it["prop"]["partNumber"]:
+                continue
+            k = M._pn(it["prop"]["partNumber"])
+            try:
+                t = os.path.getmtime(it["path"])
+            except OSError:
+                t = 0
+            if k in seen:
+                other, ot = seen[k]
+                loser = it if t <= ot else other
+                loser["state"], loser["use"] = "duplicate", False
+                if loser is other:
+                    seen[k] = (it, t)
+            else:
+                seen[k] = (it, t)
+        self.batch_pns = {M._pn(it["prop"]["partNumber"]) for it in self.items
+                          if "error" not in it and it["prop"]["partNumber"] and it["state"] != "duplicate"}
+        # new parts: inside another drawing's BOM → counted through it; otherwise suggest a project
+        parents = {}
+        for it in self.items:
+            if "error" in it:
+                continue
+            for b in it["prop"]["bom"]:
+                if b.get("partNumber"):
+                    parents.setdefault(M._pn(b["partNumber"]), it["prop"]["partNumber"])
+        for p_ in self.inv.parts:                               # already a component of a part in DIMS?
+            for c in p_.get("components") or []:
+                ch = self.inv.part(c.get("partId"))
+                if ch and ch.get("partNumber"):
+                    parents.setdefault(M._pn(ch["partNumber"]), p_.get("partNumber") or p_["name"])
+        for it in self.items:
+            if "error" in it or it["state"] != "new":
+                continue
+            par = parents.get(M._pn(it["prop"]["partNumber"]))
+            it["parent"] = par
+            it["project"] = None if par else D.project_from_path(self.inv, it["path"])
+            it["newProject"] = ""
+            it["projQty"] = 1
 
         v = QVBoxLayout(self)
         intro = QLabel("Each drawing is matched to DIMS by its part number. Tick what to write into the part profile — "
@@ -76,6 +186,25 @@ class ReadDrawingsDialog(QDialog):
                        "<b>Apply</b>.")
         intro.setWordWrap(True)
         v.addWidget(intro)
+        from PySide6.QtWidgets import QComboBox
+        bar = QHBoxLayout()
+        self.summary = QLabel()
+        bar.addWidget(self.summary, 1)
+        self.filter = QComboBox()
+        for k, lab in (("all", "All drawings"), ("todo", "Ticked to apply"), ("update", "Updates to existing parts"),
+                       ("new", "New parts"), ("same", "Up to date"), ("problem", "Couldn't read / no part number")):
+            self.filter.addItem(lab, k)
+        self.filter.currentIndexChanged.connect(lambda _i: self._apply_filter())
+        bar.addWidget(self.filter)
+        for lab, fn, tip in (("Tick blanks everywhere", self.tick_blanks,
+                              "On every drawing: tick each field that's blank in DIMS (nothing gets overwritten)"),
+                             ("Select all", lambda: self._select(True), "Apply every drawing that has something to add"),
+                             ("Select none", lambda: self._select(False), "")):
+            b = QPushButton(lab)
+            b.setToolTip(tip)
+            b.clicked.connect(fn)
+            bar.addWidget(b)
+        v.addLayout(bar)
         sp = QSplitter()
         self.list = QListWidget()
         self.list.setMinimumWidth(270)
@@ -108,9 +237,11 @@ class ReadDrawingsDialog(QDialog):
                 txt, tip, col = f"✕  {Path(it['path']).name}", it["error"], theme.ERROR
             else:
                 pr, d = it["prop"], it["data"]
-                status = "in DIMS" if pr["part"] else "new part"
+                status = {"new": "new part", "update": "in DIMS · updates", "same": "in DIMS · up to date",
+                          "duplicate": "older copy — skipped"}.get(it["state"], "in DIMS")
                 txt = f"{pr['partNumber'] or Path(it['path']).stem}   ·  {status}"
-                tip, col = d.get("description") or "", theme.TEXT if pr["part"] else theme.INFO
+                tip = d.get("description") or ""
+                col = {"new": theme.INFO, "same": theme.MUTED, "duplicate": theme.MUTED}.get(it["state"], theme.TEXT)
                 if not pr["partNumber"]:
                     txt, col = f"?  {Path(it['path']).name}  ·  no part number found", theme.WARN
             li = QListWidgetItem(txt)
@@ -121,16 +252,58 @@ class ReadDrawingsDialog(QDialog):
                 li.setCheckState(Qt.Checked if it["use"] else Qt.Unchecked)
             self.list.addItem(li)
         self.list.blockSignals(False)
+        self._apply_filter()
+        self._count()
+
+    def _count(self):
         n = sum(1 for it in self.items if it.get("use"))
         self.apply_btn.setText(f"Apply ({n})")
         self.apply_btn.setEnabled(n > 0)
+        c = {}
+        for it in self.items:
+            c[it["state"]] = c.get(it["state"], 0) + 1
+        parts = [f"<b>{len(self.items)}</b> drawing{'s' if len(self.items) != 1 else ''}"]
+        for k, lab in (("update", "with updates"), ("new", "new parts"), ("same", "up to date"),
+                       ("unmatched", "no part number"), ("error", "couldn't read")):
+            if c.get(k):
+                parts.append(f"{c[k]} {lab}")
+        self.summary.setText(" · ".join(parts))
+
+    def _apply_filter(self):
+        k = self.filter.currentData()
+        for r, it in enumerate(self.items):
+            show = (k == "all" or (k == "todo" and it.get("use")) or it["state"] == k
+                    or (k == "problem" and it["state"] in ("error", "unmatched")))
+            self.list.setRowHidden(r, not show)
+
+    def _select(self, on):
+        for r, it in enumerate(self.items):
+            if "error" in it or not it["prop"]["partNumber"] or self.list.isRowHidden(r):
+                continue
+            it["use"] = on and (it["state"] != "same" or bool(it["keys"]))
+            li = self.list.item(r)
+            self.list.blockSignals(True)
+            li.setCheckState(Qt.Checked if it["use"] else Qt.Unchecked)
+            self.list.blockSignals(False)
+        self._count()
+
+    def tick_blanks(self):
+        for it in self.items:
+            if "error" in it:
+                continue
+            exists = it["prop"]["part"] is not None
+            add = {f["key"] for f in it["prop"]["fields"]
+                   if not f["same"] and (not exists or str(f["current"] or "").strip() in ("", "-", "—"))}
+            it["keys"] |= add
+            if add:
+                it["use"] = True
+        self._fill_list()
+        self.show_item(self.list.currentRow())
 
     def _use_changed(self, li):
         r = self.list.row(li)
         self.items[r]["use"] = li.checkState() == Qt.Checked
-        n = sum(1 for it in self.items if it.get("use"))
-        self.apply_btn.setText(f"Apply ({n})")
-        self.apply_btn.setEnabled(n > 0)
+        self._count()
 
     # ---------------------------------------------------------------- detail
     def _clear(self):
@@ -183,6 +356,7 @@ class ReadDrawingsDialog(QDialog):
         self.dv.addWidget(st)
         if not part and pr["partNumber"]:
             self.dv.addWidget(cb)
+            self.dv.addLayout(self._project_row(it))
         if d.get("source") == "ocr":
             o = QLabel("Read by OCR (scanned drawing) — check the values.")
             o.setStyleSheet(f"color:{theme.WARN}")
@@ -243,8 +417,11 @@ class ReadDrawingsDialog(QDialog):
                 for c, val in enumerate((b["item"], b["partNumber"], b["description"], _fmt(b["qty"]))):
                     bt.setItem(r, c, QTableWidgetItem(str(val)))
                 hit = b.get("part")
-                st_ = QTableWidgetItem(f"✓ {hit['name']}" if hit else "not in DIMS")
-                if not hit:
+                in_batch = not hit and M._pn(b.get("partNumber")) in self.batch_pns
+                st_ = QTableWidgetItem(f"✓ {hit['name']}" if hit else "in this batch" if in_batch else "not in DIMS")
+                if in_batch:
+                    st_.setForeground(QBrush(QColor(theme.INFO)))
+                elif not hit:
                     missing += 1
                     st_.setForeground(QBrush(QColor(theme.WARN)))
                 bt.setItem(r, 4, st_)
@@ -287,10 +464,61 @@ class ReadDrawingsDialog(QDialog):
         self.dv.addStretch(1)
 
     # ---------------------------------------------------------------- write
+    def _project_row(self, it):
+        from PySide6.QtWidgets import QComboBox, QInputDialog, QSpinBox
+        row = QHBoxLayout()
+        if it.get("parent"):
+            lab = QLabel(f"Goes into <b>{it['parent']}</b> — no project needed, it's counted through that "
+                         "weldment / assembly.")
+            lab.setWordWrap(True)
+            row.addWidget(lab, 1)
+            return row
+        row.addWidget(QLabel("Project:"))
+        combo = QComboBox()
+        combo.addItem("— Not in a project —", None)
+        for pr in [p for p in self.inv.projects if not p.get("archived")]:
+            combo.addItem(pr["name"], pr["id"])
+        combo.addItem("+ New project…", "__new__")
+        if it.get("newProject"):
+            combo.insertItem(combo.count() - 1, f"{it['newProject']} (new)", "new:" + it["newProject"])
+        cur = ("new:" + it["newProject"]) if it.get("newProject") else it.get("project")
+        combo.setCurrentIndex(max(0, combo.findData(cur)))
+        qty = QSpinBox()
+        qty.setRange(1, 100000)
+        qty.setValue(int(it.get("projQty") or 1))
+        qty.setSuffix(" per unit")
+        qty.valueChanged.connect(lambda v: it.__setitem__("projQty", v))
+
+        def chosen(_i):
+            d = combo.currentData()
+            if d == "__new__":
+                name, ok = QInputDialog.getText(self, "New project", "Project name:",
+                                                text=D.folder_project_name(it["path"]))
+                name = name.strip()
+                if ok and name:
+                    ex = next((p for p in self.inv.projects if p["name"].lower() == name.lower()), None)
+                    it["project"], it["newProject"] = (ex["id"], "") if ex else (None, name)
+                QTimer.singleShot(0, lambda: self.show_item(self.list.currentRow()))
+                return
+            if isinstance(d, str) and d.startswith("new:"):
+                it["project"], it["newProject"] = None, d[4:]
+            else:
+                it["project"], it["newProject"] = d, ""
+            qty.setEnabled(bool(d))
+        combo.currentIndexChanged.connect(chosen)
+        qty.setEnabled(bool(cur))
+        row.addWidget(combo, 1)
+        row.addWidget(qty)
+        if it.get("project") and not it.get("newProject"):
+            hint = QLabel("from the folder name")
+            hint.setStyleSheet(f"color:{theme.MUTED}")
+            row.addWidget(hint)
+        return row
+
     def apply(self):
         by = self.inv.userName or ""
         done, made = [], []
-        for it in self.items:
+        for it in sorted(self.items, key=lambda x: bool("error" not in x and x["prop"]["bom"])):
             if not it.get("use") or "error" in it:
                 continue
             pr = it["prop"]
@@ -301,6 +529,9 @@ class ReadDrawingsDialog(QDialog):
             if res["part"] is not None:
                 done.append(res["part"])
                 made += res["created"]
+                if pr["part"] is None and (it.get("project") or it.get("newProject")):
+                    pid = it.get("project") or self.inv.find_or_create_project(it["newProject"])
+                    self.inv.set_allocation(res["part"], pid, it.get("projQty") or 1)
         if not done:
             QMessageBox.information(self, "Read drawings", "Nothing to apply.")
             return

@@ -149,3 +149,55 @@ def test_dialog_reviews_and_applies(tmp_path):
     dlg.list.setCurrentRow(0)
     dlg.apply()
     assert saved and inv.parts[0]["weightLb"] == pytest.approx(5.766) and inv.parts[0]["name"] == "Old name"
+
+
+def test_new_parts_get_a_project_unless_inside_a_bom(tmp_path):
+    from daedalus.ui.drawing_read_ui import ReadDrawingsDialog
+    inv = M.Inventory()
+    pid = inv.find_or_create_project("RFP 1308")
+    inv.find_or_create_project("RFP")
+    folder = tmp_path / "Product" / "RFP 1308" / "Drawings"
+    folder.mkdir(parents=True)
+    top = drawing(folder / "C20-0040.pdf")                                    # weldment with C10-0103 in its BOM
+    child = drawing(folder / "C10-0103.pdf", pn="C10-0103", desc="SHIP BRKT, HORIZ BEAM, BASE", bom=False)
+    assert D.project_from_path(inv, top) == pid and D.folder_project_name(top) == "RFP 1308"
+    dlg = ReadDrawingsDialog(inv, [top, child], lambda m: None)
+    a, b = dlg.items
+    assert a["state"] == b["state"] == "new" and a["project"] == pid and b["parent"] == "C20-0040" \
+        and b["project"] is None
+    for i in range(2):
+        dlg.list.setCurrentRow(i)                                             # both detail views build
+    a["projQty"] = 2
+    dlg.apply()
+    wl = next(p for p in inv.parts if p["partNumber"] == "C20-0040")
+    br = next(p for p in inv.parts if p["partNumber"] == "C10-0103")
+    assert inv.allocation(wl, pid)["qty"] == 2 and not inv.allocations(br)
+    assert [c["partId"] for c in wl["components"]] == [br["id"]] and wl["isWeldment"]     # linked within the batch
+    inv2 = M.Inventory()
+    dlg2 = ReadDrawingsDialog(inv2, [child], lambda m: None)
+    it = dlg2.items[0]
+    it["newProject"] = "Ship Brackets"
+    dlg2.apply()
+    pr = next(p for p in inv2.projects if p["name"] == "Ship Brackets")
+    assert inv2.allocation(inv2.parts[0], pr["id"])["qty"] == 1
+
+
+def test_folder_pick_keeps_newest_revision(tmp_path):
+    from daedalus.ui.drawing_read_ui import newest_only
+    paths = [str(tmp_path / n) for n in ("C20-0040 Rev A.pdf", "C20-0040 Rev C.pdf", "C20-0040 Rev B.pdf",
+                                         "C10-0103.pdf")]
+    assert sorted(newest_only(paths)) == sorted([paths[1], paths[3]])
+
+
+def test_same_part_twice_newest_file_wins(tmp_path):
+    import time
+    from daedalus.ui.drawing_read_ui import ReadDrawingsDialog
+    old = drawing(tmp_path / "old.pdf", weight="1.0 LB")
+    time.sleep(0.01)
+    new = drawing(tmp_path / "new.pdf", weight="2.0 LB")
+    os.utime(old, (time.time() - 100, time.time() - 100))
+    inv = M.Inventory()
+    dlg = ReadDrawingsDialog(inv, [new, old], lambda m: None)
+    assert [it["state"] for it in dlg.items] == ["new", "duplicate"]
+    dlg.apply()
+    assert len(inv.parts) == 1 and inv.parts[0]["weightLb"] == 2.0

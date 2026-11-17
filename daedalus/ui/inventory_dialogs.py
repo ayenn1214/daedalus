@@ -221,11 +221,12 @@ class PartDialog(_Base):
         f.addRow("Revision", self.rev_row)
         self._cad_label = f.labelForField(self.cad_row)
         self._rev_label = f.labelForField(self.rev_row)
-        if part and p.get("type") == "manufactured":
+        if part:
             from ..inventory import analytics as A
             st = A.version_status(p)
-            if st["status"] not in ("ok", "no-file"):
-                self.rev_note.setText("⚠ " + st["detail"])
+            if st["status"] in ("changed", "newer", "mismatch", "missing"):
+                self.rev_note.setText("⚠ " + "; ".join(x for x in st["detail"].split("; ")
+                                                       if "not checked in" not in x))
                 self.rev_note.setStyleSheet(f"color:{theme.WARN}")
             elif p.get("revisionCheckedAt"):
                 self.rev_note.setText(f"checked in {p['revisionCheckedAt']}")
@@ -663,6 +664,13 @@ class PartDialog(_Base):
                        discontinuedDate=(self.part or {}).get("discontinuedDate") or M.today())
         out["revision"] = self.rev.text().strip().upper()
         out["revisionHistory"] = self.rev_hist
+        old = self.part or {}
+        if out["revision"] != (old.get("revision") or "") or out["cadFile"] != M.portable_path(old.get("cadFile")) \
+                or out["drawingUrl"] != M.portable_path(old.get("drawingUrl")) or not old.get("revisionFiles"):
+            from ..inventory import analytics as A                # saving = these files are this revision
+            tmp = A.check_in({**old, **out})
+            if tmp.get("revisionFiles"):
+                out["revisionFiles"], out["revisionCheckedAt"] = tmp["revisionFiles"], tmp["revisionCheckedAt"]
         if typ == "fastener":
             out.update(headStyle=self.head.currentText(), threadType=self.thread_type.currentText(),
                        threadStandard=self.std.currentText(), size=self.size.currentText().strip(),

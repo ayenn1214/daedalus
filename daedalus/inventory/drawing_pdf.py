@@ -510,6 +510,30 @@ def parse(path, page: int = 0, ocr: bool = True) -> dict:
 
 
 # ------------------------------------------------------------------ into DIMS
+def project_from_path(inv, path):
+    """The project a drawing's folder names (…/RFP 1308/Drawings/C20-0040.pdf → RFP 1308): longest project name
+    that appears as a whole word in one of the folder names. None when no folder matches."""
+    segs = [x for x in re.split(r"[\\/]", str(path))[:-1] if x]
+    for pr in sorted([p for p in inv.projects if not p.get("archived")], key=lambda p: -len(p.get("name") or "")):
+        name = (pr.get("name") or "").strip()
+        if len(name) < 2:
+            continue
+        pat = re.compile(r"(?<![A-Za-z0-9])" + re.escape(name) + r"(?![A-Za-z0-9])", re.I)
+        if any(pat.search(sg) for sg in segs):
+            return pr["id"]
+    return None
+
+
+def folder_project_name(path) -> str:
+    """A name for a new project from the drawing's folder (skipping generic ones like 'Drawings' / 'PDF')."""
+    generic = {"drawings", "drawing", "pdf", "pdfs", "dwg", "release", "released", "rev", "parts", "models"}
+    for seg in reversed(re.split(r"[\\/]", str(path))[:-1]):
+        if seg and seg.strip().lower() not in generic and not re.fullmatch(r"[A-Za-z]:", seg):
+            return seg.strip().lstrip("_")
+    return ""
+
+
+
 FIELDS = [("description", "Name / description"), ("revision", "Revision"), ("weightLb", "Weight (lb)"),
           ("material", "Material"), ("finish", "Finish"), ("drawingUrl", "Drawing")]
 
@@ -593,6 +617,9 @@ def apply(inv, d: dict, prop: dict, keys: set, bom: bool = True, create_missing:
         comps = []
         for r in prop["bom"]:
             child = r["part"]
+            if child is None and r.get("partNumber"):                # created since (e.g. read in the same batch)
+                hit = M.find_part(inv.parts, "", r["partNumber"])
+                child = hit if hit is not None and M._pn(hit.get("partNumber")) == M._pn(r["partNumber"]) else None
             if child is None and create_missing and r.get("partNumber"):
                 child = M.new_part(name=r.get("description") or r["partNumber"], partNumber=r["partNumber"],
                                    type="manufactured", createdBy=by or "drawing")
@@ -607,5 +634,8 @@ def apply(inv, d: dict, prop: dict, keys: set, bom: bool = True, create_missing:
                 part["isWeldment"] = True
             elif prop["isAssembly"]:
                 part["isAssembly"] = True
+    if ("revision" in keys or "drawingUrl" in keys) and part.get("drawingUrl"):
+        from . import analytics as A                       # the drawing just read is the checked-in one
+        A.check_in(part)
     part["updatedAt"] = M.now_ms()
     return {"part": part, "created": created}

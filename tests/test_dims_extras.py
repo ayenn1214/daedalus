@@ -119,7 +119,10 @@ def test_revision_check(tmp_path):
     assert A.version_status(p)["status"] == "unchecked"
     A.accept_version(p)
     assert A.version_status(p)["status"] == "ok" and p["revision"] == "B"
-    os.utime(d1, (time.time() + 60, time.time() + 60))
+    os.utime(d1, (time.time() + 60, time.time() + 60))               # synced copy: new time, same content
+    assert A.version_status(p)["status"] == "ok"
+    d1.write_text("x")                                                 # edited (same size, new content)
+    os.utime(d1, (time.time() + 120, time.time() + 120))
     assert A.version_status(p)["status"] == "changed"
     (tmp_path / "BRKT-104 Rev C.pdf").write_text("c")
     st = A.version_status(p)
