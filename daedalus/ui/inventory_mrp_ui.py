@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QCompleter, QDialog, QDialogButtonBox, QDoubleSpinBox, QFileDialog, QFormLayout, QFrame,
@@ -407,7 +407,7 @@ class EngineeringView(QWidget):
         for i, r in enumerate(sh):
             t.item(i, 0).setData(Qt.UserRole + 1, r["id"])
         t.cellDoubleClicked.connect(lambda r_, _c: (self.st.__setitem__("wu_part", t.item(r_, 0).data(Qt.UserRole + 1)),
-                                                    self.page.refresh_current()))
+                                                    QTimer.singleShot(0, self.page.refresh_current)))
         v.addWidget(t if sh else _muted("No part is used in more than one place yet."), 1)
         return w
 

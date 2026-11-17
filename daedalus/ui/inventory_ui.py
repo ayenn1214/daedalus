@@ -792,7 +792,7 @@ class InventoryPage(QWidget):
             if any(p.get("isWeldment") and p.get("components") for p in inv.parts_for_project(pr["id"])):
                 flat_now = pr["id"] in self.mrp_state.get("proj_flat", [])
                 nb = _small("Weldments: flat" if flat_now else "Weldments: nested",
-                            lambda _=False, i=pr["id"]: self.toggle_nest(i),
+                            lambda _=False, i=pr["id"]: QTimer.singleShot(0, lambda: self.toggle_nest(i)),
                             "Nested: weldment parts sit under their weldment (▾ / ▸ to fold). Flat: every MFG part "
                             "at the top level with its total per unit")
                 hdr.addWidget(nb)
@@ -948,7 +948,9 @@ class InventoryPage(QWidget):
             it = t.item(r, 1)
             wid = it.data(Qt.UserRole + 5) if it is not None else None
             if wid and c == 1 and not (QApplication.keyboardModifiers() & Qt.ShiftModifier):
-                self.toggle_weld(pr["id"], wid)
+                # rebuild after the click is done: rebuilding replaces this table, and deleting a table while
+                # it is still delivering its own click crashes Qt
+                QTimer.singleShot(0, lambda: self.toggle_weld(pr["id"], wid))
         t.cellClicked.connect(clicked)
         return t
 
@@ -1157,7 +1159,7 @@ class InventoryPage(QWidget):
                                       _small("Edit", lambda _=False, oo=o: self.edit_order(oo)),
                                       _small("Delete", lambda _=False, oo=o: self.delete_order(oo), danger=True))])
             t = self.table(["", "Order", "PO", "Project", "Qty", "Stage", "Finish / Due", "Status", ""], rows, 5)
-            t.cellDoubleClicked.connect(lambda r, _c, ib=inbox: self.open_production(ib[r]))
+            t.cellDoubleClicked.connect(lambda r, _c, ib=inbox: QTimer.singleShot(0, lambda: self.open_production(ib[r])))
             v.addWidget(t)
             v.addWidget(_section("Fab & Finishing Timeline — by Project"))
             dated = [o for o in orders if any(o.get(k) for k in ("fabStart", "fabEnd", "finishStart", "finishEnd"))]

@@ -235,3 +235,30 @@ def test_project_weldments_nested_or_flat(tmp_path):
     assert any(x.strip().startswith("FLAT, TAB") and "(in M30-0001)" in x for x in n)
     page.toggle_nest(pid)
     assert any("× 4  FLAT, TAB" in x for x in names())
+
+
+def test_clicking_a_weldment_folds_it_without_crashing(tmp_path):
+    """Real mouse click on the weldment row: the table rebuilds after the click, not inside it (Qt crash)."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication, QTableWidget
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv, pid = shop()
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.resize(1300, 800)
+    page.show()
+    page.goto("projects")
+    app.processEvents()
+    for expect in (True, False, True):
+        t = next(x for x in page.pages["projects"].widget().findChildren(QTableWidget) if x.rowCount() > 3)
+        r = next(i for i in range(t.rowCount()) if t.item(i, 1) and "WLDMT, FRAME" in t.item(i, 1).text())
+        QTest.mouseClick(t.viewport(), Qt.LeftButton, Qt.NoModifier, t.visualItemRect(t.item(r, 1)).center())
+        for _ in range(3):
+            app.processEvents()
+        assert (f"{pid}:frame" in page.mrp_state.get("weld_shut", [])) is expect
+    page.close()
