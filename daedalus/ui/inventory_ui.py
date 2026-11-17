@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 import os
+import re
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSettings, Qt, QTimer, QUrl, Signal
@@ -770,6 +771,8 @@ class InventoryPage(QWidget):
                              "unit — demand comes from confirmed orders (Orders tab). Edit Qty/Unit right in the "
                              "table."), 1)
         row.addWidget(_btn("Send BOM from design…", self.send_bom_requested.emit))
+        row.addWidget(_btn("Export Projects…", lambda: self.export_projects(),
+                           "Excel workbook: summary, BOM by type, build list, purchasing by vendor, MFG list"))
         row.addWidget(_btn("+ Add Project", self.add_project, primary=True))
         v.addLayout(row)
         if not projects:
@@ -799,6 +802,8 @@ class InventoryPage(QWidget):
                                     "confirmed orders"))
             for b in (*extra, up, dn, _small("+ Add Parts", lambda _=False, i=pr["id"]: self.add_parts_to_project(i)),
                       _small("Duplicate", lambda _=False, i=pr["id"]: self.duplicate_project(i)),
+                      _small("Export", lambda _=False, i=pr["id"]: self.export_projects([i]),
+                             "Export this project to Excel"),
                       _small("Edit", lambda _=False, i=pr["id"]: self.edit_project(i)),
                       _small("Archive", lambda _=False, i=pr["id"]: self.archive(i, True))):
                 hdr.addWidget(b)
@@ -897,6 +902,70 @@ class InventoryPage(QWidget):
         t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         t.setMinimumHeight(0)
         return t
+
+    def export_projects(self, pids=None):
+        """Pick projects + units, then write the project workbook."""
+        from PySide6.QtWidgets import QCheckBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QGridLayout
+
+        from ..inventory import project_export as PX
+        inv = self.inv
+        projects = inv.active_projects()
+        if not projects:
+            return self.toast.show_msg("No projects to export")
+        d = QDialog(self)
+        d.setWindowTitle("Export Projects")
+        v = QVBoxLayout(d)
+        v.addWidget(_muted("Units: how many to build — defaults to the units on open production (else 1). "
+                           "Quantities, shortages, purchasing and costs follow it."))
+        g = QGridLayout()
+        g.addWidget(QLabel("<b>Project</b>"), 0, 0)
+        g.addWidget(QLabel("<b>Units</b>"), 0, 1)
+        g.addWidget(QLabel("<b>On production</b>"), 0, 2)
+        picks = {}
+        for r, pr in enumerate(projects, 1):
+            cb = QCheckBox(pr["name"])
+            cb.setChecked(pids is None or pr["id"] in pids)
+            on = inv.project_qty(pr["id"])
+            sp = QDoubleSpinBox()
+            sp.setRange(1, 100000)
+            sp.setDecimals(0)
+            sp.setValue(on or 1)
+            g.addWidget(cb, r, 0)
+            g.addWidget(sp, r, 1)
+            g.addWidget(QLabel(f"{on:g}" if on else "—"), r, 2)
+            picks[pr["id"]] = (cb, sp)
+        box = QWidget()
+        box.setLayout(g)
+        if len(projects) > 12:
+            from PySide6.QtWidgets import QScrollArea
+            sa = QScrollArea()
+            sa.setWidgetResizable(True)
+            sa.setWidget(box)
+            sa.setMinimumHeight(360)
+            v.addWidget(sa)
+        else:
+            v.addWidget(box)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.button(QDialogButtonBox.Ok).setText("Export…")
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        v.addWidget(bb)
+        if d.exec() != QDialog.Accepted:
+            return
+        chosen = [pid for pid, (cb, _sp) in picks.items() if cb.isChecked()]
+        if not chosen:
+            return self.toast.show_msg("No project selected")
+        units = {pid: picks[pid][1].value() for pid in chosen}
+        name = (inv.project_name(chosen[0]) if len(chosen) == 1 else "projects")
+        fn = re.sub(r"[^\w\- ]+", "", name).strip().replace(" ", "-") or "project"
+        path = self._save_path(f"{fn}-{M.today()}.xlsx", "Excel (*.xlsx)")
+        if not path:
+            return
+        try:
+            PX.write(path, inv, chosen, units, inv.userName or "")
+        except Exception as e:  # noqa: BLE001
+            return QMessageBox.warning(self, "Export", f"Couldn't export:\n{e}")
+        self.toast.show_msg(f"Exported {len(chosen)} project{'s' if len(chosen) != 1 else ''}")
 
     def _demand_note(self, pid):
         from ..inventory import orders as O
