@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.19</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.20</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -416,6 +416,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.20** | Projects: weldment as one row with its parts inside (├─ / └─) · Job Order & Kit by project: kit split into Fasteners / Purchased (bin items) / Other, MFG on a toggle · plain-text material / finish no longer crashes Job Order / Material Needs |
 | **3.0.19** | Fix: crash when folding a weldment in Projects (also Where Used / production inbox double-click) · Updater reads the version from the released code (no update loop when a release is tagged on older code) |
 | **3.0.17** | Project BOM window (MFG hierarchy, fasteners, purchased, buy list; copy as table; Excel export) · Export Projects… · Reorder Buy List view (copy / export) · Projects: weldments nested (fold ▾ / ▸) or flat |
 | **3.0.16** | Chat: Shift-click anything in DIMS (rows and labels resolve to part / project / vendor / bin / order links, otherwise quoted) · team-server chat timestamp fixes · Projects: one table per project with type header rows |
