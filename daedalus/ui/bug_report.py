@@ -72,6 +72,9 @@ class BugReportDialog(QDialog):
         f.addRow("Expected", self.expected)
         self.contact = QLineEdit((inv.syncMeta or {}).get("bugReportEmail", "") if inv is not None else
                                  QSettings("Daedalus", "Daedalus").value("bugreport/email") or "")
+        if not self.contact.text().strip():
+            from ..crash import REPORT_TO
+            self.contact.setText(REPORT_TO)
         self.contact.setPlaceholderText("Who gets emailed reports (shared with the team when on DIMS)")
         f.addRow("Send to", self.contact)
         v.addLayout(f)

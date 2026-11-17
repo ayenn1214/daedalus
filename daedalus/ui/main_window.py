@@ -1775,6 +1775,9 @@ class MainWindow(QMainWindow):
         act(h, "Report a bug…", lambda: __import__("daedalus.ui.bug_report", fromlist=["x"]).BugReportDialog(
             self, context={"Area": "3D workspace", "Document": str(getattr(self.doc, "path", "") or "unsaved")},
             inv=self.inventory_page.inv, commit=lambda m: self.inventory_page.commit(m)).exec())
+        act(h, "Crash reports folder…", lambda: __import__("PySide6.QtGui", fromlist=["x"]).QDesktopServices.openUrl(
+            __import__("PySide6.QtCore", fromlist=["x"]).QUrl.fromLocalFile(
+                str(__import__("daedalus.crash", fromlist=["x"]).crash_dir()))))
         act(h, "Setup check (Python + Icarus)…", self.show_setup_check)
         act(h, "Design data calculators…", lambda: self.design_data(0))
         act(h, "Reference library (your handbooks)…", lambda: self.design_data(1))

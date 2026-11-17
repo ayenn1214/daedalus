@@ -38,6 +38,12 @@ def main():
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
+    _win = {}
+    try:                                              # crash reports: any unhandled error → report + window
+        from .ui.crash_ui import install as _crash
+        _crash(lambda: _win.get("w"))
+    except Exception:  # noqa: BLE001
+        pass
     try:
         from .ui.splash import logo_icon
         app.setWindowIcon(logo_icon())
@@ -72,8 +78,10 @@ def main():
         w.show()
         if splash is not None:
             splash.finish(w)
+        _win["w"] = w
         _startup_lite(w, args)
         _auto_update(w)
+        _last_crash(w)
         sys.exit(app.exec())
     step("Loading geometry kernel…")
     from .ui.main_window import MainWindow
@@ -83,9 +91,19 @@ def main():
     w.view.start()
     if splash is not None:
         splash.finish(w)
+    _win["w"] = w
     _startup(w, args)
     _auto_update(w)
+    _last_crash(w)
     sys.exit(app.exec())
+
+
+def _last_crash(w):
+    try:
+        from .ui.crash_ui import offer_last_crash
+        offer_last_crash(w)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _auto_update(w):

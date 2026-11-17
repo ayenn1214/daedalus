@@ -851,6 +851,11 @@ def run(demo=False, app="solidworks"):
     qapp.setApplicationName(APP_NAME)
     theme.apply(qapp)
     try:
+        from ..ui.crash_ui import install as _crash
+        _crash(lambda: QApplication.activeWindow())
+    except Exception:  # noqa: BLE001
+        pass
+    try:
         backend = connect(demo=demo, app=app, lazy=True)       # opens even before the CAD program is up
     except SWError as e:                                       # not fixable by waiting (no Windows / pywin32)
         from .more_backends import label

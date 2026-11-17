@@ -83,6 +83,9 @@ class LiteWindow(QMainWindow):
         act(h, "Startup modules…", self.startup_modules)
         act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
         act(h, "Report a bug…", self.report_bug)
+        act(h, "Crash reports folder…", lambda: __import__("PySide6.QtGui", fromlist=["x"]).QDesktopServices.openUrl(
+            __import__("PySide6.QtCore", fromlist=["x"]).QUrl.fromLocalFile(
+                str(__import__("daedalus.crash", fromlist=["x"]).crash_dir()))))
 
     def report_bug(self):
         if self.inventory_page is not None:
