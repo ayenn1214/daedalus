@@ -44,7 +44,8 @@ def source_for(p) -> str:
         v = (p.get(k) or "").strip()
         ext = os.path.splitext(v)[1].lower()
         if v and not v.startswith(("http://", "https://")) and ext in IMAGE_EXTS | MESH_EXTS | KERNEL_EXTS | SW_EXTS:
-            return v
+            from .model import local_path
+            return local_path(v)
     return ""
 
 

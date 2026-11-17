@@ -165,7 +165,9 @@ class PartDialog(_Base):
             f.addRow("Created", QLabel(f"{p.get('createdBy') or '—'} · {_d(p.get('createdAt')) or '—'}"))
         f.addRow("QuickBooks part #", self.qb)
         dr = QHBoxLayout()
-        self.drawing = QLineEdit(p.get("drawingUrl") or "")
+        self.drawing = QLineEdit(M.local_path(p.get("drawingUrl")) or "")
+        self.drawing.setToolTip("Saved for the team as ~/… when it's in your user folder (Dropbox, OneDrive…), "
+                                "so it opens from each person's own folder")
         self.drawing.setPlaceholderText("Drawing / datasheet: file path or web link")
         browse = QPushButton("…")
         browse.setFixedWidth(28)
@@ -192,7 +194,7 @@ class PartDialog(_Base):
             h.addWidget(e)
             h.addWidget(b)
             return w, e
-        self.cad_row, self.cad = file_row(p.get("cadFile"), "3D model: SolidWorks, STEP, STL, .daedalus …",
+        self.cad_row, self.cad = file_row(M.local_path(p.get("cadFile")), "3D model: SolidWorks, STEP, STL, .daedalus …",
                                           "3D models (*.sldprt *.sldasm *.step *.stp *.stl *.obj *.iges *.igs "
                                           "*.daedalus);;All files (*)")
         self.rev = QLineEdit(p.get("revision") or "")
@@ -200,8 +202,17 @@ class PartDialog(_Base):
         self.rev.setMaximumWidth(80)
         self.rev_note = QLabel()
         self.rev_note.setObjectName("muted")
+        self.rev_hist = [dict(r) for r in (p.get("revisionHistory") or [])]
+        self.rev_new = QPushButton("+ New rev")
+        self.rev_new.setToolTip("Next revision letter, with what changed — kept in the revision history")
+        self.rev_new.clicked.connect(self._new_rev)
+        self.rev_hist_btn = QPushButton()
+        self.rev_hist_btn.clicked.connect(self._show_revs)
+        self._rev_hist_label()
         rr = QHBoxLayout()
         rr.addWidget(self.rev)
+        rr.addWidget(self.rev_new)
+        rr.addWidget(self.rev_hist_btn)
         rr.addWidget(self.rev_note, 1)
         self.rev_row = QWidget()
         self.rev_row.setLayout(rr)
@@ -218,7 +229,7 @@ class PartDialog(_Base):
                 self.rev_note.setStyleSheet(f"color:{theme.WARN}")
             elif p.get("revisionCheckedAt"):
                 self.rev_note.setText(f"checked in {p['revisionCheckedAt']}")
-        self.img_row, self.img = file_row(p.get("imageFile"), "Picture for the parts list (optional)",
+        self.img_row, self.img = file_row(M.local_path(p.get("imageFile")), "Picture for the parts list (optional)",
                                           "Images (*.png *.jpg *.jpeg *.bmp *.webp);;All files (*)")
         f.addRow("Picture", self.img_row)
         from ..inventory import mrp as R
@@ -493,6 +504,48 @@ class PartDialog(_Base):
         self.cat_custom.setVisible(self.type.currentData() == "fastener" and self.cat_combo.currentData() == "Other")
         self._autoname()
 
+    # ---------------------------------------------------------------- revisions
+    def _rev_hist_label(self):
+        n = len(self.rev_hist)
+        self.rev_hist_btn.setText(f"History ({n})" if n else "History")
+        self.rev_hist_btn.setEnabled(bool(n))
+
+    def _new_rev(self):
+        from PySide6.QtWidgets import QInputDialog
+        nxt = M.next_revision(self.rev.text())
+        desc, ok = QInputDialog.getText(self, "New revision", f"Rev {nxt} — what changed?")
+        if not ok:
+            return
+        self.rev.setText(nxt)
+        self.rev_hist.append({"rev": nxt, "description": desc.strip(), "date": M.today(),
+                              "by": self.inv.userName or ""})
+        self._rev_hist_label()
+
+    def _show_revs(self):
+        from PySide6.QtWidgets import QHeaderView, QTableWidget, QTableWidgetItem
+        d = QDialog(self)
+        d.setWindowTitle("Revision history")
+        d.resize(620, 300)
+        v = QVBoxLayout(d)
+        t = QTableWidget(len(self.rev_hist), 4)
+        t.setHorizontalHeaderLabels(["Rev", "Description", "Date", "By"])
+        t.verticalHeader().hide()
+        for r, h in enumerate(reversed(self.rev_hist)):
+            for c, k in enumerate(("rev", "description", "date", "by")):
+                t.setItem(r, c, QTableWidgetItem(str(h.get(k) or "")))
+        t.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        v.addWidget(t)
+        bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        bb.accepted.connect(d.accept)
+        bb.rejected.connect(d.reject)
+        v.addWidget(bb)
+        if d.exec():                                     # edits in the table are kept
+            out = []
+            for r in range(t.rowCount()):
+                out.append({k: (t.item(r, c).text() if t.item(r, c) else "")
+                            for c, k in enumerate(("rev", "description", "date", "by"))})
+            self.rev_hist = list(reversed(out))
+
     def _sync(self):
         fast = self.type.currentData() == "fastener"
         self.fast.setVisible(fast)
@@ -500,9 +553,9 @@ class PartDialog(_Base):
         self.cat_custom.setVisible(fast and self.cat_combo.currentData() == "Other")
         self.cat_text.setVisible(not fast)
         manu = self.type.currentData() == "manufactured"
-        for w in (self.rev_row, self._rev_label):
+        for w in (self.rev_row, self._rev_label):           # every part can carry a revision
             if w is not None:
-                w.setVisible(manu)
+                w.setVisible(True)
         self.weld.setVisible(manu)
         self.comp_box.setVisible(manu and self.weld.isChecked())
         self.bom_kind.setVisible(manu and self.weld.isChecked())
@@ -598,18 +651,18 @@ class PartDialog(_Base):
                 self.inv.ensure_vendor(s["name"])
         out = {"type": typ, "name": self.name.text().strip(), "category": self.category(),
                "partNumber": self.pn.text().strip(), "qbPartNumber": self.qb.text().strip(),
-               "drawingUrl": self.drawing.text().strip(), "notes": self.notes.toPlainText().strip(),
+               "drawingUrl": M.portable_path(self.drawing.text()), "notes": self.notes.toPlainText().strip(),
                "currentStock": self.stock.value(), "unit": self.unit.text().strip() or "ea",
                "reorderPoint": self.rp.value(), "reorderQty": self.rq.value(), "unitCost": self.cost.value(), "weightLb": round(self.weight.value(), 4),
                "unitCostCurrency": self.cost_cur.currentText(), "locationId": self.loc.currentData(),
-               "suppliers": sups, "updatedAt": M.now_ms(), "cadFile": self.cad.text().strip(),
-               "imageFile": self.img.text().strip(), "discontinued": self.disc_box.isChecked(),
+               "suppliers": sups, "updatedAt": M.now_ms(), "cadFile": M.portable_path(self.cad.text()),
+               "imageFile": M.portable_path(self.img.text()), "discontinued": self.disc_box.isChecked(),
                "description": self.desc.text().strip()}
         if self.disc_box.isChecked():
             out.update(replacementId=self.repl.currentData(), discontinuedNote=self.disc_note.text().strip(),
                        discontinuedDate=(self.part or {}).get("discontinuedDate") or M.today())
-        if typ == "manufactured":
-            out["revision"] = self.rev.text().strip().upper()
+        out["revision"] = self.rev.text().strip().upper()
+        out["revisionHistory"] = self.rev_hist
         if typ == "fastener":
             out.update(headStyle=self.head.currentText(), threadType=self.thread_type.currentText(),
                        threadStandard=self.std.currentText(), size=self.size.currentText().strip(),
@@ -661,7 +714,7 @@ class ProjectDialog(_Base):
         f = QFormLayout()
         self.name = QLineEdit(p.get("name", ""))
         self.name.setPlaceholderText("e.g. Line 3 Retrofit")
-        self.folder = QLineEdit(p.get("folderPath", ""))
+        self.folder = QLineEdit(M.local_path(p.get("folderPath", "")))
         self.folder.setPlaceholderText("Network path or URL")
         f.addRow("Project name", self.name)
         f.addRow("Folder location", self.folder)
@@ -673,7 +726,7 @@ class ProjectDialog(_Base):
             raise ValueError("Enter a project name")
 
     def values(self):
-        return {"name": self.name.text().strip(), "folderPath": self.folder.text().strip()}
+        return {"name": self.name.text().strip(), "folderPath": M.portable_path(self.folder.text())}
 
 
 class LocationDialog(_Base):

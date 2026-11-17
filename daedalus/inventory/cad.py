@@ -4,6 +4,7 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from . import model as M
 from .model import Inventory, fastener_name, new_part, now_ms, num
 
 # Daedalus library designation → DIMS fastener spec
@@ -80,7 +81,7 @@ def _templates(doc):
         else:
             t = {"type": "manufactured", "name": desig, "partNumber": desig, "category": "",
                  "notes": f"{row['description']} · {row['material']} · {row['unit_mass_kg']:g} kg (Daedalus)",
-                 "drawingUrl": row.get("file") or path, "unit": "ea"}
+                 "drawingUrl": M.portable_path(row.get("file") or path), "unit": "ea"}
         if row.get("inventory_id"):
             t["inventoryId"] = row["inventory_id"]
         t["unitCost"] = row.get("unit_cost") or 0
@@ -151,7 +152,7 @@ def send_bom(inv: Inventory, doc, project: str, units: float | None = None, weld
         raise ValueError("Give the project a name")
     extra = {"totalQtyNeeded": units} if units is not None else {}
     if getattr(doc, "path", None):
-        extra["folderPath"] = str(Path(doc.path).parent)
+        extra["folderPath"] = M.portable_path(str(Path(doc.path).parent))
     pid = inv.find_or_create_project(project, **extra)
     added, linked, rows = [], [], []
     for t, qty, row in _templates(doc):

@@ -98,6 +98,65 @@ def label(p) -> str:
     return f"{pn}  {p.get('name') or ''}" if pn else (p.get("name") or "")
 
 
+PATH_KEYS = ("drawingUrl", "cadFile", "imageFile")
+_OTHER_HOME = re.compile(r"^(?:[A-Za-z]:/Users|/Users|/home)/[^/]+/(.+)$", re.I)
+
+
+def portable_path(path) -> str:
+    """A file path as stored for the team: inside anyone's user folder it becomes ~/… (C:/Users/danie/Rangate
+    Dropbox/… → ~/Rangate Dropbox/…), so it opens from each person's own folder. URLs and other paths unchanged."""
+    s = str(path or "").strip().strip('"')
+    if not s or re.match(r"^[a-z][a-z0-9+.-]*://|^mailto:", s, re.I) or s.startswith("~"):
+        return s.replace("\\", "/") if s.startswith("~") else s
+    if s.startswith("\\\\"):                              # network share: leave it
+        return s
+    t = s.replace("\\", "/")
+    from pathlib import Path
+    home = Path.home().as_posix().rstrip("/")
+    if t.lower().startswith(home.lower() + "/"):
+        return "~/" + t[len(home) + 1:]
+    m = _OTHER_HOME.match(t)
+    return "~/" + m.group(1) if m else s
+
+
+def next_revision(rev: str) -> str:
+    """'' / '-' → A, A → B, Z → AA, AZ → BA, 3 → 4, 01 → 02."""
+    r = (rev or "").strip().upper()
+    if not r or r in ("-", "—", "0"):
+        return "A" if r != "0" else "1"
+    if r.isdigit():
+        return str(int(r) + 1).zfill(len(r))
+    if r.isalpha():
+        chars = list(r)
+        i = len(chars) - 1
+        while i >= 0:
+            if chars[i] != "Z":
+                chars[i] = chr(ord(chars[i]) + 1)
+                return "".join(chars)
+            chars[i] = "A"
+            i -= 1
+        return "A" + "".join(chars)
+    return r
+
+
+def local_path(path) -> str:
+    """A stored path → this PC's file: ~/… under this user's folder; another person's C:/Users/<name>/… is tried
+    under this user's folder too (used when it exists there, or when the original doesn't)."""
+    import os
+    from pathlib import Path
+    s = str(path or "").strip().strip('"')
+    if not s or re.match(r"^[a-z][a-z0-9+.-]*://|^mailto:", s, re.I):
+        return s
+    if s.startswith(("~/", "~\\")) or s == "~":
+        return str(Path.home() / s[2:]) if len(s) > 2 else str(Path.home())
+    m = _OTHER_HOME.match(s.replace("\\", "/"))
+    if m:
+        mine = Path.home() / m.group(1)
+        if mine.exists() or not os.path.exists(s):
+            return str(mine)
+    return s
+
+
 def uid() -> str:
     return "".join(random.choices(string.ascii_lowercase + string.digits, k=8)) + \
         format(int(time.time() * 1000), "x")[-4:]

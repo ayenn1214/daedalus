@@ -400,7 +400,8 @@ def _base(name: str) -> str:
 def _local(path: str) -> Path | None:
     if not path or path.startswith(("http://", "https://", "mailto:")):
         return None
-    return Path(path)
+    from .model import local_path
+    return Path(local_path(path))
 
 
 def file_sig(path: Path) -> dict:

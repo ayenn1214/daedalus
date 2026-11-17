@@ -150,7 +150,7 @@ def _qty_spin(value, done):
 
 
 def _open_link(target: str):
-    t = (target or "").strip()
+    t = M.local_path((target or "").strip())             # ~/… and other people's user folders → this PC's
     if not t:
         return
     if t.startswith(("http://", "https://", "mailto:")):

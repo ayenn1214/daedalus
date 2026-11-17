@@ -525,10 +525,11 @@ def proposals(inv, d: dict) -> dict:
         part = None
     cur = part or {}
     new = {"description": d.get("description"), "revision": d.get("rev"), "weightLb": d.get("weightLb"),
-           "material": d.get("material"), "finish": d.get("finish"), "drawingUrl": d.get("file")}
+           "material": d.get("material"), "finish": d.get("finish"), "drawingUrl": M.portable_path(d.get("file"))}
     old = {"description": cur.get("name"), "revision": cur.get("revision"), "weightLb": cur.get("weightLb"),
            "material": R.mat_of(cur).get("grade") if cur else None,
-           "finish": R.fin_of(cur).get("process") if cur else None, "drawingUrl": cur.get("drawingUrl")}
+           "finish": R.fin_of(cur).get("process") if cur else None,
+           "drawingUrl": M.portable_path(cur.get("drawingUrl")) if cur.get("drawingUrl") else None}
     fields = []
     for k, lab in FIELDS:
         if new.get(k) in (None, ""):
