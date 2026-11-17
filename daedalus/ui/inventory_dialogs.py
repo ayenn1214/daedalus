@@ -1159,4 +1159,9 @@ workbook any time; a weekly Excel backup reminder appears when one is due.</p>
 
 <h3>Updates</h3>
 <p>Daedalus checks for a new release at start-up and every 2 hours while open. When one is out, an
-<b>Update</b> button appears at the bottom right.</p>"""
+<b>Update</b> button appears at the bottom right.</p>
+
+<h3>Crash reports</h3>
+<p>If something goes wrong, Daedalus saves a report and shows it: <b>Email report</b> sends it to
+narula.ayenn@gmail.com (attach the saved file), <b>Report…</b> opens the bug form filled in. If the app closes
+suddenly, the report is offered the next time it starts. Help ▸ <b>Crash reports folder…</b> opens them all.</p>"""
