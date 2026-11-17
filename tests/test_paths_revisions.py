@@ -53,3 +53,33 @@ def test_part_dialog_tracks_revisions_for_any_part_and_saves_portable_paths(tmp_
     assert v["revision"] == "B" and v["drawingUrl"] == "~/Rangate Dropbox/caster.pdf"
     assert [h["rev"] for h in v["revisionHistory"]] == ["A", "B"] and v["revisionHistory"][1]["by"] == "Ankur"
     assert d.rev_hist_btn.text() == "History (2)"
+
+
+def test_update_button_fixes_a_changed_or_newer_drawing(tmp_path, monkeypatch):
+    import time
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.inventory import analytics as A
+    from daedalus.ui.inventory_dialogs import PartDialog
+    d = tmp_path / "C10-0001 Rev A.pdf"
+    d.write_text("a")
+    inv = M.Inventory()
+    p = M.new_part(name="Bracket", type="manufactured", partNumber="C10-0001", drawingUrl=str(d), revision="A")
+    inv.parts = [p]
+    A.check_in(p)
+    d.write_text("b")                                                   # edited, same size
+    os.utime(d, (time.time() + 60, time.time() + 60))
+    assert A.version_status(p)["status"] == "changed"
+    dlg = PartDialog(inv, p)
+    assert not dlg.rev_fix.isHidden()
+    dlg._ask_changed = lambda: "same"                                   # "same revision — file re-saved"
+    dlg._fix_rev()
+    p.update(dlg.values())
+    assert A.version_status(p)["status"] == "ok" and p["revision"] == "A"
+    (tmp_path / "C10-0001 Rev B.pdf").write_text("bb")                 # a newer revision lands in the folder
+    assert A.version_status(p)["status"] == "newer"
+    dlg = PartDialog(inv, p)
+    dlg._fix_rev()
+    p.update(dlg.values())
+    assert p["revision"] == "B" and p["drawingUrl"].endswith("Rev B.pdf") and A.version_status(p)["status"] == "ok"
+    assert p["revisionHistory"][-1]["rev"] == "B"

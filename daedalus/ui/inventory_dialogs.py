@@ -213,7 +213,12 @@ class PartDialog(_Base):
         rr.addWidget(self.rev)
         rr.addWidget(self.rev_new)
         rr.addWidget(self.rev_hist_btn)
+        self.rev_fix = QPushButton("Update")
+        self.rev_fix.hide()
+        self.rev_fix.clicked.connect(self._fix_rev)
+        self._force_checkin = False
         rr.addWidget(self.rev_note, 1)
+        rr.addWidget(self.rev_fix)
         self.rev_row = QWidget()
         self.rev_row.setLayout(rr)
         rr.setContentsMargins(0, 0, 0, 0)
@@ -228,6 +233,13 @@ class PartDialog(_Base):
                 self.rev_note.setText("⚠ " + "; ".join(x for x in st["detail"].split("; ")
                                                        if "not checked in" not in x))
                 self.rev_note.setStyleSheet(f"color:{theme.WARN}")
+                self._rev_status = st["status"]
+                if st["status"] != "missing":
+                    self.rev_fix.show()
+                    self.rev_fix.setToolTip({
+                        "changed": "The file was edited: keep this revision, or make it a new revision",
+                        "newer": "Switch to the newest revision file in the folder and its revision letter",
+                        "mismatch": "Set the revision to the one in the file name"}[st["status"]])
             elif p.get("revisionCheckedAt"):
                 self.rev_note.setText(f"checked in {p['revisionCheckedAt']}")
         self.img_row, self.img = file_row(M.local_path(p.get("imageFile")), "Picture for the parts list (optional)",
@@ -510,6 +522,55 @@ class PartDialog(_Base):
         self._autoname()
 
     # ---------------------------------------------------------------- revisions
+    def _ask_changed(self):
+        """'same' (file re-saved, same revision) / 'new' (it's a new revision) / None."""
+        from PySide6.QtWidgets import QMenu
+        m = QMenu(self)
+        same = m.addAction(f"Same revision ({self.rev.text().strip() or '—'}) — the file was just re-saved")
+        new = m.addAction(f"New revision {M.next_revision(self.rev.text())}…")
+        got = m.exec(self.rev_fix.mapToGlobal(self.rev_fix.rect().bottomLeft()))
+        return "same" if got is same else "new" if got is new else None
+
+    def _fix_rev(self):
+        """⚠ Update: bring the revision in line with the files (applied on Save)."""
+        from ..inventory import analytics as A
+        st = getattr(self, "_rev_status", "")
+        files = {"cadFile": self.cad, "drawingUrl": self.drawing}
+        if st == "newer":
+            changed = []
+            for k, ed in files.items():
+                f = A._local(M.portable_path(ed.text()))
+                nb = A.newest_sibling(f) if f is not None and f.exists() else None
+                if nb and A.rev_key(nb[0]) > A.rev_key(A.rev_from_name(f.name) or ""):
+                    ed.setText(str(nb[1]))
+                    changed.append(nb[0])
+            if changed:
+                new = max(changed, key=A.rev_key)
+                if new.upper() != self.rev.text().strip().upper():
+                    self.rev.setText(new.upper())
+                    self.rev_hist.append({"rev": new.upper(), "description": "Newer revision file", "date": M.today(),
+                                          "by": self.inv.userName or ""})
+                    self._rev_hist_label()
+        elif st == "mismatch":
+            revs = [A.rev_from_name(A._local(M.portable_path(ed.text())).name) for ed in files.values()
+                    if A._local(M.portable_path(ed.text()))]
+            revs = [r for r in revs if r]
+            if revs:
+                self.rev.setText(max(revs, key=A.rev_key).upper())
+        elif st == "changed":
+            got = self._ask_changed()
+            if got is None:
+                return
+            if got == "new":
+                before = self.rev.text()
+                self._new_rev()
+                if self.rev.text() == before:
+                    return
+        self._force_checkin = True
+        self.rev_fix.hide()
+        self.rev_note.setText("✓ Updated — save to keep it")
+        self.rev_note.setStyleSheet(f"color:{theme.OK}")
+
     def _rev_hist_label(self):
         n = len(self.rev_hist)
         self.rev_hist_btn.setText(f"History ({n})" if n else "History")
@@ -670,7 +731,8 @@ class PartDialog(_Base):
         out["revisionHistory"] = self.rev_hist
         old = self.part or {}
         if out["revision"] != (old.get("revision") or "") or out["cadFile"] != M.portable_path(old.get("cadFile")) \
-                or out["drawingUrl"] != M.portable_path(old.get("drawingUrl")) or not old.get("revisionFiles"):
+                or out["drawingUrl"] != M.portable_path(old.get("drawingUrl")) or not old.get("revisionFiles") \
+                or self._force_checkin:
             from ..inventory import analytics as A                # saving = these files are this revision
             tmp = A.check_in({**old, **out})
             if tmp.get("revisionFiles"):
