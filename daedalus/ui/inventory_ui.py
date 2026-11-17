@@ -802,8 +802,9 @@ class InventoryPage(QWidget):
                                     "confirmed orders"))
             for b in (*extra, up, dn, _small("+ Add Parts", lambda _=False, i=pr["id"]: self.add_parts_to_project(i)),
                       _small("Duplicate", lambda _=False, i=pr["id"]: self.duplicate_project(i)),
-                      _small("Export", lambda _=False, i=pr["id"]: self.export_projects([i]),
-                             "Export this project to Excel"),
+                      _small("BOM / Export", lambda _=False, i=pr["id"]: self.project_bom(i),
+                             "Parts list: MFG parts as a hierarchy, fasteners and purchased parts — copy or "
+                             "export to Excel"),
                       _small("Edit", lambda _=False, i=pr["id"]: self.edit_project(i)),
                       _small("Archive", lambda _=False, i=pr["id"]: self.archive(i, True))):
                 hdr.addWidget(b)
@@ -902,6 +903,30 @@ class InventoryPage(QWidget):
         t.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         t.setMinimumHeight(0)
         return t
+
+    def project_bom(self, pid):
+        from .project_bom import ProjectBomDialog
+        d = ProjectBomDialog(self, pid)
+        d.setAttribute(Qt.WA_DeleteOnClose)
+        d.show()
+        self._bom_window = d
+        return d
+
+    def buy_list(self):
+        """Reorder → copyable buy list for what's showing (filters apply)."""
+        from .project_bom import BuyListDialog
+        inv, f = self.inv, self.reorder_filter
+        lst = self.reorder_filtered()
+        if not lst:
+            return self.toast.show_msg("Nothing to buy with the current filters")
+        need = (lambda p: inv.needed_for_project(p, f["project"])) if f["project"] != "all" else inv.total_needed
+        title = "Buy List" + (f" — {inv.project_name(f['project'])}" if f["project"] != "all" else "") + \
+            (f" — {f['vendor']}" if f["vendor"] != "all" else "")
+        d = BuyListDialog(self, lst, need, f["vendor"] if f["vendor"] != "all" else None, title)
+        d.setAttribute(Qt.WA_DeleteOnClose)
+        d.show()
+        self._buy_window = d
+        return d
 
     def export_projects(self, pids=None):
         """Pick projects + units, then write the project workbook."""
@@ -1561,7 +1586,9 @@ class InventoryPage(QWidget):
             row.addWidget(ts)
             row.addWidget(_muted(f"{len(lst)} of {len(all_low)} parts", False), 1)
             row.addWidget(_btn("Export All (per project)", self.export_reorder_by_project))
-            row.addWidget(_btn("Export List (.xlsx)", self.export_reorder, primary=True))
+            row.addWidget(_btn("Export List (.xlsx)", self.export_reorder))
+            row.addWidget(_btn("Buy List", self.buy_list, "Copyable buy list — vendor, part no., vendor PN, spec, "
+                               "qty, price, links — paste into Excel, an email or a PO", primary=True))
             v.addLayout(row)
             if self.sel_reorder:
                 b = QHBoxLayout()
