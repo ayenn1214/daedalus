@@ -341,6 +341,14 @@ class PartDialog(_Base):
         cost.addWidget(self.cost_cur)
         cost.addWidget(self.cost_hint, 1)
         f.addRow("Unit cost", cost)
+        self.weight = QDoubleSpinBox()
+        self.weight.setRange(0, 100000)
+        self.weight.setDecimals(3)
+        self.weight.setSuffix(" lb")
+        self.weight.setSpecialValueText("—")
+        self.weight.setValue(M.num(p.get("weightLb")))
+        self.weight.setToolTip("Weight of one part — zinc plating is priced by weight")
+        f.addRow("Weight", self.weight)
         self.loc = QComboBox()
         self.loc.addItem("— None —", None)
         for lid, lab in inv.location_options():
@@ -592,7 +600,7 @@ class PartDialog(_Base):
                "partNumber": self.pn.text().strip(), "qbPartNumber": self.qb.text().strip(),
                "drawingUrl": self.drawing.text().strip(), "notes": self.notes.toPlainText().strip(),
                "currentStock": self.stock.value(), "unit": self.unit.text().strip() or "ea",
-               "reorderPoint": self.rp.value(), "reorderQty": self.rq.value(), "unitCost": self.cost.value(),
+               "reorderPoint": self.rp.value(), "reorderQty": self.rq.value(), "unitCost": self.cost.value(), "weightLb": round(self.weight.value(), 4),
                "unitCostCurrency": self.cost_cur.currentText(), "locationId": self.loc.currentData(),
                "suppliers": sups, "updatedAt": M.now_ms(), "cadFile": self.cad.text().strip(),
                "imageFile": self.img.text().strip(), "discontinued": self.disc_box.isChecked(),

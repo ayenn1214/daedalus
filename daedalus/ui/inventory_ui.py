@@ -254,6 +254,7 @@ class InventoryPage(QWidget):
     insert_std_requested = Signal(str)        # standard part id → insert into the open model
 
     TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
+            ("finishing", "Finishing"),
             ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Orders"),
             ("reorder", "Reorder"),
             ("timephased", "Time-Phased"), ("analytics", "Analytics"), ("log", "Activity Log"),
@@ -2190,6 +2191,10 @@ class InventoryPage(QWidget):
         w = AnalyticsView(self)
         w.edit_part.connect(self.edit_part)
         return w
+
+    def build_finishing(self):
+        from .finishing_ui import FinishingView
+        return FinishingView(self)
 
     def build_timephased(self):
         from .inventory_mrp_ui import TimePhasedView
