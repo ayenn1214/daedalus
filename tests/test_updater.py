@@ -239,3 +239,36 @@ def test_helper_leaves_files_alone_if_daedalus_stays_open(tmp_path):
     subprocess.run([sys.executable, "-I", str(script), json.dumps(args)], check=True, timeout=60)
     assert "not applied" in (t / ".update" / "last-update.log").read_text()
     assert '2.9.0' in (t / "daedalus" / "__init__.py").read_text()
+
+
+def test_running_app_rechecks_every_few_hours(monkeypatch):
+    calls = []
+    fake_github(monkeypatch, calls=calls)
+    monkeypatch.setattr(U, "current", lambda: {"version": "2.9.0", "commit": "", "git": False, "git_dir": False})
+    s = S()
+    U.check(s)
+    api = lambda: [c for c in calls if "raw.githubusercontent" not in c]       # noqa: E731
+    U.check(s, max_age=90 * 60)
+    assert len(api()) == 1                                                  # answer is fresh: no new request
+    s["update/last_check"] = time.time() - 2 * 3600
+    assert U.check(s, max_age=90 * 60)["version"] == "2.10.0" and len(api()) == 2
+
+
+def test_recheck_timer_offers_the_update(monkeypatch):
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QMainWindow
+    app = QApplication.instance() or QApplication([])
+    from daedalus.ui import update_ui as UU
+    info = {"version": "9.9.9", "channel": "releases", "notes": "", "url": "", "zip": ""}
+    monkeypatch.setattr(U, "check", lambda s, force=False, max_age=0: info)
+    monkeypatch.setattr(UU, "_in_thread", lambda fn, done: done(fn()))
+    w = QMainWindow()
+    UU.start_auto_check(w)
+    assert w._update_timer.isActive() and w._update_timer.interval() == UU.RECHECK_MS
+    assert "9.9.9" in w._update_btn.text()
+    info = {**info, "version": "9.9.10"}
+    monkeypatch.setattr(U, "check", lambda s, force=False, max_age=0: info)
+    UU.recheck(w)
+    assert "9.9.10" in w._update_btn.text() and "9.9.10" in w.statusBar().currentMessage()
+    w.close()

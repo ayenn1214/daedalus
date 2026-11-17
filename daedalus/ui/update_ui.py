@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 
-from PySide6.QtCore import QObject, QSettings, Qt, Signal
+from PySide6.QtCore import QObject, QSettings, Qt, QTimer, Signal
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressDialog, QPushButton,
     QTextBrowser, QVBoxLayout,
@@ -38,13 +38,43 @@ def settings():
     return QSettings("Daedalus", "Daedalus")
 
 
+RECHECK_MS = 2 * 3600 * 1000          # while Daedalus is open: look again every 2 h …
+RECHECK_AGE = 90 * 60                 # … asking GitHub only if the last answer is over 90 min old
+
+
 def start_auto_check(window):
-    """Called once per window at start: quiet background check (at most daily); a status-bar button if there's
-    an update."""
+    """Called once per window at start: quiet background check (at most daily), then again every couple of hours
+    while the app stays open; a status-bar button (and a one-line notice) when there's an update."""
     s = settings()
     if not s.value("update/auto", True, type=bool):
         return
     window._update_thread = _in_thread(lambda: U.check(s), lambda r: _offer(window, r))
+    if getattr(window, "_update_timer", None) is None:
+        t = QTimer(window)
+        t.setInterval(RECHECK_MS)
+        t.timeout.connect(lambda: recheck(window))
+        t.start()
+        window._update_timer = t
+
+
+def recheck(window):
+    """Periodic check while running (skipped when auto-check was turned off since)."""
+    s = settings()
+    if not s.value("update/auto", True, type=bool) or getattr(window, "_update_busy", False):
+        return
+    window._update_busy = True
+
+    def done(res):
+        window._update_busy = False
+        was = (getattr(window, "_update_info", None) or {}).get("version")
+        _offer(window, res)
+        if isinstance(res, dict) and res.get("version") != was:          # new while you were working
+            try:
+                window.statusBar().showMessage(f"Daedalus {res['version']} is out — click “Update” at the bottom right "
+                                               "when you're ready", 30000)
+            except RuntimeError:
+                pass
+    window._update_thread = _in_thread(lambda: U.check(s, max_age=RECHECK_AGE), done)
 
 
 def _offer(window, res):

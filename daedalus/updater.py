@@ -123,16 +123,16 @@ def is_newer(info: dict, cur: dict | None = None) -> bool:
     return False
 
 
-def check(settings=None, force=False) -> dict | None:
+def check(settings=None, force=False, max_age: float = 20 * 3600) -> dict | None:
     """Background-safe. Returns the update info when one is available (and not skipped), else None. Without
-    force, checks at most once every 20 h (remembered in settings)."""
+    force, asks GitHub at most once per max_age seconds (20 h at start; the running app checks every few hours)."""
     s = settings
     repo = (s.value("update/repo") if s else None) or DEFAULT_REPO
     channel = (s.value("update/channel") if s else None) or "releases"
     token = (s.value("update/token") if s else None) or os.environ.get("DAEDALUS_GITHUB_TOKEN")
     if s is not None and not force:
         last = float(s.value("update/last_check") or 0)
-        if time.time() - last < 20 * 3600:
+        if time.time() - last < max_age:
             cached = s.value("update/available") or ""
             try:
                 info = json.loads(cached) if cached else None
