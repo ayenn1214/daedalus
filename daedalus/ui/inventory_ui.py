@@ -380,12 +380,12 @@ class InventoryPage(QWidget):
     send_bom_requested = Signal()
     insert_std_requested = Signal(str)        # standard part id → insert into the open model
 
-    TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("production", "Production"),
-            ("finishing", "Finishing"),
-            ("locations", "Locations"), ("parts", "Parts"), ("vendors", "Vendors"), ("clients", "Orders"),
-            ("reorder", "Reorder"),
-            ("timephased", "Time-Phased"), ("analytics", "Analytics"), ("log", "Activity Log"),
-            ("sync", "Import / Export")]
+    # in the order work flows: what we build → what it's made of → order in → schedule → buy → arriving →
+    # suppliers → out to finishing → receive / bin / kit → reports
+    TABS = [("dashboard", "Dashboard"), ("projects", "Projects"), ("parts", "Parts"), ("clients", "Orders"),
+            ("production", "Production"), ("reorder", "Reorder"), ("timephased", "Time-Phased"),
+            ("vendors", "Vendors"), ("finishing", "Finishing"), ("locations", "Locations"),
+            ("analytics", "Analytics"), ("log", "Activity Log"), ("sync", "Import / Export")]
 
     def __init__(self, store: InventoryStore | None = None, parent=None, lite: bool = False):
         super().__init__(parent)
