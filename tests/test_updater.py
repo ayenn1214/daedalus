@@ -52,19 +52,28 @@ def test_versions_and_channels(monkeypatch):
     assert not U.is_newer(m, {"version": "2.10.0", "commit": "abc123"})
 
 
+def test_release_tagged_on_older_code_is_not_offered(monkeypatch):
+    """A v3.0.18 release made before the 3.0.18 commit was pushed still holds 3.0.17 code: don't loop on it."""
+    fake_github(monkeypatch, tag="v3.0.18", ver_main="3.0.17")
+    rel = U.latest("x/y", "releases")
+    assert rel["version"] == "3.0.17" and rel["tag"] == "v3.0.18"
+    assert not U.is_newer(rel, {"version": "3.0.17", "commit": ""})
+
+
 def test_check_throttles_and_skips(monkeypatch):
     calls = []
     fake_github(monkeypatch, calls=calls)
     monkeypatch.setattr(U, "current", lambda: {"version": "2.9.0", "commit": "", "git": False, "git_dir": False})
     s = S()
     info = U.check(s)
-    assert info["version"] == "2.10.0" and len(calls) == 1
-    assert U.check(s)["version"] == "2.10.0" and len(calls) == 1            # within 20 h: cached, no network
+    api = lambda: [c for c in calls if "raw.githubusercontent" not in c]       # noqa: E731 (version file is extra)
+    assert info["version"] == "2.10.0" and len(api()) == 1
+    assert U.check(s)["version"] == "2.10.0" and len(api()) == 1            # within 20 h: cached, no network
     s["update/skip"] = "2.10.0"
     assert U.check(s) is None
-    assert U.check(s, force=True)["version"] == "2.10.0" and len(calls) == 2   # Help ▸ Check: always asks
+    assert U.check(s, force=True)["version"] == "2.10.0" and len(api()) == 2   # Help ▸ Check: always asks
     s["update/last_check"] = time.time() - 21 * 3600
-    assert U.check(s) is None and len(calls) == 3
+    assert U.check(s) is None and len(api()) == 3
 
 
 def _zip(files: dict, top="ayenn1214-daedalus-abc/") -> bytes:

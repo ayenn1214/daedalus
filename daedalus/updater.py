@@ -102,8 +102,16 @@ def latest(repo: str = DEFAULT_REPO, channel: str = "releases", token: str | Non
             raise UpdateError("The repo has no releases or tags yet")
         tags.sort(key=lambda t: vtuple(t["name"]), reverse=True)
         tag, notes, url = tags[0]["name"], "", f"https://github.com/{repo}/releases/tag/{tags[0]['name']}"
-    return {"version": tag.lstrip("vV"), "ref": tag, "commit": "", "channel": "releases", "notes": notes,
-            "url": url, "zip": f"https://codeload.github.com/{repo}/zip/refs/tags/{tag}"}
+    version = tag.lstrip("vV")
+    try:                                   # the version the tagged code really has — a release tagged on an older
+        init = _get(f"https://raw.githubusercontent.com/{repo}/{tag}/daedalus/__init__.py", token, raw=True)
+        m = re.search(rb'__version__\s*=\s*"([^"]+)"', init)  # commit would otherwise be offered forever
+        if m:
+            version = m.group(1).decode()
+    except UpdateError:
+        pass
+    return {"version": version, "ref": tag, "commit": "", "channel": "releases", "notes": notes, "url": url,
+            "tag": tag, "zip": f"https://codeload.github.com/{repo}/zip/refs/tags/{tag}"}
 
 
 def is_newer(info: dict, cur: dict | None = None) -> bool:
