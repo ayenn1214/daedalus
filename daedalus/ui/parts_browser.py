@@ -52,6 +52,9 @@ def _fingerprint(w) -> tuple:
     return tuple(out)
 
 
+MODEL_H = 300                                        # part profile 3D view height (≈ type, name and spec rows)
+
+
 class PartsBrowser(QWidget):
     def __init__(self, page, parts: list, toolbar: QWidget, parent=None):
         super().__init__(parent)
@@ -545,9 +548,16 @@ class PartsBrowser(QWidget):
             page.quiet_save()
         panel = ModelPanel(step_for((p or {}).get("cadFile") or ""), empty="No 3D model linked.\nSet the 3D model "
                            "field (STEP, IGES, STL) to see the part here, with its overall size.",
-                           orient=(p or {}).get("modelOrient"), on_orient=orient)
-        panel.setMinimumWidth(260)
-        sp.addWidget(panel)
+                           orient=(p or {}).get("modelOrient"), on_orient=orient, compact=True,
+                           caption="3D")
+        panel.setMinimumWidth(240)
+        panel.setFixedHeight(MODEL_H)                     # beside the top of the form, not the whole height
+        side = QWidget()
+        sv = QVBoxLayout(side)
+        sv.setContentsMargins(0, 0, 0, 0)
+        sv.addWidget(panel)
+        sv.addStretch(1)
+        sp.addWidget(side)
         sp.setStretchFactor(0, 3)
         sp.setStretchFactor(1, 2)
         sizes = page.mrp_state.get("profile_split")

@@ -174,9 +174,11 @@ class ModelPanel(QFrame):
     Used by the Project Profile (the project's model) and the part profile (the part's 3D model)."""
 
     def __init__(self, path: str = "", parent=None, caption="3D MODEL", empty="No 3D model linked.",
-                 on_bounds=None, link_text=None, on_link=None, known_size=None, orient=None, on_orient=None):
+                 on_bounds=None, link_text=None, on_link=None, known_size=None, orient=None, on_orient=None,
+                 compact=False):
         super().__init__(parent)
         self.on_bounds, self.empty, self.on_orient = on_bounds, empty, on_orient
+        self.compact = compact
         self.setObjectName("ppcard")
         self.setStyleSheet(f"#ppcard{{background:{theme.PANEL}; border:1px solid {theme.BORDER}; border-radius:8px;}}")
         lay = QVBoxLayout(self)
@@ -189,18 +191,32 @@ class ModelPanel(QFrame):
         self.name.setObjectName("muted")
         head.addWidget(self.name, 1)
         self.view_btns = {}
-        for n in VIEWS:
-            b = QPushButton(n)
-            b.setObjectName("small")
-            b.clicked.connect(lambda _=False, n=n: self.view.set_view(n))
-            head.addWidget(b)
-            self.view_btns[n] = b
-        fit = QPushButton("Fit")
-        fit.setObjectName("small")
-        fit.clicked.connect(lambda: (setattr(self.view, "zoom", 1.0), self.view.update()))
-        head.addWidget(fit)
-        self.view_btns["Fit"] = fit
         from PySide6.QtWidgets import QMenu, QToolButton
+        if compact:                                     # narrow panel: one View ▾ menu instead of five buttons
+            vb = QToolButton()
+            vb.setText("View ▾")
+            vb.setObjectName("small")
+            vb.setPopupMode(QToolButton.InstantPopup)
+            vm = QMenu(vb)
+            for n in VIEWS:
+                vm.addAction(n, lambda n=n: self.view.set_view(n))
+            vm.addSeparator()
+            vm.addAction("Fit", lambda: (setattr(self.view, "zoom", 1.0), self.view.update()))
+            vb.setMenu(vm)
+            head.addWidget(vb)
+            self.view_btns["View"] = vb
+        else:
+            for n in VIEWS:
+                b = QPushButton(n)
+                b.setObjectName("small")
+                b.clicked.connect(lambda _=False, n=n: self.view.set_view(n))
+                head.addWidget(b)
+                self.view_btns[n] = b
+            fit = QPushButton("Fit")
+            fit.setObjectName("small")
+            fit.clicked.connect(lambda: (setattr(self.view, "zoom", 1.0), self.view.update()))
+            head.addWidget(fit)
+            self.view_btns["Fit"] = fit
         ob = QToolButton()
         ob.setText("Orient ▾")
         ob.setObjectName("small")
@@ -219,12 +235,14 @@ class ModelPanel(QFrame):
         self.view_btns["Orient"] = ob
         lay.addLayout(head)
         self.view = ModelView()
+        if compact:
+            self.view.setMinimumSize(160, 140)
         self.view.set_orient(orient)
         lay.addWidget(self.view, 1)
         foot = QHBoxLayout()
-        self.size = QLabel(PP.fmt_size(known_size) or "")
+        self.size = QLabel()
         self.size.setObjectName("muted")
-        self.size.setWordWrap(True)
+        self._size_text(known_size)
         foot.addWidget(self.size, 1)
         self.link = None
         if link_text:
@@ -238,6 +256,15 @@ class ModelPanel(QFrame):
         self._timer.setInterval(150)
         self._timer.timeout.connect(self._poll)
         self.load(path)
+
+    def _size_text(self, b):
+        txt = PP.fmt_size(b) or ""
+        if self.compact and txt:                        # narrow: mm on the line, inches in the tooltip
+            mm, _, inch = txt.partition(" (")
+            self.size.setText(mm)
+            self.size.setToolTip(inch.rstrip(")"))
+        else:
+            self.size.setText(txt)
 
     def turn_model(self, axis, deg):
         self.set_model_orient(turn(axis, deg) @ self.view.orient)
@@ -303,7 +330,7 @@ class ModelPanel(QFrame):
         self.view.set_segments(segs)
         for btn in self.view_btns.values():
             btn.setEnabled(True)
-        self.size.setText(PP.fmt_size(b))
+        self._size_text(b)
         if self.on_bounds:
             self.on_bounds(b)
 
