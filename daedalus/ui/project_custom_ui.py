@@ -7,7 +7,8 @@ import copy
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QAbstractItemView, QCheckBox, QComboBox, QDialog, QDialogButtonBox, QDoubleSpinBox, QFormLayout, QHBoxLayout,
-    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter, QTableWidget, QTreeWidget, QTreeWidgetItem,
+    QHeaderView, QLabel, QLineEdit, QMessageBox, QPushButton, QSplitter, QTableWidget, QTableWidgetItem, QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout, QWidget,
 )
 
@@ -73,33 +74,138 @@ class ConfigPicker(QWidget):
 
 
 class ConfigDialog(QDialog):
-    """Choose a configuration (order line)."""
+    """Configure one order line: how many of the project's top-level MFG parts (weldments / assemblies and MFG
+    parts that aren't inside one) per unit, and its custom options. Edit options… defines the project's option
+    groups (pick one / add-ons)."""
 
-    def __init__(self, inv, pid, config=None, parent=None):
+    def __init__(self, inv, pid, config=None, parent=None, units=None):
         super().__init__(parent)
-        pr = inv.project(pid)
+        self.inv, self.pid = inv, pid
+        self.pr = pr = inv.project(pid)
+        self.options_changed = False
         self.setWindowTitle(f"Configure {pr['name']}")
+        self.resize(760, 560)
         v = QVBoxLayout(self)
-        self.picker = ConfigPicker(pr, config, self, inline=False)
-        v.addWidget(self.picker)
+        top = QHBoxLayout()
+        self.units = None
+        if units is not None:
+            from .inventory_dialogs import _qty
+            top.addWidget(QLabel("Units"))
+            self.units = _qty(units, 1)
+            top.addWidget(self.units)
+        top.addStretch(1)
+        reset = QPushButton("Standard quantities")
+        reset.setToolTip("Every part back to the project's qty per unit")
+        reset.clicked.connect(self.reset)
+        top.addWidget(reset)
+        v.addLayout(top)
+        cap = QLabel("<b>MFG parts</b> — top level: weldments / assemblies and parts not in one. Qty per unit.")
+        v.addWidget(cap)
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Part", "Type", "Standard", "This order"])
+        self.table.verticalHeader().hide()
+        self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
+        h = self.table.horizontalHeader()
+        h.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3):
+            h.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        v.addWidget(self.table, 1)
+        cfg = C.normalize(pr, config)
+        changes = C.qty_changes(cfg)
+        self.spins = {}
+        self.base = {}
+        for p, q in C.top_mfg(inv, pid):
+            r = self.table.rowCount()
+            self.table.insertRow(r)
+            self.table.setItem(r, 0, QTableWidgetItem(M.label(p)))
+            kind = "Weldment" if p.get("isWeldment") else "Assembly" if p.get("components") else "Part"
+            self.table.setItem(r, 1, QTableWidgetItem(kind))
+            it = QTableWidgetItem(f"{q:g}")
+            it.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.table.setItem(r, 2, it)
+            sp = QDoubleSpinBox()
+            sp.setDecimals(0 if float(q).is_integer() else 2)
+            sp.setRange(0, 100000)
+            sp.setValue(max(0.0, q + changes.get(p["id"], 0.0)))
+            sp.setFixedWidth(90)
+            sp.valueChanged.connect(lambda _v: self._show())
+            self.table.setCellWidget(r, 3, sp)
+            self.spins[p["id"]] = sp
+            self.base[p["id"]] = q
+        if not self.spins:
+            self.table.hide()
+            cap.setText("<b>MFG parts</b> — none on this project yet.")
+        self.opt_row = QHBoxLayout()
+        self.opt_cap = QLabel("<b>Custom options</b>")
+        self.opt_row.addWidget(self.opt_cap)
+        self.opt_row.addStretch(1)
+        ed = QPushButton("Edit options…")
+        ed.setToolTip("Define the project's options: pick-one groups (e.g. length) and add-ons (e.g. 4th beam), "
+                      "each adding its own parts")
+        ed.clicked.connect(self.edit_options)
+        self.opt_row.addWidget(ed)
+        v.addLayout(self.opt_row)
+        self.picker_box = QVBoxLayout()
+        v.addLayout(self.picker_box)
+        self.picker = None
+        self._make_picker(cfg)
         self.adds = QLabel()
         self.adds.setObjectName("muted")
         self.adds.setWordWrap(True)
         v.addWidget(self.adds)
-
-        def show(cfg):
-            ln = C.lines(pr, cfg)
-            self.adds.setText("Adds per unit: " + (", ".join(f"{M.label(inv.part(k))} ×{q:g}" for k, q in ln.items()
-                                                          if inv.part(k)) or "nothing"))
-        self.picker.changed.connect(show)
-        show(self.picker.value())
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
         v.addWidget(bb)
+        self._show()
+
+    def _make_picker(self, cfg):
+        while self.picker_box.count():
+            w = self.picker_box.takeAt(0).widget()
+            if w:
+                w.deleteLater()
+        if C.has_options(self.pr):
+            self.picker = ConfigPicker(self.pr, cfg, self, inline=False)
+            self.picker.changed.connect(lambda _c: self._show())
+            self.picker_box.addWidget(self.picker)
+        else:
+            self.picker = None
+            n = QLabel("No options on this project — Edit options… adds them.")
+            n.setObjectName("muted")
+            self.picker_box.addWidget(n)
+
+    def edit_options(self):
+        cur = self.value()
+        d = ProjectCustomizerDialog(self.inv, self.pid, self)
+        if d.exec() != QDialog.Accepted:
+            return
+        self.pr["options"] = d.result_options
+        self.options_changed = True
+        self._make_picker(cur)
+        self._show()
+
+    def reset(self):
+        for k, sp in self.spins.items():
+            sp.setValue(self.base[k])
+
+    def _show(self):
+        cfg = self.value()
+        bits = []
+        q = C.qty_label(self.inv, cfg)
+        if q:
+            bits.append("Qty changes: " + q)
+        ln = {k: v for k, v in C.lines(self.pr, {k: v for k, v in cfg.items() if k != C.QTY}).items()}
+        if ln:
+            bits.append("Options add per unit: " + ", ".join(f"{M.label(self.inv.part(k))} ×{n:g}"
+                                                             for k, n in ln.items() if self.inv.part(k)))
+        self.adds.setText(" · ".join(bits) or "Standard build — nothing changed.")
 
     def value(self):
-        return self.picker.value()
+        cfg = self.picker.value() if self.picker is not None else {}
+        ch = {k: sp.value() - self.base[k] for k, sp in self.spins.items() if abs(sp.value() - self.base[k]) > 1e-9}
+        if ch:
+            cfg[C.QTY] = ch
+        return C.normalize(self.pr, cfg)
 
 
 class ProjectCustomizerDialog(QDialog):

@@ -166,3 +166,70 @@ def test_model_lines_visible_on_dark_viewport(monkeypatch):
     monkeypatch.setattr(theme, "VIEW_BG_TOP", (0.98, 0.98, 0.99))
     monkeypatch.setattr(theme, "VIEW_BG_BOTTOM", (0.85, 0.88, 0.91))
     assert not PU.ModelView._dark() and PU.ModelView().line_color().lightnessF() < 0.3
+
+
+def test_part_profile_shows_model(tmp_path, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "cache"))
+    import time
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui import project_profile_ui as PU
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv, pid = sample()
+    stl = tmp_path / "plate.stl"
+    _stl(stl, _box(300, 200, 10))
+    inv.part("plate")["cadFile"] = str(stl)
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.parts_sel = "plate"                           # the open part survives page rebuilds
+    page.goto("parts")
+    app.processEvents()
+    page._browser.show_part("plate")
+    for _ in range(100):                               # the page may rebuild the profile once; follow it
+        app.processEvents()
+        br = page._browser
+        panel = br.model_panel
+        if panel is not None and len(panel.view.segs):
+            break
+        time.sleep(0.05)
+    assert len(panel.view.segs) == 12 and panel.size.text().startswith("300 × 200 × 10 mm")
+    # the panel follows the 3D model field
+    br.editor.cad.setText("")
+    for _ in range(30):
+        app.processEvents()
+        time.sleep(0.03)
+    assert len(panel.view.segs) == 0 and "No 3D model" in panel.view.msg
+    # SolidWorks file: a STEP / STL with the same name next to it is shown instead
+    sw = tmp_path / "plate.SLDPRT"
+    sw.write_bytes(b"x")
+    assert PU.step_for(str(sw)) == str(stl)
+    br.show_part("bolt")                                                  # fastener without a model: no panel
+    assert br.model_panel is None
+
+
+def test_model_orientation():
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    import numpy as np
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.ui import project_profile_ui as PU
+    saved = []
+    panel = PU.ModelPanel("", on_orient=saved.append)
+    seg = np.array([[[0, 0, 0], [0, 100, 0]]], float)                 # a line along Y (drawn Y-up)
+    panel.view.set_segments(seg)
+    panel.view.set_view("Front")                                       # front: x across, z up
+    h0 = np.ptp(panel.view.projected()[..., 1])
+    panel.turn_model("X", 90)                                          # Y up → Z up
+    assert saved[-1] is not None and len(saved[-1]) == 9
+    h1 = np.ptp(panel.view.projected()[..., 1])
+    assert h0 < 1e-9 and abs(h1 - 100) < 1e-6                          # now stands up in the front view
+    panel.set_model_orient(None)
+    assert saved[-1] is None and np.allclose(panel.view.orient, np.eye(3))
+    assert PU.orient_value(PU.turn("Z", 90)) == [0.0, -1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0]
+    # a saved orientation comes back
+    p2 = PU.ModelPanel("", orient=PU.orient_value(PU.turn("X", 90)))
+    assert np.allclose(p2.view.orient, PU.turn("X", 90))

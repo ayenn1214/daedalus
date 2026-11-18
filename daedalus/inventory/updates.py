@@ -27,7 +27,7 @@ LABELS = {
     "threadType": "Thread type", "threadStandard": "Thread standard", "grade": "Grade",
 }
 IGNORE = {"updatedAt", "currentStock", "revisionFiles", "revisionCheckedAt", "createdAt", "createdBy", "id",
-          "thumb", "thumbSig", "lastCounted", "discontinuedDate"}
+          "thumb", "thumbSig", "lastCounted", "discontinuedDate", "modelOrient"}
 
 
 def _short(v, inv=None, key=None) -> str:

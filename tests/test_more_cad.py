@@ -353,11 +353,11 @@ def test_setup_check_agent_offline_and_online(tmp_path):
                 lines = [{"status": "pulling", "total": 100, "completed": 50},
                          {"status": "pulling", "total": 100, "completed": 100}, {"status": "success"}]
                 b = b"".join(json.dumps(x).encode() + b"\n" for x in lines)
+                H.pulled = req["model"]                  # before replying: the client may check it right away
                 self.send_response(200)
                 self.send_header("Content-Length", str(len(b)))
                 self.end_headers()
                 self.wfile.write(b)
-                H.pulled = req["model"]
     srv = HTTPServer(("127.0.0.1", 0), H)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     host = f"http://127.0.0.1:{srv.server_address[1]}"

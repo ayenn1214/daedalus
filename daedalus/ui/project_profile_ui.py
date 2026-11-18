@@ -56,6 +56,7 @@ class ModelView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.segs = np.zeros((0, 2, 3))
+        self.orient = np.eye(3)                       # the model's own turn (which way is up / front)
         self.yaw, self.pitch = VIEWS["Iso"]
         self.zoom = 1.0
         self.msg = ""
@@ -76,6 +77,10 @@ class ModelView(QWidget):
         self.msg = text
         self.update()
 
+    def set_orient(self, m):
+        self.orient = np.asarray(m, float).reshape(3, 3) if m is not None else np.eye(3)
+        self.update()
+
     def set_view(self, name):
         self.yaw, self.pitch = VIEWS[name]
         self.zoom = 1.0
@@ -85,7 +90,7 @@ class ModelView(QWidget):
         y, p = math.radians(self.yaw), math.radians(self.pitch)
         rz = np.array([[math.cos(y), -math.sin(y), 0], [math.sin(y), math.cos(y), 0], [0, 0, 1]])
         rx = np.array([[1, 0, 0], [0, math.cos(p), -math.sin(p)], [0, math.sin(p), math.cos(p)]])
-        q = self.segs.reshape(-1, 3) @ (rx @ rz).T
+        q = self.segs.reshape(-1, 3) @ (rx @ rz @ self.orient).T
         return np.stack([q[:, 0], -q[:, 2]], axis=1).reshape(-1, 2, 2)
 
     @staticmethod
@@ -148,17 +153,36 @@ class ModelView(QWidget):
         self.update()
 
 
-class ModelCard(QFrame):
-    """The preview with its view buttons; loads the model on a worker thread."""
+def turn(axis: str, deg: int = 90) -> np.ndarray:
+    """Rotation matrix of deg about the model's X, Y or Z axis."""
+    a = math.radians(deg)
+    c, s_ = round(math.cos(a), 12), round(math.sin(a), 12)
+    return {"X": np.array([[1, 0, 0], [0, c, -s_], [0, s_, c]]),
+            "Y": np.array([[c, 0, s_], [0, 1, 0], [-s_, 0, c]]),
+            "Z": np.array([[c, -s_, 0], [s_, c, 0], [0, 0, 1]])}[axis]
 
-    def __init__(self, page, pr, size_label=None, parent=None):
+
+def orient_value(m) -> list | None:
+    """Stored form of an orientation (9 numbers; None = as modelled)."""
+    m = np.asarray(m, float).reshape(3, 3)
+    return None if np.allclose(m, np.eye(3)) else [float(round(x)) if abs(x - round(x)) < 1e-9 else float(x)
+                                                    for x in m.reshape(-1)]
+
+
+class ModelPanel(QFrame):
+    """A model file's wireframe with view buttons and its overall size; loads on a worker thread.
+    Used by the Project Profile (the project's model) and the part profile (the part's 3D model)."""
+
+    def __init__(self, path: str = "", parent=None, caption="3D MODEL", empty="No 3D model linked.",
+                 on_bounds=None, link_text=None, on_link=None, known_size=None, orient=None, on_orient=None):
         super().__init__(parent)
-        self.page, self.pr, self.size_label = page, pr, size_label
+        self.on_bounds, self.empty, self.on_orient = on_bounds, empty, on_orient
         self.setObjectName("ppcard")
+        self.setStyleSheet(f"#ppcard{{background:{theme.PANEL}; border:1px solid {theme.BORDER}; border-radius:8px;}}")
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 8, 10, 10)
         head = QHBoxLayout()
-        cap = QLabel("3D MODEL")
+        cap = QLabel(caption)
         cap.setObjectName("h2")
         head.addWidget(cap)
         self.name = QLabel()
@@ -175,33 +199,63 @@ class ModelCard(QFrame):
         fit.setObjectName("small")
         fit.clicked.connect(lambda: (setattr(self.view, "zoom", 1.0), self.view.update()))
         head.addWidget(fit)
+        self.view_btns["Fit"] = fit
+        from PySide6.QtWidgets import QMenu, QToolButton
+        ob = QToolButton()
+        ob.setText("Orient ▾")
+        ob.setObjectName("small")
+        ob.setToolTip("Turn the model itself when it was drawn with another axis up — saved with it, so Iso / "
+                      "Front / Top / Right look right. (Drag in the view just looks around.)")
+        ob.setPopupMode(QToolButton.InstantPopup)
+        m = QMenu(ob)
+        m.addAction("Y up → Z up (turn 90° about X)", lambda: self.turn_model("X", 90))
+        m.addAction("Turn 90° about Y", lambda: self.turn_model("Y", 90))
+        m.addAction("Turn 90° about Z (swap front / side)", lambda: self.turn_model("Z", 90))
+        m.addAction("Flip upside down", lambda: self.turn_model("Y", 180))
+        m.addSeparator()
+        m.addAction("As modelled (reset)", lambda: self.set_model_orient(None))
+        ob.setMenu(m)
+        head.addWidget(ob)
+        self.view_btns["Orient"] = ob
         lay.addLayout(head)
         self.view = ModelView()
+        self.view.set_orient(orient)
         lay.addWidget(self.view, 1)
         foot = QHBoxLayout()
-        self.size = QLabel()
+        self.size = QLabel(PP.fmt_size(known_size) or "")
         self.size.setObjectName("muted")
+        self.size.setWordWrap(True)
         foot.addWidget(self.size, 1)
-        self.link = QPushButton("Link 3D model…" if not pr.get("modelFile") else "Change model…")
-        self.link.setObjectName("small")
-        self.link.clicked.connect(self.choose)
-        foot.addWidget(self.link)
+        self.link = None
+        if link_text:
+            self.link = QPushButton(link_text)
+            self.link.setObjectName("small")
+            self.link.clicked.connect(on_link)
+            foot.addWidget(self.link)
         lay.addLayout(foot)
         self._result = None
         self._timer = QTimer(self)
         self._timer.setInterval(150)
         self._timer.timeout.connect(self._poll)
-        self.start()
+        self.load(path)
 
-    def start(self):
-        f = self.pr.get("modelFile") or ""
-        self.size.setText(PP.fmt_size(self.pr.get("modelSize")) or "")
+    def turn_model(self, axis, deg):
+        self.set_model_orient(turn(axis, deg) @ self.view.orient)
+
+    def set_model_orient(self, m):
+        self.view.set_orient(m)
+        if self.on_orient:
+            self.on_orient(orient_value(self.view.orient))
+
+    def load(self, f: str):
+        from ..inventory import thumbs as T
+        f = (f or "").strip()
         for b in self.view_btns.values():
-            b.setEnabled(bool(f))
+            b.setEnabled(False)
+        self.view.set_segments(np.zeros((0, 2, 3)))
         if not f:
             self.name.setText("")
-            self.view.set_message("No 3D model linked.\nLink the project's top-level STEP (or STL) to see it here, "
-                                  "with its overall size.")
+            self.view.set_message(self.empty)
             return
         path = M.local_path(f)
         self.name.setText(" · " + os.path.basename(path))
@@ -209,25 +263,36 @@ class ModelCard(QFrame):
         if not os.path.exists(path):
             self.view.set_message(f"Model file not found on this PC:\n{path}")
             return
+        ext = os.path.splitext(path)[1].lower()
+        if ext in T.SW_EXTS:
+            self.view.set_message("SolidWorks file — save a STEP copy next to it (or link the STEP) to see the "
+                                  "wireframe here.")
+            return
+        if ext not in T.MESH_EXTS | T.KERNEL_EXTS:
+            self.view.set_message("Not a 3D model this preview can read (STEP, IGES, STL, OBJ, BREP).")
+            return
         k = _key(path)
         if k in _CACHE:
             return self._show(_CACHE[k])
         self.view.set_message("Loading model… (a big STEP can take a minute the first time)")
         self._result = None
+        box = {}
+        self._box = box
 
         def work():
             try:
-                self._result = ("ok", load_model(path))
+                box["r"] = ("ok", load_model(path))
             except Exception as e:  # noqa: BLE001
-                self._result = ("err", str(e))
+                box["r"] = ("err", str(e))
         threading.Thread(target=work, daemon=True).start()
         self._timer.start()
 
     def _poll(self):
-        if self._result is None:
+        r = self._box.get("r")
+        if r is None:
             return
         self._timer.stop()
-        kind, val = self._result
+        kind, val = r
         if kind == "ok":
             self._show(val)
         else:
@@ -236,10 +301,36 @@ class ModelCard(QFrame):
     def _show(self, res):
         segs, b = res
         self.view.set_segments(segs)
+        for btn in self.view_btns.values():
+            btn.setEnabled(True)
+        self.size.setText(PP.fmt_size(b))
+        if self.on_bounds:
+            self.on_bounds(b)
+
+
+class ModelCard(ModelPanel):
+    """The Project Profile's preview of the project's linked model."""
+
+    def __init__(self, page, pr, size_label=None, parent=None):
+        self.page, self.pr, self.size_label = page, pr, size_label
+        super().__init__(pr.get("modelFile") or "", parent,
+                         empty="No 3D model linked.\nLink the project's top-level STEP (or STL) to see it here, "
+                               "with its overall size.",
+                         on_bounds=self._bounds, link_text="Change model…" if pr.get("modelFile") else
+                         "Link 3D model…", on_link=self.choose, known_size=pr.get("modelSize"),
+                         orient=pr.get("modelOrient"), on_orient=self._orient)
+
+    def _orient(self, m):
+        if m is None:
+            self.pr.pop("modelOrient", None)
+        else:
+            self.pr["modelOrient"] = m
+        self.page.quiet_save()
+
+    def _bounds(self, b):
         if b and b != self.pr.get("modelSize"):
             self.pr["modelSize"] = b                   # kept with the project; saved with the next change
         txt = PP.fmt_size(b)
-        self.size.setText(txt)
         if self.size_label is not None:
             try:
                 self.size_label.setText(txt.split(" (")[0] if txt else "—")
@@ -253,6 +344,18 @@ class ModelCard(QFrame):
                                            MODEL_FILTER)
         if p:
             self.page.set_project_model(self.pr["id"], p)
+
+
+def step_for(path: str) -> str:
+    """A part's model to preview: the file itself, or a STEP / STL with the same name next to a SolidWorks file."""
+    from ..inventory import thumbs as T
+    p = M.local_path(path or "")
+    base, ext = os.path.splitext(p)
+    if ext.lower() in T.SW_EXTS:
+        for e in (".step", ".STEP", ".stp", ".STP", ".stl", ".STL"):
+            if os.path.exists(base + e):
+                return base + e
+    return p
 
 
 # ------------------------------------------------------------------ cards
@@ -311,8 +414,6 @@ def build(page, pid: str) -> QWidget:
     if pr.get("folderPath"):
         hdr.addWidget(_small("Open folder", lambda: _open_link(pr["folderPath"]), pr["folderPath"], icon="folder"))
     for b in (_small("BOM / Export", lambda: page.project_bom(pid), "Parts list by type — copy or export to Excel"),
-              _small("Customize…", lambda: QTimer.singleShot(0, lambda: page.customize_project(pid)),
-                     "Options: pick-one choices and add-ons, each adding its own parts"),
               _small("Edit", lambda: page.edit_project(pid)),
               _small("+ Production order", lambda: page.add_production_for(pid), "Schedule a build of this project")):
         hdr.addWidget(b)
@@ -331,7 +432,6 @@ def build(page, pid: str) -> QWidget:
     top.setSpacing(10)
     size_kpi = _big(PP.fmt_size(d["size"]).split(" (")[0] if d["size"] else "—")
     model = ModelCard(page, pr, size_kpi)
-    model.setStyleSheet(f"#ppcard{{background:{theme.PANEL}; border:1px solid {theme.BORDER}; border-radius:8px;}}")
     model.setMinimumHeight(330)
     top.addWidget(model, 3)
     grid = QGridLayout()
@@ -373,12 +473,12 @@ def build(page, pid: str) -> QWidget:
                     bits.append(f"+{M.fmt_money(c['cost'])}")
                 ow.append(_note(f"   {'● ' if c['default'] else '○ '}{c['name']} — {' · '.join(bits)}"))
     else:
-        ow.append(_note("No options yet. Customize… adds pick-one choices (e.g. length) and add-ons "
-                        "(e.g. an extra beam), each with its own parts."))
+        ow.append(_note("No options yet. Add them when you order: Orders ▸ + New Order ▸ + Add… ▸ Edit options… "
+                        "(pick-one choices like length, add-ons like an extra beam)."))
     oc = _card("Customizable options", ow)
     oc.layout().addStretch(1)
-    oc.layout().addWidget(_small("Customize…", lambda: QTimer.singleShot(0, lambda: page.customize_project(pid))),
-                          0, Qt.AlignLeft)
+    oc.layout().addWidget(_note("Options and the qty of each MFG part are chosen per order line (Orders ▸ "
+                                "Configure)."))
     mid.addWidget(oc, 1)
     vw = []
     for vd in d["vendors"][:10]:

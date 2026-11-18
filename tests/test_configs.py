@@ -136,3 +136,78 @@ def test_collapse_all_and_icon_row_actions(tmp_path):
     page.collapse_all(False)
     assert not page.collapsed
     page.close()
+
+
+def test_order_line_qty_changes_flow_through():
+    """An order line can change the qty of the project's top-level MFG parts (weldments and parts not in one)."""
+    inv, pid, L, X, std, long_, beam = rfp()
+    pr = inv.project(pid)
+    weld = M.new_part(id="weld", name="FRAME WELDMENT", partNumber="C20-0001", type="manufactured", isWeldment=True,
+                      components=[{"partId": "plate", "qty": 2}])
+    plate = M.new_part(id="plate", name="PLATE", type="manufactured")
+    inv.parts += [weld, plate]
+    inv.set_allocation(weld, pid, 1)
+    inv.set_allocation(plate, pid, 2)                 # inside the weldment → not top level
+    top = [p["id"] for p, _q in C.top_mfg(inv, pid)]
+    assert top == ["weld", "post"]                    # weldments first; bolts (fastener) and plate (inside) left out
+    cfg = C.normalize(pr, {L["id"]: [long_["id"]], C.QTY: {"weld": 1, "post": -4, "x": 0}})
+    assert cfg[C.QTY] == {"weld": 1, "post": -4}
+    assert C.label(pr, cfg) == "1308 · 2 qty changes" and "qty=" in C.key(pr, cfg)
+    assert C.key(pr, cfg) != C.key(pr, {L["id"]: [long_["id"]]})
+    assert C.qty_label(inv, cfg) == "C20-0001 +1, C10-0001 −4"
+    tl = {p["id"]: q for p, q in PX.top_level(inv, pid, cfg)}
+    assert tl["weld"] == 2 and "post" not in tl and tl["b1308"] == 3
+    dem = dict(R.project_demands(inv, pid, 2, cfg))
+    assert dem["weld"] == 4 and "post" not in dem
+    req = O.requirements(inv, {"projectId": pid, "qty": 2, "config": cfg})
+    assert req["weld"] == 4 and req["plate"] == 8 and "post" not in req
+    # an open build with the change counts in the part's need
+    inv.productionOrders = [{"id": "p1", "projectId": pid, "qty": 2, "status": "In Fab", "config": cfg}]
+    assert inv.needed_for_project(weld, pid) == 4 and inv.needed_for_project(common_part(inv), pid) == 0
+    assert O.line_name(inv, pid, cfg) == "RFP (1308 · 2 qty changes)"
+
+
+def common_part(inv):
+    return inv.part("post")
+
+
+def test_order_configure_dialog(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.ui import orders_ui as OU
+    from daedalus.ui.project_custom_ui import ConfigDialog
+    inv, pid, L, X, std, long_, beam = rfp()
+    d = ConfigDialog(inv, pid, None, units=3)
+    assert list(d.spins) == ["post"] and d.spins["post"].value() == 4 and d.units.value() == 3
+    d.spins["post"].setValue(6)
+    d.picker.combos[L["id"]].setCurrentIndex(1)
+    v = d.value()
+    assert v[C.QTY] == {"post": 2} and v[L["id"]] == [long_["id"]]
+    assert "C10-0001 +2" in d.adds.text() and "BEAM 1308" in d.adds.text()
+    d.reset()
+    assert C.QTY not in d.value()
+    # Edit options… lives here now
+    from daedalus.ui import project_custom_ui as PCU
+
+    class FakeCustomizer:
+        def __init__(self, *_a):
+            g = C.new_group("Paint", C.ONE)
+            g["choices"] = [C.new_choice("Blue", True), C.new_choice("Red")]
+            self.result_options = [g]
+
+        def exec(self):
+            return PCU.QDialog.Accepted
+    orig = PCU.ProjectCustomizerDialog
+    PCU.ProjectCustomizerDialog = FakeCustomizer
+    try:
+        d.edit_options()
+    finally:
+        PCU.ProjectCustomizerDialog = orig
+    assert d.options_changed and inv.project(pid)["options"][0]["name"] == "Paint"
+    assert list(d.picker.combos) == [inv.project(pid)["options"][0]["id"]]
+    # every order line has a Configure button, even without options
+    e = OU.OrderEntryDialog(inv, None)
+    it, b = e._line(pid, 1, {C.QTY: {"post": 1}})
+    assert "1 qty change" in b.text()
+    assert e.values()["lines"][0]["config"][C.QTY] == {"post": 1}

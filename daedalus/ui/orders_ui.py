@@ -30,6 +30,7 @@ class OrderEntryDialog(_Base):
         super().__init__("Change Order" if changing else "Edit Order" if o else "New Order", parent,
                          "Save Change Order" if changing else "Save" if o else "Add Order")
         self.inv = inv
+        self.options_changed = False                            # Edit options… changed a project's options
         r = o or {}
         f = QFormLayout()
         self.po = QLineEdit(r.get("poNumber") or "")
@@ -39,7 +40,7 @@ class OrderEntryDialog(_Base):
         self.lines = QTableWidget(0, 3)
         self.lines.setHorizontalHeaderLabels(["Project", "Qty", "Configuration"])
         self.lines.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.lines.setColumnWidth(2, 230)
+        self.lines.setColumnWidth(2, 260)
         self.lines.verticalHeader().hide()
         self.lines.setMinimumHeight(150)
         self._cfg: dict = {}                                    # row → configuration
@@ -50,9 +51,9 @@ class OrderEntryDialog(_Base):
         for pr in inv.active_projects():
             self.add_proj.addItem(pr["name"], pr["id"])
         self.add_qty = _qty(1, 1)
-        ab = QPushButton("+ Add")
-        ab.clicked.connect(lambda: self._line(self.add_proj.currentData(), self.add_qty.value())
-                           if self.add_proj.currentData() else None)
+        ab = QPushButton("+ Add…")
+        ab.setToolTip("Add the project: set the qty of its top-level MFG parts and its custom options")
+        ab.clicked.connect(self.add_line)
         rb = QPushButton("Remove")
         rb.clicked.connect(lambda: self.lines.removeRow(self.lines.currentRow()) if self.lines.currentRow() >= 0
                            else None)
@@ -75,7 +76,7 @@ class OrderEntryDialog(_Base):
     def _line(self, pid, qty, config=None):
         from ..inventory import configs as C
         pr = self.inv.project(pid)
-        cfg = C.normalize(pr, config) if C.has_options(pr) else {}
+        cfg = C.normalize(pr, config)
         k = C.key(pr, cfg)
         for r in range(self.lines.rowCount()):                  # same project + configuration: add to its qty
             if self.lines.item(r, 0).data(Qt.UserRole) == pid and \
@@ -91,22 +92,46 @@ class OrderEntryDialog(_Base):
         it.setFlags(it.flags() & ~Qt.ItemIsEditable)
         self.lines.setItem(r, 0, it)
         self.lines.setCellWidget(r, 1, _qty(qty, 1))
-        if C.has_options(pr):
-            b = QPushButton(C.label(pr, cfg) or "Standard")
-            b.setToolTip("Choose this line's configuration")
+        b = QPushButton(self._cfg_text(pid, cfg))
+        b.setToolTip("Qty of each top-level MFG part and the custom options for this line")
+        b.clicked.connect(lambda _=False, it=it, b=b, pid=pid: self.configure(it, b, pid))
+        self.lines.setCellWidget(r, 2, b)
+        return it, b
 
-            def pick(_=False, it=it, b=b, pid=pid):
-                from .project_custom_ui import ConfigDialog
-                d = ConfigDialog(self.inv, pid, it.data(Qt.UserRole + 1), self)
-                if d.exec() == QDialog.Accepted:
-                    it.setData(Qt.UserRole + 1, d.value())
-                    b.setText(C.label(self.inv.project(pid), d.value()) or "Standard")
-            b.clicked.connect(pick)
-            self.lines.setCellWidget(r, 2, b)
-        else:
-            na = QTableWidgetItem("—")
-            na.setFlags(na.flags() & ~Qt.ItemIsEditable)
-            self.lines.setItem(r, 2, na)
+    def _cfg_text(self, pid, cfg):
+        from ..inventory import configs as C
+        return C.label(self.inv.project(pid), cfg) or "Standard"
+
+    def configure(self, it, b, pid):
+        from .project_custom_ui import ConfigDialog
+        d = ConfigDialog(self.inv, pid, it.data(Qt.UserRole + 1), self)
+        if d.exec() == QDialog.Accepted:
+            it.setData(Qt.UserRole + 1, d.value())
+            b.setText(self._cfg_text(pid, d.value()))
+            b.setToolTip(self._cfg_tip(pid, d.value()))
+        self.options_changed |= d.options_changed
+        for r in range(self.lines.rowCount()):                  # options may have changed: relabel every line
+            w_ = self.lines.cellWidget(r, 2)
+            i_ = self.lines.item(r, 0)
+            if isinstance(w_, QPushButton) and i_.data(Qt.UserRole) == pid:
+                w_.setText(self._cfg_text(pid, i_.data(Qt.UserRole + 1)))
+
+    def _cfg_tip(self, pid, cfg):
+        from ..inventory import configs as C
+        q = C.qty_label(self.inv, cfg)
+        return ("Qty changes: " + q + "\n" if q else "") + "Click to change"
+
+    def add_line(self):
+        """Pick the project, then set the qty of its top-level MFG parts and its options."""
+        pid = self.add_proj.currentData()
+        if not pid:
+            return
+        from .project_custom_ui import ConfigDialog
+        d = ConfigDialog(self.inv, pid, None, self, units=self.add_qty.value())
+        ok = d.exec() == QDialog.Accepted
+        self.options_changed |= d.options_changed
+        if ok:
+            self._line(pid, d.units.value(), d.value())
 
     def validate(self):
         if not self.name.text().strip():

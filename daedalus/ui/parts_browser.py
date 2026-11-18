@@ -63,6 +63,7 @@ class PartsBrowser(QWidget):
         v.setSpacing(6)
         v.addWidget(toolbar)
         self.open_profile = lambda: None            # set by the page: switch to the Part Profile tab
+        self.model_panel = None                      # the open part's 3D model wireframe
         left = QWidget()
         lv = QVBoxLayout(left)
         lv.setContentsMargins(0, 0, 0, 0)
@@ -503,7 +504,11 @@ class PartsBrowser(QWidget):
         ew = QWidget()
         el = QVBoxLayout(ew)
         el.setContentsMargins(0, 0, 0, 0)
-        el.addWidget(ed, 1)
+        self.model_panel = None
+        if (p or {}).get("cadFile") or (p or preset or {}).get("type") in ("manufactured", "purchased"):
+            el.addWidget(self._with_model(ed, p, page), 1)
+        else:
+            el.addWidget(ed, 1)
         rev = QPushButton("Revert")
         rev.clicked.connect(lambda: self.show_part(p["id"]) if p else self._empty())
         save = QPushButton("Save Changes" if p else "Add Part")
@@ -523,6 +528,39 @@ class PartsBrowser(QWidget):
         self.rv.addWidget(tabs, 1)
         self.editor = ed
         QTimer.singleShot(0, self.mark_clean)                # after the dialog's own field syncing
+
+    def _with_model(self, ed, p, page):
+        """The profile form with the part's 3D model wireframe beside it (follows the 3D model field)."""
+        from PySide6.QtWidgets import QSplitter
+        from .project_profile_ui import ModelPanel, step_for
+        sp = QSplitter(Qt.Horizontal)
+        sp.addWidget(ed)
+        def orient(m):
+            if not p:
+                return
+            if m is None:
+                p.pop("modelOrient", None)
+            else:
+                p["modelOrient"] = m
+            page.quiet_save()
+        panel = ModelPanel(step_for((p or {}).get("cadFile") or ""), empty="No 3D model linked.\nSet the 3D model "
+                           "field (STEP, IGES, STL) to see the part here, with its overall size.",
+                           orient=(p or {}).get("modelOrient"), on_orient=orient)
+        panel.setMinimumWidth(260)
+        sp.addWidget(panel)
+        sp.setStretchFactor(0, 3)
+        sp.setStretchFactor(1, 2)
+        sizes = page.mrp_state.get("profile_split")
+        if sizes:
+            sp.setSizes(sizes)
+        sp.splitterMoved.connect(lambda *_: page.mrp_state.__setitem__("profile_split", sp.sizes()))
+        t = QTimer(sp)
+        t.setSingleShot(True)
+        t.setInterval(600)
+        t.timeout.connect(lambda: panel.load(step_for(ed.cad.text())))
+        ed.cad.textChanged.connect(lambda _t: t.start())
+        self.model_panel = panel
+        return sp
 
     def _save(self, ed, p):
         from ..inventory import mrp as R

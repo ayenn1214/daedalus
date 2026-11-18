@@ -99,8 +99,10 @@ def top_level(inv, pid, config=None):
             continue
         if part_id in have:
             out[have[part_id]] = (p, out[have[part_id]][1] + q)
-        else:
+        elif q > 0:
+            have[part_id] = len(out)
             out.append((p, q))
+    out = [(p, q) for p, q in out if q > 0]
     return sorted(out, key=lambda x: _sort_key(x[0]))
 
 

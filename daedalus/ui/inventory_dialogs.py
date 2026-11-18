@@ -1216,15 +1216,19 @@ Edit <b>Qty/Unit</b> in place; totals follow the units to build.</li>
 <li>Weldments show as one row with their parts inside (├─ / └─). <b>▾ / ▸</b> folds one;
 <b>Weldments: nested / flat</b> lists the parts at the top level instead. <b>Collapse all / Expand all</b> folds every
 project.</li>
-<li><b>Customize…</b> adds options: <i>pick-one</i> groups (e.g. length 1006 / 1308 / short) and <i>add-ons</i>
-(e.g. 4th beam). Each choice adds parts per unit. Orders, production, kits, BOM export and finishing all use the
-chosen configuration.</li>
+<li><b>Options and quantities are set in the order</b>: Orders ▸ + New Order ▸ pick the project ▸ <b>+ Add…</b>
+lists its top-level MFG parts (weldments / assemblies and parts not in one) with a qty per unit for this order, and
+its custom options. <b>Edit options…</b> there defines the project's <i>pick-one</i> groups (e.g. length 1006 / 1308 /
+short) and <i>add-ons</i> (e.g. 4th beam), each adding parts per unit. Production, kits, BOM export and finishing all
+use the line's configuration.</li>
 <li><b>BOM / Export</b>: MFG hierarchy, fasteners, purchased parts and a buy list; copy as a table or export to
 Excel. <b>Export Projects…</b> does several at once.</li>
 <li><b>Profile</b> opens the project's page: a 3D preview of its linked model (<i>Link 3D model…</i> — STEP or STL;
 drag to turn, wheel to zoom, Iso / Front / Top / Right) with the overall size, total weight, approx budget, longest
 lead, options with what each adds, vendors with open POs, breakdown by type, assemblies with drawing revision status,
-production and drawings that need a look. Weights and costs roll up through the BOM and say how complete they are.</li>
+production and drawings that need a look. Weights and costs roll up through the BOM and say how complete they are. <b>Orient ▾</b> turns the model itself when it was drawn with another axis up (Y up → Z up, 90° turns, flip) —
+saved with the project so the views look right; drag only looks around. Part profiles show the part's 3D model the
+same way beside the form (a SolidWorks part shows the STEP / STL saved next to it).</li>
 <li><b>Send BOM</b> (from the CAD side) turns the open design into a project: library fasteners and bearings are
 matched by spec, modelled parts by part number.</li>
 </ul>
@@ -1275,7 +1279,13 @@ Excel / CSV.</p>
 <h3>Reorder</h3>
 <p>Parts at or below their reorder point with a suggested qty, best supplier and cost. Place part orders (the
 expected date comes from the vendor's lead time), batch order / receive, filter by project or vendor. Switch to
-<b>Buy List</b> for a copyable table to paste into an order sheet, or export to Excel (all, or per project).</p>
+<b>Buy List</b> for a copyable table to paste into an order sheet, or export to Excel (all, or per project).
+<b>Create PO…</b> makes a purchase order PDF for one vendor from the list (or the selected rows): your logo and
+company block, Date and P.O. No., Vendor and Ship To boxes, MPN · Description · Qty · Rate · Amount, Total and your
+footer notes. Edit any line or add free lines (drilling, freight …); <i>Mark as ordered</i> adds open part orders
+with the PO number. <b>PO settings…</b> holds your company name, address, phone, email, website, logo, ship-to,
+footer and PO numbering (prefix + next number) for the whole team — <i>Fill from a PO PDF…</i> reads them from a PO
+you already have. The vendor box comes from the vendor's address (tick <i>Save to the vendor</i> to keep an edit).</p>
 
 <h3>Time-Phased · Analytics · Activity Log</h3>
 <ul>

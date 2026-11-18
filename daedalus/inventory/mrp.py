@@ -601,18 +601,18 @@ def project_demands(inv: Inventory, project_id, units: float, config=None) -> li
     from .configs import lines as option_lines
     on = inv.parts_for_project(project_id)
     inside = {c.get("partId") for p in on for c in (p.get("components") or [])}
-    out = []
+    tot: dict = {}
     for p in on:
         if p["id"] in inside:
             continue
         a = inv.allocation(p, project_id)
         q = num(a.get("qty")) * units if a else 0
         if q > 0:
-            out.append((p["id"], q))
+            tot[p["id"]] = tot.get(p["id"], 0.0) + q
     for part_id, q in option_lines(inv.project(project_id), config).items():
         if inv.part(part_id) is not None:
-            out.append((part_id, q * units))
-    return out
+            tot[part_id] = tot.get(part_id, 0.0) + q * units
+    return [(k, q) for k, q in tot.items() if q > 0]
 
 
 KIT_GROUPS = ("Fasteners", "Purchased parts", "MFG parts", "Other")

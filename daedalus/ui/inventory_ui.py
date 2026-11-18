@@ -523,6 +523,13 @@ class InventoryPage(QWidget):
     def inv(self) -> M.Inventory:
         return self.store.inv
 
+    def quiet_save(self):
+        """Save a view setting kept with a record (e.g. a model's orientation) without rebuilding the page."""
+        try:
+            self.store.save()
+        except Exception as e:  # noqa: BLE001
+            self.status.emit(f"Couldn't save: {e}")
+
     def commit(self, msg=None, undo=None):
         from ..inventory.supabase import AuthError, SyncError
         self._committing = True
@@ -954,9 +961,6 @@ class InventoryPage(QWidget):
                       _small("Profile", lambda _=False, i=pr["id"]: self.show_project_profile(i),
                              "Project profile: 3D model, weight, size, budget, vendors, options, assemblies"),
                       _small("Duplicate", lambda _=False, i=pr["id"]: self.duplicate_project(i)),
-                      _small("Customize…", lambda _=False, i=pr["id"]: QTimer.singleShot(0, lambda: self.customize_project(i)),
-                             "Configurations: pick-one options (e.g. length) and add-ons (e.g. an extra beam), each "
-                             "adding its own parts"),
                       _small("BOM / Export", lambda _=False, i=pr["id"]: self.project_bom(i),
                              "Parts list: MFG parts as a hierarchy, fasteners and purchased parts — copy or "
                              "export to Excel"),
@@ -2026,7 +2030,11 @@ class InventoryPage(QWidget):
         if not self.inv.active_projects() and not o:
             return self.toast.show_msg("Add a project first")
         d = OU.OrderEntryDialog(self.inv, o, self)
-        if d.exec():
+        if not d.exec():
+            if d.options_changed:
+                self.commit("Project options saved")
+            return
+        if True:
             vals = d.values()
             rev = (o or {}).get("rev", 0)
             o = O.save_order(self.inv, o, vals["po"], vals["name"], vals["lines"], self.inv.userName)

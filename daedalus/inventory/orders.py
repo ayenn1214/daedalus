@@ -54,7 +54,7 @@ def _configs(lines, inv) -> dict:
 def line_name(inv: Inventory, pid, config=None) -> str:
     from . import configs as C
     pr = inv.project(pid)
-    lab = C.label(pr, config) if C.has_options(pr) else ""
+    lab = C.label(pr, config) if C.has_options(pr) or C.qty_changes(config) else ""
     return (inv.project_name(pid) or "(deleted project)") + (f" ({lab})" if lab else "")
 
 
@@ -262,18 +262,21 @@ def requirements(inv: Inventory, p) -> dict:
     from .configs import lines as option_lines
     req: dict = {}
     q = num(p.get("qty"), 1)
-    for pid, n in option_lines(inv.project(p.get("projectId")), p.get("config")).items():
-        for part_id, e in explode(inv, pid, n * q, False).items():
-            req[part_id] = req.get(part_id, 0) + e["gross"]
+    top: dict = {}
     comp = inv.component_ids()
     for part in inv.parts_for_project(p.get("projectId")):
         if part["id"] in comp:
             continue
         a = inv.allocation(part, p.get("projectId"))
         n = num(a.get("qty")) * q if a else 0
-        if n <= 0:
+        if n > 0:
+            top[part["id"]] = top.get(part["id"], 0.0) + n
+    for pid, n in option_lines(inv.project(p.get("projectId")), p.get("config")).items():
+        top[pid] = top.get(pid, 0.0) + n * q
+    for part_id, n in top.items():
+        if n <= 0 or inv.part(part_id) is None:
             continue
-        for pid, e in explode(inv, part["id"], n, False).items():
+        for pid, e in explode(inv, part_id, n, False).items():
             req[pid] = req.get(pid, 0) + e["gross"]
     return req
 

@@ -257,6 +257,11 @@ class BuyListWidget(QWidget):
         hint = QLabel("Copy pastes as a table — Excel, Sheets, an email or a vendor's quick-order box.")
         hint.setObjectName("muted")
         row.addWidget(hint, 1)
+        po = QPushButton("Create PO…")
+        po.setToolTip("Purchase order PDF for one vendor from these lines (or the selected ones) — your logo and "
+                      "company details, PO number, and the parts marked as ordered")
+        po.clicked.connect(self.create_po)
+        row.addWidget(po)
         for lab, fn in (("Copy selected", self.copy_selected), ("Copy all", self.copy_all),
                         ("Export Excel…", self.export)):
             b = QPushButton(lab)
@@ -277,6 +282,7 @@ class BuyListWidget(QWidget):
         self.cols, self.rows = buy_list(self.page.inv, parts, self.need_fn, self.vendor)
         by_key = {(p.get("partNumber") or "", p["name"]): p["id"] for p in parts}
         ids_by_row = [by_key.get((r[1], r[3])) for r in self.rows]
+        self.ids_by_row = ids_by_row
         vend = len({r[0] for r in self.rows})
         tot = sum(r[10] or 0 for r in self.rows)
         self.head.setText(
@@ -293,6 +299,30 @@ class BuyListWidget(QWidget):
 
     def copy_all(self):
         _copy(PX.tsv(self.cols, self.rows), self.page, "buy list")
+
+    def po_items(self) -> tuple[dict, str | None]:
+        """{vendor: [(part, qty)]} from the selected rows (all rows when none), and the vendor to start on."""
+        sel = sorted({i.row() for i in self.table.selectedIndexes()}) if self.table is not None else []
+        rows = sel or range(len(self.rows))
+        out: dict = {}
+        for i in rows:
+            p = self.page.inv.part(self.ids_by_row[i]) if self.ids_by_row[i] else None
+            if p is not None and M.num(self.rows[i][6]) > 0:
+                out.setdefault(self.rows[i][0], []).append((p, M.num(self.rows[i][6])))
+        first = self.rows[sel[0]][0] if sel else None
+        return out, first
+
+    def create_po(self):
+        from .po_ui import PurchaseOrderDialog
+        items, first = self.po_items()
+        if not items:
+            return self.page.toast.show_msg("Nothing to order in this list")
+        f = getattr(self.page, "reorder_filter", {}) or {}
+        pid = f.get("project") if f.get("project") not in (None, "all") else None
+        d = PurchaseOrderDialog(self.page, items, first or self.vendor,
+                                job=self.page.inv.project_name(pid) or "" if pid else "", project_id=pid,
+                                parent=self)
+        d.exec()
 
     def copy_selected(self):
         sel = sorted({i.row() for i in self.table.selectedIndexes()})
