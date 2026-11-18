@@ -1194,9 +1194,10 @@ class InventoryPage(QWidget):
         v.addWidget(_section("Unassigned"))
         from ..inventory import configs as C
         in_opts = set().union(*[C.option_parts(pr) for pr in inv.projects]) if inv.projects else set()
-        un = [p for p in inv.parts if not inv.allocations(p) and p["id"] not in in_opts]
+        # parts inside a project part's BOM (weldment pieces, sub-weldments …) are on that project too
+        un = [p for p in inv.parts if inv.unassigned(p) and p["id"] not in in_opts]
         v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower()), assign_menu=True) if un
-                    else _muted("Every part is assigned to at least one project."))
+                    else _muted("Every part is on a project — assigned, or inside the BOM of a part that is."))
         arch = inv.archived_projects()
         if arch:
             hdr = QHBoxLayout()
@@ -1992,9 +1993,9 @@ class InventoryPage(QWidget):
         if f["type"] != "all":
             lst = [p for p in lst if p.get("type") == f["type"]]
         if f["project"] == "unassigned":
-            lst = [p for p in lst if not inv.allocations(p)]
+            lst = [p for p in lst if inv.unassigned(p)]
         elif f["project"] != "all":
-            lst = [p for p in lst if inv.allocation(p, f["project"])]
+            lst = [p for p in lst if inv.in_project(p, f["project"])]
         if f["q"]:
             q = f["q"].lower()
             lst = [p for p in lst if q in " ".join(str(x) for x in (

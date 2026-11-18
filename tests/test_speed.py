@@ -96,3 +96,40 @@ def test_parts_subtabs_built_when_opened_and_event_filter(tmp_path):
     page.show()
     assert page._filtering
     page.close()
+
+
+def test_parts_inside_a_project_part_are_on_the_project():
+    """Weldment pieces (any depth) of a part on a project belong to that project — not 'Unassigned' — while what
+    the project needs still comes from the top level only."""
+    inv, pid, pid2 = sample()
+    sub = M.new_part(id="sub", name="SUB WELD", type="manufactured", isWeldment=True,
+                     components=[{"partId": "gus", "qty": 2}])
+    gus = M.new_part(id="gus", name="GUSSET", type="manufactured")
+    loose = M.new_part(id="loose", name="LOOSE", type="purchased")
+    inv.parts += [sub, gus, loose]
+    inv.part("weld")["components"].append({"partId": "sub", "qty": 1})
+    for k in ("weld", "plate", "sub", "gus", "bolt"):
+        assert inv.in_project(inv.part(k), pid), k                 # asm (on Cart) → weld → plate / sub → gus
+    assert not inv.in_project(inv.part("gus"), pid2) and inv.in_project(inv.part("bolt"), pid2)
+    assert [p["id"] for p in inv.parts if inv.unassigned(p)] == ["beam", "loose"]   # beam: an option part
+    assert inv.project_chips(inv.part("gus")) == ["Cart"] and inv.project_ids(inv.part("gus"), via_bom=False) == []
+    assert inv.bom_projects()["gus"][pid] == ["asm"]
+    need = inv.needed_for_project(inv.part("plate"), pid)
+    assert [p["id"] for p in inv.parts_for_project(pid)] == ["asm", "bolt"]   # demand side unchanged
+    with inv.cached():
+        assert inv.needed_for_project(inv.part("plate"), pid) == need
+        assert [p["id"] for p in inv.parts if inv.unassigned(p)] == ["beam", "loose"]   # beam: an option part
+
+
+def test_shared_weldment_is_on_every_project_that_uses_it():
+    """One weldment (and its sub-weldments) used by two projects: the same part is on both."""
+    inv, pid, pid2 = sample()
+    press = M.new_part(id="press", name="PRESS FRAME", type="manufactured", isWeldment=True,
+                       components=[{"partId": "weld", "qty": 1}])          # the Cart's FRAME weldment again
+    inv.parts.append(press)
+    inv.set_allocation(press, pid2, 1)
+    for k in ("weld", "plate"):
+        assert set(inv.project_ids(inv.part(k))) == {pid, pid2}, k
+        assert inv.project_chips(inv.part(k)) == ["Cart", "Press"]
+    assert inv.bom_projects()["plate"] == {pid: ["asm"], pid2: ["press"]}
+    assert len([p for p in inv.parts if p["name"] == "FRAME"]) == 1          # one part, not a copy per project

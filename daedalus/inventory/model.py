@@ -634,9 +634,48 @@ class Inventory:
             return list(self.memo("by_project", index).get(pid, []))
         return [p for p in self.parts if self.allocation(p, pid)]
 
+    def bom_projects(self) -> dict:
+        """{partId: {projectId: [top-level part ids it's under]}} — every part inside the BOM (weldment pieces,
+        sub-weldments, assembly parts — any depth) of a part that's on a project belongs to that project too.
+        Membership only: what each project needs still comes from the top-level parts (no double counting)."""
+        def build():
+            out: dict = {}
+            by_id = {p["id"]: p for p in self.parts}
+            for top in self.parts:
+                pids = [a.get("projectId") for a in self.allocations(top) if a.get("projectId")]
+                if not pids or not top.get("components"):
+                    continue
+                stack, seen = [c.get("partId") for c in top["components"]], {top["id"]}
+                while stack:
+                    k = stack.pop()
+                    if k in seen or k not in by_id:
+                        continue
+                    seen.add(k)
+                    d = out.setdefault(k, {})
+                    for pid in pids:
+                        d.setdefault(pid, []).append(top["id"])
+                    stack.extend(c.get("partId") for c in by_id[k].get("components") or [])
+            return out
+        return self.memo("bom_projects", build)
+
+    def project_ids(self, p, via_bom: bool = True) -> list:
+        """Projects a part is on: assigned directly, then through a part it's inside (when via_bom)."""
+        ids = [a.get("projectId") for a in self.allocations(p) if a.get("projectId")]
+        if via_bom:
+            ids += [x for x in self.bom_projects().get(p["id"], {}) if x not in ids]
+        return ids
+
+    def in_project(self, p, pid) -> bool:
+        """On the project — directly, or inside one of its parts' BOMs."""
+        return bool(self.allocation(p, pid)) or pid in self.bom_projects().get(p["id"], {})
+
+    def unassigned(self, p) -> bool:
+        """Not on any project, not even inside the BOM of a part that is."""
+        return not self.allocations(p) and p["id"] not in self.bom_projects()
+
     def project_chips(self, p):
         from .configs import option_projects
-        ids = [a.get("projectId") for a in self.allocations(p)]
+        ids = self.project_ids(p)
         ids += [x for x in option_projects(self, p) if x not in ids]          # parts of a project's options
         return [n for n in (self.project_name(i) for i in ids) if n]
 

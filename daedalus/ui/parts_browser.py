@@ -365,9 +365,9 @@ class PartsBrowser(QWidget):
         f = self.page.mrp_state.get("pp_filter") or self.PF_DEFAULT
         if f["type"] != "all" and (p.get("type") or "fastener") != f["type"]:
             return False
-        if f["project"] == "none" and inv.allocations(p):
+        if f["project"] == "none" and not inv.unassigned(p):
             return False
-        if f["project"] not in ("all", "none") and not inv.allocation(p, f["project"]):
+        if f["project"] not in ("all", "none") and not inv.in_project(p, f["project"]):
             return False
         sups = inv.suppliers(p)
         if f["vendor"] == "none" and sups:
