@@ -88,6 +88,16 @@ class ModelView(QWidget):
         q = self.segs.reshape(-1, 3) @ (rx @ rz).T
         return np.stack([q[:, 0], -q[:, 2]], axis=1).reshape(-1, 2, 2)
 
+    @staticmethod
+    def _dark() -> bool:
+        """Is the view background dark? (black / sith / midnight themes use a near-black viewport)"""
+        lum = [0.2126 * r + 0.7152 * g + 0.0722 * b for r, g, b in (theme.VIEW_BG_TOP, theme.VIEW_BG_BOTTOM)]
+        return sum(lum) / 2 < 0.45
+
+    def line_color(self) -> QColor:
+        """Edges that stand out on the viewport in every theme."""
+        return QColor("#dfe6ee") if self._dark() else QColor.fromRgbF(*theme.EDGE_COLOR)
+
     def paintEvent(self, _e):
         qp = QPainter(self)
         qp.setRenderHint(QPainter.Antialiasing)
@@ -104,11 +114,11 @@ class ModelView(QWidget):
             sc = min(self.width(), self.height()) * 0.86 / span * self.zoom
             mid = (lo + hi) / 2
             cx, cy = self.width() / 2, self.height() / 2
-            qp.setPen(QPen(QColor.fromRgbF(*theme.EDGE_COLOR), 1.1, Qt.SolidLine, Qt.RoundCap))
+            qp.setPen(QPen(self.line_color(), 1.2, Qt.SolidLine, Qt.RoundCap))
             qp.drawLines([QLineF(QPointF(cx + (a[0] - mid[0]) * sc, cy + (a[1] - mid[1]) * sc),
                                  QPointF(cx + (b[0] - mid[0]) * sc, cy + (b[1] - mid[1]) * sc)) for a, b in s2])
         if self.msg:
-            qp.setPen(QColor.fromRgbF(*theme.VIEW_TEXT))
+            qp.setPen(self.line_color())
             qp.drawText(self.rect().adjusted(16, 16, -16, -16), Qt.AlignCenter | Qt.TextWordWrap, self.msg)
         qp.end()
 

@@ -152,3 +152,17 @@ def test_production_preset():
     d = OrderDialog(inv, {"projectId": pid})
     assert d.windowTitle() == "Add Production Order" and d.values()["projectId"] == pid
     assert d.values()["orderDate"] == M.today()
+
+
+def test_model_lines_visible_on_dark_viewport(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.ui import project_profile_ui as PU
+    from daedalus.ui import theme
+    monkeypatch.setattr(theme, "VIEW_BG_TOP", (0.02, 0.02, 0.02))
+    monkeypatch.setattr(theme, "VIEW_BG_BOTTOM", (0.0, 0.0, 0.0))
+    assert PU.ModelView._dark() and PU.ModelView().line_color().lightnessF() > 0.8
+    monkeypatch.setattr(theme, "VIEW_BG_TOP", (0.98, 0.98, 0.99))
+    monkeypatch.setattr(theme, "VIEW_BG_BOTTOM", (0.85, 0.88, 0.91))
+    assert not PU.ModelView._dark() and PU.ModelView().line_color().lightnessF() < 0.3
