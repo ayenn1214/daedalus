@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.33</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.34</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -432,6 +432,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.34** | Parts ▸ Components (renamed from Parts): the Sort box works again (it could crash the page), and clicking a column header sorts by it (numbers by value) |
 | **3.0.33** | Speed: team-server saves go up in the background (several records at once, kept-open connections) so the window never waits for the server · lookups worked out once per page build · Parts sub-tabs built when opened · the Shift-click link check only runs while DIMS is on screen · Fix: table rows no longer stay extra tall |
 | **3.0.32** | Dashboard: company profile card — Edit company profile… and Create PO… for any vendor (+ Part… adds inventory parts with the vendor's part number and price, + Line for free lines) · Part profile: 3D view is a compact panel beside the top of the form (View ▾ / Orient ▾) |
 | **3.0.31** | Orders: each line configured when added — qty per unit of the project's top-level MFG parts (weldments and parts not in one) plus custom options; Edit options… moved here from Projects · Part profile: 3D model wireframe beside the form · Orient ▾: turn a model that was drawn with another axis up (saved with it) · Buy List ▸ Create PO…: purchase order PDF per vendor with your company details and logo (PO settings, or fill from an existing PO PDF), PO numbering, editable lines, parts marked as ordered |
