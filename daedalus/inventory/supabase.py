@@ -12,8 +12,11 @@ Only the public "anon" key and the user's refresh token are stored on this PC �
 """
 from __future__ import annotations
 
+import http.client
 import json
 import os
+import ssl
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -27,6 +30,21 @@ from .store import default_path
 TABLE = "app_storage"
 SHARED_KEYS = ("parts", "transactions", "projects", "locations", "vendors", "production-orders", "clients",
                "client-orders", "part-orders", "part-numbers", "exchange-rate", "sync-meta")
+
+
+_TLS = threading.local()                 # kept-open connections, one set per thread
+
+
+def _direct(url: str) -> bool:
+    """True when requests to this server go straight out (no proxy set for it) — then connections are reused."""
+    u = urllib.parse.urlparse(url)
+    proxies = urllib.request.getproxies()
+    if not proxies.get(u.scheme):
+        return True
+    try:
+        return bool(urllib.request.proxy_bypass(u.hostname or ""))
+    except Exception:  # noqa: BLE001
+        return False
 
 
 class SyncError(OSError):
@@ -102,6 +120,13 @@ class SupabaseStore:
             h["Authorization"] = f"Bearer {self._token()}"
         h.update(headers or {})
         data = json.dumps(body).encode() if body is not None else None
+        if getattr(self, "_keepalive", None) is None:
+            self._keepalive = _direct(self.url)
+        if self._keepalive:
+            code, msg = self._send_kept(method, path, data, h)
+            if code == 401 or (isinstance(msg, dict) and msg.get("code") == "PGRST301"):
+                raise AuthError("Session expired — sign in again")
+            return code, msg
         req = urllib.request.Request(self.url + path, data=data, method=method, headers=h)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
@@ -119,6 +144,46 @@ class SupabaseStore:
         except (urllib.error.URLError, TimeoutError, ConnectionError, OSError) as e:
             self.online = False
             raise SyncError(f"Can't reach the team server ({getattr(e, 'reason', e)})") from e
+
+    def _send_kept(self, method, path, data, headers):
+        """One request on this thread's open connection to the server (a new TLS handshake for every request
+        costs a few round trips — most of a small request's time). A connection the server closed is reopened
+        once."""
+        u = urllib.parse.urlparse(self.url)
+        pool = getattr(_TLS, "pool", None)
+        if pool is None:
+            pool = _TLS.pool = {}
+        key = (u.scheme, u.netloc, self.timeout)
+        for attempt in (0, 1):
+            con = pool.get(key)
+            fresh = con is None
+            if fresh:
+                if u.scheme == "https":
+                    con = http.client.HTTPSConnection(u.hostname, u.port, timeout=self.timeout,
+                                                      context=ssl.create_default_context())
+                else:
+                    con = http.client.HTTPConnection(u.hostname, u.port, timeout=self.timeout)
+                pool[key] = con
+            try:
+                con.request(method, (u.path.rstrip("/") + path) or "/", body=data, headers=headers)
+                r = con.getresponse()
+                raw = r.read()
+                if r.getheader("connection", "").lower() == "close" or r.will_close:
+                    con.close()
+                    pool.pop(key, None)
+                try:
+                    msg = json.loads(raw) if raw else None
+                except ValueError:
+                    msg = raw.decode(errors="replace")
+                return r.status, msg
+            except (http.client.HTTPException, ConnectionError, OSError, TimeoutError) as e:
+                con.close()
+                pool.pop(key, None)
+                if attempt == 0 and not fresh and not isinstance(e, TimeoutError):
+                    continue                      # the server had closed the kept connection: open a new one
+                self.online = False
+                raise SyncError(f"Can't reach the team server ({e})") from e
+        raise SyncError("Can't reach the team server")
 
     def _rest(self, method, path, body=None, headers=None):
         try:

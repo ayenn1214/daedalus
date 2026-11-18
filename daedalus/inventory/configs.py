@@ -130,6 +130,12 @@ def lines(project, config) -> dict:
 
 
 def option_parts(project, inv=None) -> set:
+    if inv is not None and project and getattr(inv, "_memo", None) is not None:
+        return inv.memo(("option_parts", project["id"]), lambda: _option_parts(project, inv))
+    return _option_parts(project, inv)
+
+
+def _option_parts(project, inv=None) -> set:
     out = {ln.get("partId") for g in groups(project) for c in g.get("choices") or []
            for ln in c.get("lines") or [] if ln.get("partId")}
     if inv is not None and project:                    # parts some open build changes the qty of
@@ -140,6 +146,12 @@ def option_parts(project, inv=None) -> set:
 
 def builds(inv, pid) -> list:
     """[(config, units)] being built for a project: open production orders, else the old planned qty at defaults."""
+    if getattr(inv, "_memo", None) is not None:
+        return inv.memo(("builds", pid), lambda: _builds(inv, pid))
+    return _builds(inv, pid)
+
+
+def _builds(inv, pid) -> list:
     from .orders import CLOSED_PROD
     pr = inv.project(pid)
     prods = [p for p in inv.productionOrders if p.get("projectId") == pid]
@@ -165,6 +177,14 @@ def option_need(inv, part, pid) -> float:
 
 
 def option_projects(inv, part) -> list:
+    if getattr(inv, "_memo", None) is not None:
+        def index():
+            ix: dict = {}
+            for pr in inv.projects:
+                for k in option_parts(pr, inv):
+                    ix.setdefault(k, []).append(pr["id"])
+            return ix
+        return list(inv.memo("option_projects", index).get(part["id"], []))
     return [pr["id"] for pr in inv.projects if part["id"] in option_parts(pr, inv)]
 
 

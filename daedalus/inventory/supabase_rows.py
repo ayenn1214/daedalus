@@ -67,7 +67,12 @@ class SupabaseRowStore(SupabaseStore):
     def _local_settings(self) -> dict:
         return {"exchange-rate": float(self.inv.exchangeRate or 1.35), "sync-meta": dict(self.inv.syncMeta or {})}
 
+    _sending = None                            # the save job being sent (background), if any
+
     def pending(self) -> list[str]:
+        job = self._sending
+        if job is not None:                    # the bases are being updated by the send: answer from the job
+            return list(job["colls"])
         loc = self._local()
         keys = {k[0] for k, r in loc.items() if self.rec_base.get(k) != r}
         keys |= {k[0] for k in self.rec_base if k not in loc}
@@ -226,80 +231,156 @@ class SupabaseRowStore(SupabaseStore):
             self.cursor = ts
 
     # ------------------------------------------------------------ save
+    # A save is three steps so the app can send in the background:
+    #   prepare_save (UI thread)  — what to send: copies of the changed records and settings
+    #   send_save    (any thread) — the network: writes, version checks, merges with anyone who saved first
+    #   finish_save  (UI thread)  — merged results back into the open inventory (keeping edits made meanwhile)
+    # save() does all three at once. While a send is running, the record bases belong to it (pending() answers
+    # from the job, and the app doesn't fetch other people's changes until it's done).
+    WORKERS = 6                                            # records sent at the same time
+
     def save(self):
+        job = self.prepare_save()
+        try:
+            self.send_save(job)
+        finally:
+            self.finish_save(job, raise_error=True)
+
+    def prepare_save(self) -> dict:
         self._save_cache()
         if not self.online and self._failed_at and time.time() - self._failed_at < 20:
             raise SyncError("Offline — saved on this PC, will sync when the server is back")
         if self.role == "viewer":
             raise PermissionDenied("Your DIMS account is view-only — ask an admin to change your role")
+        loc = self._local()
+        ops = {}
+        for coll in COLLECTIONS:
+            added = [copy.deepcopy(r) for k, r in loc.items() if k[0] == coll and k not in self.rec_base]
+            changed = [(k, copy.deepcopy(r)) for k, r in loc.items()
+                       if k[0] == coll and k in self.rec_base and r != self.rec_base[k]]
+            gone = [k for k in self.rec_base if k[0] == coll and k not in loc]
+            if added or changed or gone:
+                ops[coll] = {"added": added, "changed": changed, "gone": gone}
+        # parts whose stock the database will move (transactions): their local copy, to merge the new stock into
+        t = ops.get("transactions", {})
+        moved = set()
+        for r in t.get("added", []):
+            moved.add(str(r.get("partId")))
+        for k, r in t.get("changed", []):
+            moved |= {str(r.get("partId")), str(self.rec_base[k].get("partId"))}
+        for k in t.get("gone", []):
+            moved.add(str(self.rec_base[k].get("partId")))
+        parts = {pid: copy.deepcopy(loc.get(("parts", pid))) for pid in moved if pid}
+        lset = copy.deepcopy(self._local_settings())
+        settings = {k: lset[k] for k in SETTINGS if self.set_base.get(k, _DEFAULTS[k]) != lset[k]}
+        return {"ops": ops, "parts": parts, "settings": settings, "updates": [], "set_updates": [],
+                "error": None, "colls": sorted(set(ops) | set(settings))}
+
+    def send_save(self, job: dict):
+        """The network part (safe on a background thread). Errors are kept in job["error"]."""
+        self._sending = job
         try:
-            self._save_records()
-            self._save_settings()
-        except SyncError as e:
+            self._save_records(job)
+            self._save_settings(job)
+        except Exception as e:  # noqa: BLE001
+            job["error"] = e
+        finally:
+            self._sending = None
+
+    def finish_save(self, job: dict, raise_error: bool = False) -> bool:
+        """UI thread: merged records and settings back into the inventory. True when the open data changed."""
+        changed = False
+        loc = self._local()
+        for coll, rid, sent, new in job["updates"]:
+            cur = loc.get((coll, rid))
+            if sent is not None and cur is not None and cur != sent:      # edited again meanwhile: keep that too
+                new = merge_record(sent, cur, new, [])
+            if cur != new:
+                self._set_local(coll, rid, copy.deepcopy(new))
+                changed = True
+        for key, val in job["set_updates"]:
+            if self._local_settings()[key] != val:
+                self._apply_setting(key, val)
+                changed = True
+        self._prev_set = dict(self.set_base)
+        e = job["error"]
+        if e is not None:
             self.last_error = str(e)
-            if not isinstance(e, (AuthError, PermissionDenied)):
+            if isinstance(e, SyncError) and not isinstance(e, (AuthError, PermissionDenied)):
                 self.online = False
                 self._failed_at = time.time()
-            raise
+            self._save_cache()
+            if raise_error:
+                raise e
+            return changed
         self._failed_at = 0.0
         self.last_sync = time.time()
         self.last_error = ""
         self._save_cache()
         self._notify()
+        return changed
 
-    def _diff(self, coll):
-        mine = {k: r for k, r in self._local().items() if k[0] == coll}
-        added = [k for k in mine if k not in self.rec_base]
-        changed = [k for k in mine if k in self.rec_base and mine[k] != self.rec_base[k]]
-        gone = [k for k in self.rec_base if k[0] == coll and k not in mine]
-        return mine, added, changed, gone
+    def _parallel(self, fn, items):
+        """fn(item) for each item, several at once (each is its own request); the first error is raised."""
+        items = list(items)
+        if len(items) <= 1:
+            for it in items:
+                fn(it)
+            return
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=min(self.WORKERS, len(items))) as ex:
+            for f in [ex.submit(fn, it) for it in items]:
+                f.result()
 
-    def _save_records(self):
+    def _save_records(self, job):
+        ops = job["ops"]
         # 1) transactions first: the database applies each one to its part's stock
-        mine, added, changed, gone = self._diff("transactions")
+        t = ops.get("transactions", {"added": [], "changed": [], "gone": []})
         stock: dict[str, float] = {}
-        for k in added:
-            pid = mine[k].get("partId")
-            stock[pid] = stock.get(pid, 0.0) + tx_delta(mine[k])
-        for k in changed:
-            old, new = self.rec_base[k], mine[k]
-            stock[old.get("partId")] = stock.get(old.get("partId"), 0.0) - tx_delta(old)
-            stock[new.get("partId")] = stock.get(new.get("partId"), 0.0) + tx_delta(new)
-        for k in gone:
-            pid = self.rec_base[k].get("partId")
+        for r in t["added"]:
+            pid = str(r.get("partId"))
+            stock[pid] = stock.get(pid, 0.0) + tx_delta(r)
+        for k, new in t["changed"]:
+            old = self.rec_base[k]
+            stock[str(old.get("partId"))] = stock.get(str(old.get("partId")), 0.0) - tx_delta(old)
+            stock[str(new.get("partId"))] = stock.get(str(new.get("partId")), 0.0) + tx_delta(new)
+        for k in t["gone"]:
+            pid = str(self.rec_base[k].get("partId"))
             stock[pid] = stock.get(pid, 0.0) - tx_delta(self.rec_base[k])
-        self._insert_many("transactions", [mine[k] for k in added])
-        for k in changed:
-            self._write(k, mine[k])
-        for k in gone:
-            self._write(k, self.rec_base[k], deleted=True)
+        self._insert_many("transactions", t["added"], job)
+        self._parallel(lambda kr: self._write(kr[0], kr[1], job=job), t["changed"])
+        self._parallel(lambda k: self._write(k, self.rec_base[k], deleted=True, job=job), t["gone"])
         # 2) parts whose stock the database just moved: take its numbers, keep our other edits
-        moved = [pid for pid, d in stock.items() if pid and abs(d) > 1e-12 and ("parts", str(pid)) in self.rec_base]
+        moved = [pid for pid, d in stock.items() if pid and abs(d) > 1e-12 and ("parts", pid) in self.rec_base]
         if moved:
             for r in self._fetch_records(ids=("parts", moved)):
                 k = ("parts", str(r["id"]))
                 base = copy.deepcopy(self.rec_base[k])
-                base["currentStock"] = _tidy(num(base.get("currentStock")) + stock[r["id"]])
-                local = self._local().get(k)
+                base["currentStock"] = _tidy(num(base.get("currentStock")) + stock[str(r["id"])])
+                local = job["parts"].get(k[1])
                 theirs = r["data"]
-                if local is None:
-                    self.rec_base[k], self.rec_ver[k] = theirs, r["version"]
-                    continue
                 self.rec_base[k], self.rec_ver[k] = theirs, r["version"]
+                if local is None:
+                    continue
                 merged = theirs if local == base else merge_record(base, local, theirs, self.conflicts)
-                self._set_local("parts", k[1], copy.deepcopy(merged))
+                job["updates"].append(("parts", k[1], local, copy.deepcopy(merged)))
+                # a part also edited here is sent below — with the merged stock
+                for i, (ck, crec) in enumerate(ops.get("parts", {}).get("changed", [])):
+                    if ck == k:
+                        ops["parts"]["changed"][i] = (ck, copy.deepcopy(merged))
+                ops.get("parts", {}).get("changed", [])[:] = [
+                    (ck, crec) for ck, crec in ops.get("parts", {}).get("changed", []) if crec != self.rec_base[ck]]
         # 3) everything else
         for coll in COLLECTIONS:
-            if coll == "transactions":
+            if coll == "transactions" or coll not in ops:
                 continue
-            mine, added, changed, gone = self._diff(coll)
-            self._insert_many(coll, [mine[k] for k in added])
-            for k in changed:
-                self._write(k, mine[k])
-            for k in gone:
-                self._write(k, self.rec_base[k], deleted=True)
+            o = ops[coll]
+            self._insert_many(coll, o["added"], job)
+            self._parallel(lambda kr: self._write(kr[0], kr[1], job=job), o["changed"])
+            self._parallel(lambda k: self._write(k, self.rec_base[k], deleted=True, job=job),
+                           [k for k in o["gone"] if k in self.rec_base])
 
-    def _insert_many(self, coll, recs):
+    def _insert_many(self, coll, recs, job=None):
         if not recs:
             return
         recs = copy.deepcopy(recs)
@@ -317,11 +398,19 @@ class SupabaseRowStore(SupabaseStore):
                     self.rec_base[k], self.rec_ver[k] = copy.deepcopy(row["data"]), row["version"]
                     self._advance(row["updated_at"])
                 else:                                       # id already on the server: merge as an edit
-                    self._write(k, r)
+                    self._write(k, r, job=job)
 
-    def _write(self, k, rec, deleted=False):
+    def _local_update(self, job, coll, rid, sent, rec):
+        """A record the server merged / brought back: into the open inventory (now, or when the job finishes)."""
+        if job is None:
+            self._set_local(coll, rid, copy.deepcopy(rec))
+        else:
+            job["updates"].append((coll, rid, sent, copy.deepcopy(rec)))
+
+    def _write(self, k, rec, deleted=False, job=None):
         coll, rid = k
         rec = copy.deepcopy(rec)
+        sent = copy.deepcopy(rec)
         for _attempt in range(6):
             ver = self.rec_ver.get(k)
             if ver is None:
@@ -355,14 +444,14 @@ class SupabaseRowStore(SupabaseStore):
                     return self._done_row(k, row)
                 if base is not None and theirs != base:         # edited elsewhere since: keep their edit
                     self.conflicts.append((theirs.get("name") or rid, "deleted here, edited elsewhere — kept"))
-                    self._set_local(coll, rid, copy.deepcopy(theirs))
+                    self._local_update(job, coll, rid, None, theirs)
                     return self._done_row(k, row)
                 continue
             if theirs is None:                                  # deleted elsewhere, edited here: bring it back
                 self.conflicts.append((rec.get("name") or rid, "deleted elsewhere, edited here — kept"))
             else:
                 rec = merge_record(base, rec, theirs, self.conflicts) if base is not None else rec
-            self._set_local(coll, rid, copy.deepcopy(rec))
+            self._local_update(job, coll, rid, sent, rec)
         raise SyncError(f"Couldn't save {coll} {rid}: it kept changing on the server — try again")
 
     def _done_row(self, k, row):
@@ -380,10 +469,10 @@ class SupabaseRowStore(SupabaseStore):
         if code not in (200, 201, 204, 409):
             raise SyncError(f"Server answered {code}: {res}")
 
-    def _save_settings(self):
-        loc = self._local_settings()
+    def _save_settings(self, job=None):
+        loc = job["settings"] if job is not None else self._local_settings()
         for key in SETTINGS:
-            if self.set_base.get(key, _DEFAULTS[key]) == loc[key]:
+            if key not in loc or self.set_base.get(key, _DEFAULTS[key]) == loc[key]:
                 continue
             val = loc[key]
             for _attempt in range(6):
@@ -408,8 +497,11 @@ class SupabaseRowStore(SupabaseStore):
                     self.set_base[key] = cur["value"]
             else:
                 raise SyncError(f"Couldn't save the {key} setting — try again")
-            self._apply_setting(key, self.set_base[key])
-        self._prev_set = dict(self.set_base)
+            if job is not None:
+                job["set_updates"].append((key, copy.deepcopy(self.set_base[key])))
+            else:
+                self._apply_setting(key, self.set_base[key])
+                self._prev_set = dict(self.set_base)
 
     # ------------------------------------------------------------ other people's changes
     def fetch_changes(self) -> dict:

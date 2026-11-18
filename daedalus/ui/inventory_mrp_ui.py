@@ -93,12 +93,44 @@ class EngineeringView(QWidget):
         if browser is None:
             tabs.insert(0, ("Part Numbers", self.numbers))
         self._fns = {}
+        cur = self.st.get("eng_tab", 0)
         for name, fn in tabs:
-            self._fns[self.tabs.count()] = fn
-            self.tabs.addTab(fn(), name)
-        self.tabs.setCurrentIndex(self.st.get("eng_tab", 0))
-        self.tabs.currentChanged.connect(lambda i: self.st.__setitem__("eng_tab", i))
+            i = self.tabs.count()
+            self._fns[i] = fn
+            # only the tab you're on is built; the others are built when first opened (each one is a full view —
+            # building them all on every change made the Parts tab slow)
+            self.tabs.addTab(fn() if i == cur else self._placeholder(), name)
+        self.tabs.setCurrentIndex(cur)
+        self.tabs.currentChanged.connect(self._tab_changed)
         v.addWidget(self.tabs)
+
+    @staticmethod
+    def _placeholder():
+        w = QWidget()
+        w._lazy = True
+        return w
+
+    def _tab_changed(self, i):
+        self.st["eng_tab"] = i
+        if getattr(self.tabs.widget(i), "_lazy", False):
+            self._build_tab(i)
+
+    def _build_tab(self, i):
+        fn = self._fns.get(i)
+        if fn is None:
+            return
+        old = self.tabs.widget(i)
+        label = self.tabs.tabText(i)
+        new = fn()
+        from . import table_prefs as TP
+        TP.apply_all(new, self.page.settings)
+        self.tabs.blockSignals(True)
+        self.tabs.removeTab(i)
+        self.tabs.insertTab(i, new, label)
+        self.tabs.setCurrentIndex(i)
+        self.tabs.blockSignals(False)
+        if old is not None:
+            old.deleteLater()
 
     def _page(self):
         w = QWidget()
@@ -116,21 +148,9 @@ class EngineeringView(QWidget):
             i = self.tabs.currentIndex()
         except RuntimeError:                         # the page was rebuilt meanwhile
             return
-        fn = self._fns.get(i)
-        if fn is None:
+        if self._fns.get(i) is None:
             return self.page.refresh_current()
-        old = self.tabs.widget(i)
-        label = self.tabs.tabText(i)
-        new = fn()
-        from . import table_prefs as TP
-        TP.apply_all(new, self.page.settings)
-        self.tabs.blockSignals(True)
-        self.tabs.removeTab(i)
-        self.tabs.insertTab(i, new, label)
-        self.tabs.setCurrentIndex(i)
-        self.tabs.blockSignals(False)
-        if old is not None:
-            old.deleteLater()
+        self._build_tab(i)
 
     def _commit(self, msg):
         self.page.commit(msg)
@@ -745,21 +765,9 @@ class TimePhasedView(QWidget):
             i = self.tabs.currentIndex()
         except RuntimeError:                         # the page was rebuilt meanwhile
             return
-        fn = self._fns.get(i)
-        if fn is None:
+        if self._fns.get(i) is None:
             return self.page.refresh_current()
-        old = self.tabs.widget(i)
-        label = self.tabs.tabText(i)
-        new = fn()
-        from . import table_prefs as TP
-        TP.apply_all(new, self.page.settings)
-        self.tabs.blockSignals(True)
-        self.tabs.removeTab(i)
-        self.tabs.insertTab(i, new, label)
-        self.tabs.setCurrentIndex(i)
-        self.tabs.blockSignals(False)
-        if old is not None:
-            old.deleteLater()
+        self._build_tab(i)
 
     def incoming(self):
         w, v = self._page()

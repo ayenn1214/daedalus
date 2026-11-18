@@ -248,6 +248,7 @@ def test_connect_detects_layout_and_ui(env, monkeypatch):
     assert PeopleDialog(st).windowTitle().startswith("DIMS")
     page.inv.parts.append(M.new_part(name="From UI"))
     page.commit("Added")
+    assert page.wait_saved()                                       # sent in the background
     assert sql(dsn, "select count(*) from dims_records where data->>'name' = 'From UI'")[0][0] == 1
     # a project without the DIMS tables falls back to the original layout
     sql(dsn, "drop table dims_records cascade")
@@ -275,7 +276,7 @@ def test_production_completion_dates_from_audit(env):
 def test_part_numbers_handed_out_by_the_database(env):
     import threading
     a, m = client(env, "ankur"), client(env, "mike")
-    assert a.schema == 2
+    assert a.schema >= 2
     a.inv.parts.append({"id": "x1", "name": "TUBE", "type": "manufactured", "partNumber": "C10-0007"})
     a.save()
     got = a.reserve_part_numbers("c10", 2, None, "post")
@@ -303,3 +304,95 @@ def test_part_numbers_handed_out_by_the_database(env):
         client(env, "view").reserve_part_numbers("C10", 1)
     with _pt.raises(PermissionDenied):
         client(env, "floor").reserve_part_numbers("P00", 1)
+
+
+# ----------------------------------------------------------------------- saves in the background
+def test_save_in_three_steps_keeps_edits_made_while_sending(env):
+    """prepare (UI) → send (thread) → finish (UI): an edit made while the save is on its way is kept and sent next."""
+    a, b = client(env, "ankur"), client(env, "mike")
+    p = M.new_part(name="Caster", currentStock=40, notes="")
+    a.inv.parts.append(p)
+    a.save()
+    b.check_external()
+    b.inv.part(p["id"])["description"] = "5 in swivel"            # a teammate edits another field first
+    b.save()
+    a.inv.record(p["id"], "usage", 3)                              # stock + a field edit in the same save
+    a.inv.part(p["id"])["notes"] = "rack A"
+    job = a.prepare_save()
+    assert set(job["colls"]) == {"parts", "transactions"}
+    a.inv.part(p["id"])["location"] = "A-2"                        # edited again while the save is being sent
+    import threading
+    t = threading.Thread(target=a.send_save, args=(job,))
+    t.start()
+    t.join()
+    assert job["error"] is None and a.pending() != []              # bases updated; the newest edit still waiting
+    a.finish_save(job)
+    q = a.inv.part(p["id"])
+    assert q["currentStock"] == 37 and q["notes"] == "rack A" and q["description"] == "5 in swivel"
+    assert q["location"] == "A-2" and a.pending() == ["parts"]
+    a.save()
+    _shim, dsn, _ids, _ = env
+    data = sql(dsn, "select data from dims_records where id=%s", p["id"])[0][0]
+    assert data["currentStock"] == 37 and data["notes"] == "rack A" and data["location"] == "A-2"
+    assert data["description"] == "5 in swivel" and a.pending() == []
+
+
+def test_many_records_sent_at_once(env):
+    a, b = client(env, "ankur"), client(env, "mike")
+    for i in range(30):
+        a.inv.parts.append(M.new_part(id=f"p{i}", name=f"Part {i}", currentStock=i))
+    a.save()
+    b.check_external()
+    for i in range(30):
+        a.inv.part(f"p{i}")["notes"] = f"n{i}"
+    b.inv.part("p5")["description"] = "theirs"                    # one of them changed elsewhere first
+    b.save()
+    a.save()                                                       # 30 PATCHes, several at a time
+    _shim, dsn, _ids, _ = env
+    rows = dict(sql(dsn, "select id, data from dims_records where collection='parts'"))
+    assert all(rows[f"p{i}"]["notes"] == f"n{i}" for i in range(30))
+    assert rows["p5"]["description"] == "theirs" and a.inv.part("p5")["description"] == "theirs"
+    assert a.pending() == []
+
+
+def test_page_saves_in_the_background(env):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.ui.inventory_ui import InventoryPage
+    a = client(env, "ankur")
+    page = InventoryPage(store=a, lite=True)
+    page.inv.parts.append(M.new_part(id="bg1", name="One"))
+    page.commit("Added one")
+    assert page._saving is not None or not a.pending()             # on its way (or already done)
+    page.inv.parts.append(M.new_part(id="bg2", name="Two"))
+    page.commit("Added two")                                       # queued behind the first
+    assert page.wait_saved()
+    _shim, dsn, _ids, _ = env
+    assert sql(dsn, "select count(*) from dims_records where id in ('bg1','bg2')")[0][0] == 2
+    assert a.pending() == [] and "saving" not in page.sync_lab.text()
+    page.quiet_save()                                              # nothing to send: fine
+    assert page.wait_saved()
+
+
+def test_window_does_not_wait_for_a_slow_server(env, monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.ui.inventory_ui import InventoryPage
+    a = client(env, "ankur")
+    page = InventoryPage(store=a, lite=True)
+    slow = a._rest
+
+    def lagging(*args, **kw):
+        time.sleep(0.4)                                            # a far-away server
+        return slow(*args, **kw)
+    monkeypatch.setattr(a, "_rest", lagging)
+    for i in range(5):
+        page.inv.parts.append(M.new_part(id=f"s{i}", name=f"Slow {i}"))
+    t0 = time.time()
+    page.commit("Added five")
+    assert time.time() - t0 < 0.4                                  # back right away; the server is still working
+    assert page.wait_saved(20)
+    _shim, dsn, _ids, _ = env
+    assert sql(dsn, "select count(*) from dims_records where id like 's%%'")[0][0] == 5

@@ -345,6 +345,14 @@ def set_bom(inv: Inventory, pid, lines: list, kind: str = "assembly"):
 
 # ================================================================== where used
 def parents(inv: Inventory, pid):
+    if getattr(inv, "_memo", None) is not None:
+        def index():
+            ix: dict = {}
+            for p in inv.parts:
+                for c in p.get("components") or []:
+                    ix.setdefault(c.get("partId"), []).append((p, num(c.get("qty"), 1)))
+            return ix
+        return list(inv.memo("parents_ix", index).get(pid, []))
     return [(p, num(c.get("qty"), 1)) for p in inv.parts for c in p.get("components") or [] if c.get("partId") == pid]
 
 

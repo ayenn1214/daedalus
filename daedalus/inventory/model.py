@@ -6,6 +6,7 @@ web version can share one Supabase table or exchange files.
 """
 from __future__ import annotations
 
+import contextlib
 import copy
 import csv
 import datetime as dt
@@ -348,6 +349,32 @@ class Inventory:
         self.exchangeRate = 1.35
         self.syncMeta: dict = {}
         self.userName = ""
+        self._memo = None
+
+    # ------------------------------------------------------------ lookups cached while a view is built
+    @contextlib.contextmanager
+    def cached(self):
+        """Inside this block the data is read, not changed (a page being built): lookups that scan every part —
+        part by id, a project's parts, where a part is used, what each project needs — are worked out once and
+        reused. Outside it everything is computed fresh."""
+        outer = getattr(self, "_memo", None) is not None
+        if not outer:
+            self._memo = {}
+        try:
+            yield self
+        finally:
+            if not outer:
+                self._memo = None
+
+    def memo(self, key, fn):
+        m = getattr(self, "_memo", None)
+        if m is None:
+            return fn()
+        try:
+            return m[key]
+        except KeyError:
+            v = m[key] = fn()
+            return v
 
     # ------------------------------------------------------------ (de)serialise
     def load_values(self, values: dict):
@@ -388,6 +415,11 @@ class Inventory:
 
     # ------------------------------------------------------------- parts
     def part(self, pid):
+        if getattr(self, "_memo", None) is not None:
+            ix = self.memo("part_ix", lambda: {p["id"]: p for p in self.parts})
+            p = ix.get(pid)
+            if p is not None:
+                return p
         return next((p for p in self.parts if p["id"] == pid), None)
 
     @staticmethod
@@ -452,6 +484,11 @@ class Inventory:
 
     def component_ids(self) -> set:
         """Parts welded into a weldment (not separate stock). Assembly components are stocked parts of their own."""
+        if getattr(self, "_memo", None) is not None:
+            return set(self.memo("component_ids", self._component_ids))
+        return self._component_ids()
+
+    def _component_ids(self) -> set:
         ids = set()
         for p in self.parts:
             if p.get("isAssembly") and not p.get("isWeldment"):
@@ -472,6 +509,11 @@ class Inventory:
         return False
 
     def duplicate_groups(self):
+        if getattr(self, "_memo", None) is not None:
+            return self.memo("duplicate_groups", self._duplicate_groups)
+        return self._duplicate_groups()
+
+    def _duplicate_groups(self):
         groups, seen = [], set()
         for p in self.parts:
             if p["id"] in seen:
@@ -544,6 +586,10 @@ class Inventory:
         return [p for p in self.sorted_projects() if p.get("archived")]
 
     def project(self, pid):
+        if getattr(self, "_memo", None) is not None:
+            p = self.memo("project_ix", lambda: {p["id"]: p for p in self.projects}).get(pid)
+            if p is not None:
+                return p
         return next((p for p in self.projects if p["id"] == pid), None)
 
     def project_name(self, pid):
@@ -553,6 +599,11 @@ class Inventory:
     def project_qty(self, pid) -> float:
         """Units to build: open production orders (confirmed orders create them). A project that has never had a
         production order still uses its old planned quantity, if it has one."""
+        if getattr(self, "_memo", None) is not None:
+            return self.memo(("project_qty", pid), lambda: self._project_qty(pid))
+        return self._project_qty(pid)
+
+    def _project_qty(self, pid) -> float:
         from .orders import units_on_order
         u = units_on_order(self, pid)
         if u is not None:
@@ -571,6 +622,16 @@ class Inventory:
         return next((a for a in self.allocations(p) if a.get("projectId") == pid), None)
 
     def parts_for_project(self, pid):
+        if getattr(self, "_memo", None) is not None:
+            def index():
+                ix: dict = {}
+                for p in self.parts:
+                    for a in self.allocations(p):
+                        lst = ix.setdefault(a.get("projectId"), [])
+                        if not lst or lst[-1] is not p:
+                            lst.append(p)
+                return ix
+            return list(self.memo("by_project", index).get(pid, []))
         return [p for p in self.parts if self.allocation(p, pid)]
 
     def project_chips(self, p):
@@ -637,6 +698,11 @@ class Inventory:
         return (num(a.get("qty")) * self.project_qty(pid) if a else 0.0) + option_need(self, p, pid)
 
     def total_needed(self, p) -> float:
+        if getattr(self, "_memo", None) is not None:
+            return self.memo(("total_needed", p["id"]), lambda: self._total_needed(p))
+        return self._total_needed(p)
+
+    def _total_needed(self, p) -> float:
         from .configs import option_need, option_projects
         base = sum(num(a.get("qty")) * self.project_qty(a.get("projectId")) for a in self.allocations(p))
         return base + sum(option_need(self, p, pid) for pid in option_projects(self, p))

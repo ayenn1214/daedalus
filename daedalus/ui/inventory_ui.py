@@ -8,7 +8,7 @@ import os
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
     QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -30,6 +30,9 @@ ORDER_COL = {"Draft": theme.WARN, "Confirmed": theme.INFO, "Shipped": theme.OK, 
 STATUS_COL = {"Not Started": theme.MUTED, "In Fab": theme.INFO, "In Finishing": theme.ACCENT_LINE, "Complete": theme.OK,
               "Requested": theme.MUTED, "Confirmed": theme.INFO, "In Production": theme.ACCENT_LINE, "Shipped": theme.PURPLE,
               "Cancelled": theme.MUTED}
+
+
+_PRESS = QEvent.Type.MouseButtonPress
 
 
 def _btn(text, fn, tip="", primary=False, danger=False):
@@ -142,7 +145,7 @@ def _qty_spin(value, done):
     q.editingFinished.connect(lambda: done(q.value()))
     w = QWidget()
     w.setObjectName("weldcell")
-    w.setStyleSheet("QWidget#weldcell { background: transparent; }")
+    # transparent background: the app stylesheet's QWidget#weldcell rule (one rule, not one per row)
     h = QHBoxLayout(w)
     h.setContentsMargins(6, 0, 6, 0)
     h.addWidget(q, 0, Qt.AlignLeft | Qt.AlignVCenter)
@@ -359,8 +362,7 @@ class WeldHead(QWidget):
     def __init__(self, caret, open_):
         super().__init__()
         self.caret, self.open_ = caret, open_
-        self.setObjectName("weldcell")
-        self.setStyleSheet("QWidget#weldcell { background: transparent; }")
+        self.setObjectName("weldcell")                  # transparent: app stylesheet
 
     def paintEvent(self, e):
         super().paintEvent(e)
@@ -378,6 +380,7 @@ class InventoryPage(QWidget):
     closed = Signal()
     status = Signal(str)
     _fetched = Signal(object)                 # background team-server check → UI thread
+    _saved = Signal(object)                   # background team-server save finished → UI thread
     _upd_fetched = Signal(object)             # part update history from the team server
     backup_due = Signal(bool)                 # weekly Excel backup reminder on / off
     send_bom_requested = Signal()
@@ -490,7 +493,8 @@ class InventoryPage(QWidget):
         self.chat.unread_changed.connect(self._chat_unread)
         self.split.addWidget(self.chat)
         lay.addWidget(self.split, 1)
-        QApplication.instance().installEventFilter(self)
+        self._filtering = False                  # app-wide Shift-click filter: on only while DIMS is on screen
+        self._filter_on()
         if self.settings.value("dims/chat_visible", False, type=bool):
             QTimer.singleShot(0, lambda: self.toggle_chat(True))
             if self.settings.value("dims/chat_popped", False, type=bool):
@@ -503,12 +507,16 @@ class InventoryPage(QWidget):
         self.timer.start(3000)
         self._committing = False
         self._bg = None
+        self._saving = None                      # team server: the save job being sent in the background
+        self._save_again = False                 # more changes came in while it was being sent
+        self._saved.connect(self._on_saved)
         self._fetched.connect(self._on_fetched)
         self.store.listeners.append(self._on_store_saved)
         self.refresh()
 
     def showEvent(self, e):
         super().showEvent(e)
+        self._filter_on()
         st = self.store
         if getattr(st, "kind", "file") == "supabase" and not st.signed_in and not getattr(self, "_asked", False):
             self._asked = True
@@ -525,13 +533,104 @@ class InventoryPage(QWidget):
 
     def quiet_save(self):
         """Save a view setting kept with a record (e.g. a model's orientation) without rebuilding the page."""
+        if self._background_saves():
+            return self._save_in_background()
         try:
             self.store.save()
         except Exception as e:  # noqa: BLE001
             self.status.emit(f"Couldn't save: {e}")
 
+    # ---------------------------------------------------------------- team server: saves in the background
+    def _background_saves(self) -> bool:
+        return hasattr(self.store, "prepare_save") and \
+            self.settings.value("dims/background_saves", True, type=bool)
+
+    def _save_in_background(self) -> bool:
+        """Send the changes on a thread — the window doesn't wait for the server. False if it couldn't start."""
+        from ..inventory.supabase import AuthError, SyncError
+        st = self.store
+        if self._saving is not None:
+            self._save_again = True              # sent as soon as the one going now is done
+            return True
+        self._save_again = False
+        try:
+            job = st.prepare_save()
+        except AuthError:
+            self.team_sign_in(reason="Your session ended — sign in again to send your changes.")
+            return False
+        except SyncError as e:
+            self._save_failed(e)
+            return False
+        if not job["ops"] and not job["settings"]:
+            return True
+        self._saving = job
+        import threading
+
+        def work():
+            st.send_save(job)
+            self._saved.emit((st, job))
+        threading.Thread(target=work, daemon=True).start()
+        self._sync_status()
+        return True
+
+    def _on_saved(self, res):
+        st, job = res
+        self._saving = None
+        if st is not self.store:
+            return
+        self._committing = True                  # finish_save notifies listeners — refresh once, below
+        try:
+            changed = st.finish_save(job)
+        finally:
+            self._committing = False
+        if job["error"] is not None:
+            self._save_failed(job["error"])
+        conf = getattr(st, "conflicts", None)
+        if conf:
+            names = ", ".join(sorted({str(c[0]) for c in conf})[:4])
+            self.status.emit(f"Merged with a teammate's changes ({names}) — the newest edit to the same field won")
+            conf.clear()
+            changed = True
+        if changed:
+            self.refresh()
+        else:
+            self._sync_status()
+        if self._save_again and job["error"] is None:
+            QTimer.singleShot(0, self._save_in_background)     # clears _save_again when it starts
+        else:
+            self._save_again = False
+
+    def _save_failed(self, e):
+        from ..inventory.supabase import AuthError
+        if isinstance(e, AuthError):
+            return self.team_sign_in(reason="Your session ended — sign in again to send your changes.")
+        if type(e).__name__ == "PermissionDenied":
+            QMessageBox.warning(self, "DIMS", f"{e}.\nYour change was not saved.")
+            if hasattr(self.store, "discard_pending"):
+                self.store.discard_pending()
+            return self.refresh()
+        self.status.emit("Saved on this PC — will sync when the team server is back"
+                         + (f" ({e})" if str(e) and "Offline" not in str(e) else ""))
+        self._sync_status()
+
+    def wait_saved(self, timeout: float = 15.0) -> bool:
+        """Until background saves are done (tests, closing). True when nothing is left being sent."""
+        import time as _t
+        end = _t.time() + timeout
+        while (self._saving is not None or self._save_again) and _t.time() < end:
+            QApplication.processEvents()
+            _t.sleep(0.01)
+        return self._saving is None
+
     def commit(self, msg=None, undo=None):
         from ..inventory.supabase import AuthError, SyncError
+        if self._background_saves():
+            ok = self._save_in_background()
+            self.refresh()
+            if msg:
+                self.toast.show_msg(msg, undo)
+                self.status.emit(msg)
+            return ok
         self._committing = True
         try:
             self.store.save()
@@ -570,6 +669,8 @@ class InventoryPage(QWidget):
             if self._hidden_ticks % 10:
                 return
         if getattr(self.store, "kind", "file") == "supabase":
+            if self._saving is not None:                       # a save is going up: check after it
+                return
             if self._bg is None and self.store.signed_in:       # network on a thread; merge on the UI thread
                 import threading
                 st = self.store
@@ -594,14 +695,19 @@ class InventoryPage(QWidget):
             st.last_error = str(payload)
             self._sync_status()
             return
+        if self._saving is not None:              # a save started meanwhile: fetch again after it
+            return
         changed = st.apply_changes(payload)
         if st.pending():
-            from ..inventory.supabase import SyncError
-            try:
-                st.save()
-                changed = True
-            except SyncError as e:
-                st.last_error = str(e)
+            if self._background_saves():
+                self._save_in_background()
+            else:
+                from ..inventory.supabase import SyncError
+                try:
+                    st.save()
+                    changed = True
+                except SyncError as e:
+                    st.last_error = str(e)
         if changed:
             self.refresh()
         else:
@@ -619,6 +725,10 @@ class InventoryPage(QWidget):
         return self.TABS[self.tabs.currentIndex()][0]
 
     def refresh(self):
+        with self.inv.cached():
+            self._refresh()
+
+    def _refresh(self):
         inv = self.inv
         low = len(inv.low_stock())
         self.low_btn.setText(f"⚠ {low} low")
@@ -647,6 +757,8 @@ class InventoryPage(QWidget):
             pend = st.pending()
             if not st.signed_in:
                 text, color = "● Team server · sign in", theme.ERROR
+            elif getattr(self, "_saving", None) is not None:
+                text, color = f"● Team · {st.email} · saving…", theme.MUTED
             elif pend or not st.online:
                 text, color = f"● Team server · offline — {len(pend)} change(s) waiting", theme.WARN \
                     if hasattr(theme, "WARN") else "#e0a030"
@@ -713,11 +825,18 @@ class InventoryPage(QWidget):
                 pass
         sc = self.pages[key]
         y = sc.verticalScrollBar().value()
-        w = getattr(self, f"build_{key}")()
-        w.setObjectName("invpage")
-        from . import table_prefs as TP
-        TP.apply_all(w, self.settings)                # row / column spacing, grid lines, remembered widths
-        sc.setWidget(w)
+        was = self._filtering
+        self._filter_off()                            # rebuilding fires tens of thousands of events
+        try:
+            with self.inv.cached():                   # the data doesn't change while the page is built
+                w = getattr(self, f"build_{key}")()
+            w.setObjectName("invpage")
+            from . import table_prefs as TP
+            TP.apply_all(w, self.settings)            # row / column spacing, grid lines, remembered widths
+            sc.setWidget(w)
+        finally:
+            if was:
+                self._filter_on()
         QTimer.singleShot(0, lambda: sc.verticalScrollBar().setValue(y))
 
     def _page(self):
@@ -1223,7 +1342,6 @@ class InventoryPage(QWidget):
             w = QWidget()
             w.setObjectName("weldcell")
             w.setAttribute(Qt.WA_StyledBackground, True)
-            w.setStyleSheet("QWidget#weldcell { background: transparent; } QLabel { background: transparent; }")
             lay = QVBoxLayout(w)
             lay.setContentsMargins(6, 2, 6, 2)
             lay.setSpacing(0)
@@ -1256,7 +1374,7 @@ class InventoryPage(QWidget):
         caret.setText("▸" if folded else "▾")
         caret.setAutoRaise(True)
         caret.setFixedWidth(TreeLabel.X0 * 2)
-        caret.setStyleSheet("QToolButton { padding: 0; margin: 0; border: 0; }")
+        caret.setObjectName("weldcaret")                     # padding / border from the app stylesheet
         caret.setToolTip("Show / hide the parts in this weldment")
         caret.clicked.connect(lambda _=False: QTimer.singleShot(0, lambda: self.toggle_weld(pr["id"], p["id"])))
         if hide_caret:
@@ -1302,7 +1420,6 @@ class InventoryPage(QWidget):
             acts.append(_ibtn("unassign", lambda _=False, pp=p, pid=pr["id"]: self.unassign(pp, pid), danger=True))
         act_w = QWidget()
         act_w.setObjectName("weldcell")
-        act_w.setStyleSheet("QWidget#weldcell { background: transparent; }")
         al = QVBoxLayout(act_w)
         al.setContentsMargins(0, 0, 0, 0)
         al.addWidget(_actions(*acts))
@@ -3010,9 +3127,27 @@ class InventoryPage(QWidget):
             w = w.parentWidget()
         return False
 
+    # Shift-click anything in DIMS to link it in chat needs an app-wide event filter, which Qt calls (in Python)
+    # for every event in the whole app — it is installed only while DIMS is on screen, taken off while a page is
+    # being rebuilt (tens of thousands of layout events), and returns at once for anything but a mouse press.
+    def _filter_on(self):
+        if not self._filtering:
+            QApplication.instance().installEventFilter(self)
+            self._filtering = True
+
+    def _filter_off(self):
+        if self._filtering:
+            QApplication.instance().removeEventFilter(self)
+            self._filtering = False
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._filter_off()
+
     def eventFilter(self, obj, ev):
-        from PySide6.QtCore import QEvent
-        if ev.type() == QEvent.MouseButtonPress and ev.button() == Qt.LeftButton and \
+        if ev.type() != _PRESS:
+            return False
+        if ev.button() == Qt.LeftButton and \
                 ev.modifiers() & Qt.ShiftModifier and isinstance(obj, QWidget) and self._owned(obj) and \
                 not self.chat.isAncestorOf(obj):
             what = self._link_at(obj, ev.position().toPoint())
@@ -3023,7 +3158,7 @@ class InventoryPage(QWidget):
                     self.toggle_chat(True)
                 if self.chat.insert_quote(what[1]):
                     return True
-        return super().eventFilter(obj, ev)
+        return False
 
     def report_bug(self):
         from .bug_report import BugReportDialog

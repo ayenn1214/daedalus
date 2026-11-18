@@ -387,6 +387,9 @@ QLabel#muted {{ color: {MUTED}; }}
 QLabel#error {{ color: {ERROR}; }}
 QLabel#hint {{ color: {MUTED}; font-size: 8.5pt; }}
 QFrame#card {{ background: {PANEL}; border: 1px solid {BORDER_SOFT}; border-radius: 8px; }}
+QWidget#weldcell {{ background: transparent; }}
+QWidget#weldcell QLabel {{ background: transparent; }}
+QToolButton#weldcaret {{ padding: 0; margin: 0; border: 0; }}
 """
 
 
