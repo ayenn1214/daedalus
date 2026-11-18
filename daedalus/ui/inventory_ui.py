@@ -843,6 +843,9 @@ class InventoryPage(QWidget):
         t.verticalHeader().hide()
         t.setEditTriggers(QTableWidget.NoEditTriggers)
         t.setAlternatingRowColors(True)
+        # one line per cell: rows are sized before the columns get their real widths, and with wrapping on, Qt
+        # sizes a row for text wrapped into a still-narrow column — it stays that tall once the column widens
+        t.setWordWrap(False)
         for i, r in enumerate(rows):
             for j, v in enumerate(r):
                 if isinstance(v, QWidget):

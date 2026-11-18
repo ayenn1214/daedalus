@@ -138,6 +138,13 @@ def _interactive(view, h, key, s, p=None):
         h.setSectionResizeMode(i, QHeaderView.Interactive)
         h.resizeSection(i, int(saved.get(str(i), widths[i])))
     h.setStretchLastSection(False)
+    if isinstance(view, QTableWidget) and view.wordWrap():
+        # rows were measured while the columns were still narrow (wrapped text → tall rows): measure again now
+        # that the columns have their real widths
+        pp = p or DEFAULTS
+        view.resizeRowsToContents()
+        for r in range(view.rowCount()):
+            view.setRowHeight(r, max(view.rowHeight(r) + 2 * (pp["row_pad"] - 2), st["rowh"]))
 
     def remember(i, _old, new):
         if h.sectionResizeMode(i) != QHeaderView.Interactive or new <= 0:
