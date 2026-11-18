@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.30</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.31</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -432,6 +432,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.31** | Orders: each line configured when added — qty per unit of the project's top-level MFG parts (weldments and parts not in one) plus custom options; Edit options… moved here from Projects · Part profile: 3D model wireframe beside the form · Orient ▾: turn a model that was drawn with another axis up (saved with it) · Buy List ▸ Create PO…: purchase order PDF per vendor with your company details and logo (PO settings, or fill from an existing PO PDF), PO numbering, editable lines, parts marked as ordered |
 | **3.0.30** | Project Profile: 3D model edges drawn light on dark viewports (Black / Sith / Midnight themes) so the model is visible |
 | **3.0.29** | Project Profile (Projects ▸ Profile): 3D preview of the linked STEP/STL (drag to turn, Iso / Front / Top / Right) with overall size, total weight and approx budget rolled up through the BOM with coverage, longest lead, options with what each adds, vendors with open POs, breakdown by type, assemblies with drawing rev status, production and drawings needing a look |
 | **3.0.28** | Projects ▸ Unassigned: right-click one or several parts → Assign to project / + New project…, qty per unit asked once, with Undo |
