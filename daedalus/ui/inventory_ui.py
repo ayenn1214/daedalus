@@ -905,6 +905,10 @@ class InventoryPage(QWidget):
     # ============================================================ projects
     def build_projects(self):
         inv = self.inv
+        prof = self.mrp_state.get("proj_profile")
+        if prof and inv.project(prof):
+            from .project_profile_ui import build as build_profile
+            return build_profile(self, prof)
         w, v = self._page()
         projects = inv.active_projects()
         row = QHBoxLayout()
@@ -947,6 +951,8 @@ class InventoryPage(QWidget):
                                     "Remove the project's old planned quantity — demand then comes only from "
                                     "confirmed orders"))
             for b in (*extra, up, dn, _small("+ Add Parts", lambda _=False, i=pr["id"]: self.add_parts_to_project(i)),
+                      _small("Profile", lambda _=False, i=pr["id"]: self.show_project_profile(i),
+                             "Project profile: 3D model, weight, size, budget, vendors, options, assemblies"),
                       _small("Duplicate", lambda _=False, i=pr["id"]: self.duplicate_project(i)),
                       _small("Customize…", lambda _=False, i=pr["id"]: QTimer.singleShot(0, lambda: self.customize_project(i)),
                              "Configurations: pick-one options (e.g. length) and add-ons (e.g. an extra beam), each "
@@ -1448,6 +1454,27 @@ class InventoryPage(QWidget):
             vals = d.values()
             pid = self.inv.find_or_create_project(vals.pop("name"), **vals)
             self.commit(f"Project {self.inv.project_name(pid)} added")
+
+    def show_project_profile(self, pid):
+        """Projects tab ▸ one project's profile (None = back to the list)."""
+        self.mrp_state["proj_profile"] = pid
+        if pid and self.current_key() != "projects":
+            self.goto("projects")
+        QTimer.singleShot(0, self.refresh_current)
+
+    def set_project_model(self, pid, path):
+        pr = self.inv.project(pid)
+        old = (pr.get("modelFile"), pr.get("modelSize"))
+        pr["modelFile"] = M.portable_path(path)
+        pr.pop("modelSize", None)
+        self.commit(f"{pr['name']}: 3D model linked",
+                    undo=lambda: (pr.update(modelFile=old[0], modelSize=old[1]), self.commit("Undone")))
+
+    def add_production_for(self, pid):
+        d = D.OrderDialog(self.inv, {"projectId": pid}, self)
+        if d.exec():
+            self.inv.productionOrders.append({"id": M.uid(), **d.values()})
+            self.commit("Production order added")
 
     def edit_project(self, pid):
         pr = self.inv.project(pid)

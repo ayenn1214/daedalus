@@ -236,6 +236,43 @@ def make(src: str, out: Path | None = None, color="#7aa7ff", timeout=180) -> Pat
     return render_png(iso_project(feature_edges(v, f)), out, color=color)
 
 
+def mesh(src: str, timeout=300) -> tuple[np.ndarray, np.ndarray] | None:
+    """(verts, faces) of a 3D model file (blocking). STEP / IGES / … are tessellated once in a child process and
+    the STL kept in the thumbnail cache, keyed by the file's path + modified time + size."""
+    ext = os.path.splitext(src)[1].lower()
+    if ext == ".stl":
+        return read_stl(src)
+    if ext == ".obj":
+        return read_obj(src)
+    if ext not in KERNEL_EXTS:
+        return None
+    c = cache_path(src)
+    if c is None:
+        return None
+    stl = c.with_suffix(".mesh.stl")
+    if not stl.exists():
+        tmp = c.with_suffix(".tmp.stl")
+        try:
+            root = str(Path(__file__).resolve().parents[2])
+            env = {**os.environ, "PYTHONPATH": root + os.pathsep + os.environ.get("PYTHONPATH", "")}
+            subprocess.run([sys.executable, "-m", "daedalus.inventory.thumbs", "--tessellate", os.path.abspath(src),
+                            str(tmp.resolve())], check=True, timeout=timeout, capture_output=True, env=env,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+            os.replace(tmp, stl)
+        except (subprocess.SubprocessError, OSError):
+            tmp.unlink(missing_ok=True)
+            return None
+    return read_stl(stl)
+
+
+def bounds(verts) -> dict | None:
+    """Overall size {x, y, z} of a mesh (model units — mm for STEP)."""
+    if verts is None or len(verts) == 0:
+        return None
+    d = verts.max(axis=0) - verts.min(axis=0)
+    return {"x": round(float(d[0]), 1), "y": round(float(d[1]), 1), "z": round(float(d[2]), 1)}
+
+
 def _tessellate(src, out_stl):
     from ..core.document import _load_any
     doc = _load_any(Path(src))

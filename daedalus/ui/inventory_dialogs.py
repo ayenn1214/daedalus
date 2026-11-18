@@ -919,8 +919,9 @@ class OrderDialog(_Base):
     """Production order: project, qty, dates, fab/finishing windows, status."""
 
     def __init__(self, inv: M.Inventory, o=None, parent=None):
-        super().__init__("Edit Production Order" if o else "Add Production Order", parent,
-                         "Save Changes" if o else "Add Order")
+        new = not (o and o.get("id"))                  # a dict without an id is a preset for a new order
+        super().__init__("Add Production Order" if new else "Edit Production Order", parent,
+                         "Add Order" if new else "Save Changes")
         r = o or {}
         f = QFormLayout()
         self.project = QComboBox()
@@ -936,7 +937,7 @@ class OrderDialog(_Base):
         from .date_field import DateField
         self.d = {k: DateField(r.get(k) or "") for k in ("orderDate", "dueDate", "fabStart", "fabEnd", "finishStart",
                                                           "finishEnd")}
-        if not o:
+        if new and not r.get("orderDate"):
             self.d["orderDate"].set_value(M.today())
         self.status = QComboBox()
         self.status.addItems(M.ORDER_STATUSES)
@@ -1220,6 +1221,10 @@ project.</li>
 chosen configuration.</li>
 <li><b>BOM / Export</b>: MFG hierarchy, fasteners, purchased parts and a buy list; copy as a table or export to
 Excel. <b>Export Projects…</b> does several at once.</li>
+<li><b>Profile</b> opens the project's page: a 3D preview of its linked model (<i>Link 3D model…</i> — STEP or STL;
+drag to turn, wheel to zoom, Iso / Front / Top / Right) with the overall size, total weight, approx budget, longest
+lead, options with what each adds, vendors with open POs, breakdown by type, assemblies with drawing revision status,
+production and drawings that need a look. Weights and costs roll up through the BOM and say how complete they are.</li>
 <li><b>Send BOM</b> (from the CAD side) turns the open design into a project: library fasteners and bearings are
 matched by spec, modelled parts by part number.</li>
 </ul>
