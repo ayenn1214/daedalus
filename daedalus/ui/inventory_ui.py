@@ -833,7 +833,14 @@ class InventoryPage(QWidget):
             w.setObjectName("invpage")
             from . import table_prefs as TP
             TP.apply_all(w, self.settings)            # row / column spacing, grid lines, remembered widths
+            # setWidget() would delete the old page right away — but the change usually comes from a control on
+            # that page (a sort or filter box) whose signal is still running: deleting it under itself crashed.
+            # Take the old page out and delete it once the signal is done.
+            old = sc.takeWidget()
             sc.setWidget(w)
+            if old is not None:
+                old.hide()
+                old.deleteLater()
         finally:
             if was:
                 self._filter_on()

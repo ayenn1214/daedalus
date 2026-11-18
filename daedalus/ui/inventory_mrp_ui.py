@@ -83,7 +83,7 @@ class EngineeringView(QWidget):
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         if parts_widget is not None:                 # Parts and Engineering are one tab
-            self.tabs.addTab(parts_widget, "Parts")
+            self.tabs.addTab(parts_widget, "Components")
         if profile_widget is not None:
             self.tabs.addTab(profile_widget, "Part Profile")
         if browser is not None:                      # part numbers merged into the Part Profile tab

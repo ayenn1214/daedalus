@@ -18,6 +18,22 @@ COLS = ["", "Part No.", "Name", "Description", "Type", "Used In", "Project", "Ve
         "Reorder Pt", "Bin"]
 
 
+SORT = Qt.UserRole + 5                          # a cell's sort value when its text doesn't sort right
+
+
+class _SortItem(QTableWidgetItem):
+    """Header-click sorting: numbers by value, text case-insensitive, blanks last."""
+
+    def __lt__(self, other):
+        a, b = self.data(SORT), other.data(SORT)
+        if a is not None and b is not None:
+            return a < b
+        x, y = self.text().strip().lower(), other.text().strip().lower()
+        if bool(x) != bool(y):
+            return bool(x)
+        return x < y
+
+
 def _mark(it, mark, page, main: bool):
     """A recently updated part: tinted row (stronger until you've opened it), what changed in the tooltip."""
     if not mark:
@@ -185,9 +201,17 @@ class PartsBrowser(QWidget):
                      inv.location_label_for(p.get("locationId")) or ""]
             for j, val in enumerate(cells, start=1):
                 if val is None:
+                    it = _SortItem("")
+                    it.setData(SORT, inv.stock_ratio(p))                 # Level column: the gauge's ratio
+                    it.setData(Qt.UserRole, p["id"])
+                    t.setItem(i, j, it)
                     continue
-                it = QTableWidgetItem(val)
+                it = _SortItem(val)
                 it.setData(Qt.UserRole, p["id"])
+                if j == 8:
+                    it.setData(SORT, stock)
+                elif j == 10:
+                    it.setData(SORT, M.num(p.get("reorderPoint")))
                 tag(it, "part", p["id"])
                 if j == 2:
                     it.setIcon(page.thumbs.icon_for(p))
@@ -213,6 +237,10 @@ class PartsBrowser(QWidget):
         t.setColumnWidth(2, min(max(t.columnWidth(2), 180), 340))
         t.setColumnWidth(3, min(t.columnWidth(3), 260))
         t.verticalHeader().setDefaultSectionSize(34)
+        # click a header to sort by that column (click again to reverse); the Sort box sets the starting order
+        h.setSortIndicator(-1, Qt.AscendingOrder)
+        t.setSortingEnabled(True)
+        h.setSortIndicatorShown(True)
         t.itemChanged.connect(self._checked)
         t.currentCellChanged.connect(lambda r, _c, _pr, _pc: self._pick(r))
         t.cellDoubleClicked.connect(lambda r, _c: (self._pick(r), self.open_profile()))
@@ -386,7 +414,10 @@ class PartsBrowser(QWidget):
         for t, lst in ((self.table, self.parts), (getattr(self, "picker", None), getattr(self, "pick_parts", []))):
             if t is None:
                 continue
-            r = next((i for i, p in enumerate(lst) if p["id"] == pid), -1)
+            if t is self.table:
+                r = next((i for i in range(t.rowCount()) if self._row_id(t, i) == pid), -1)
+            else:
+                r = next((i for i, p in enumerate(lst) if p["id"] == pid), -1)
             t.blockSignals(True)
             if r >= 0:
                 t.selectRow(r)
@@ -415,11 +446,20 @@ class PartsBrowser(QWidget):
         self.sel_lab.setText(f"{n} selected" if n else f"{len(self.parts)} parts")
         QTimer.singleShot(0, self.page.refresh_current)        # show / hide Assign to Project
 
+    def _row_id(self, t, row):
+        """The part id on a row of the main list (rows move when a column is sorted)."""
+        it = t.item(row, 1) if t is not None and row >= 0 else None
+        return it.data(Qt.UserRole) if it is not None else None
+
     def _pick(self, row, lst=None):
-        lst = self.parts if lst is None else lst
-        if row < 0 or row >= len(lst):
-            return
-        pid = lst[row]["id"]
+        if lst is None:
+            pid = self._row_id(self.table, row)
+            if pid is None:
+                return
+        else:
+            if row < 0 or row >= len(lst):
+                return
+            pid = lst[row]["id"]
         if pid == self.page.parts_sel and self.editor is not None:
             return
         if self.dirty() and QMessageBox.question(

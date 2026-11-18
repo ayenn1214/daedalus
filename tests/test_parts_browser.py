@@ -82,7 +82,7 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     app.processEvents()
     assert page.parts_sel == "tab" and br.editor is not None and not br.dirty()
     ev = page.pages["parts"].widget()
-    assert [ev.tabs.tabText(i) for i in range(2)] == ["Parts", "Part Profile"]
+    assert [ev.tabs.tabText(i) for i in range(2)] == ["Components", "Part Profile"]
     assert ev.tabs.currentIndex() == 0                                     # click loads, stays on the list
     t.cellDoubleClicked.emit(r, 2)
     assert ev.tabs.currentWidget() is br.profile_page                      # double-click opens the profile tab
@@ -149,3 +149,51 @@ def test_parts_tab_browser(tmp_path, monkeypatch):
     assert next(p for p in st.inv.parts if p.get("partNumber") == num)["name"] == "FLAT, NEW"
     page.goto("engineering")
     assert page.current_key() == "parts"
+
+
+def test_components_sort_box_and_header_sort(tmp_path):
+    """The Sort box rebuilds the list from its own signal (that used to delete the box under itself and crash);
+    clicking a header sorts by that column and clicking a row still opens the right part."""
+    import os
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QApplication, QComboBox
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory import model as M
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv = M.Inventory()
+    inv.parts = [M.new_part(id="a", name="Zeta", partNumber="P-3", currentStock=5),
+                 M.new_part(id="b", name="Alpha", partNumber="P-1", currentStock=50),
+                 M.new_part(id="c", name="Mid", partNumber="P-2", currentStock=12)]
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.show()
+    page.goto("parts")
+    app.processEvents()
+
+    def order():
+        t = page._browser.table
+        return [t.item(r, 2).text() for r in range(t.rowCount())]
+    assert order() == ["Alpha", "Mid", "Zeta"]                         # Sort: Name
+    for key, want in (("partno", ["Alpha", "Mid", "Zeta"]), ("stock", ["Zeta", "Mid", "Alpha"]),
+                      ("name", ["Alpha", "Mid", "Zeta"])):
+        box = [c for c in page.pages["parts"].widget().findChildren(QComboBox) if c.findData("partno") >= 0][0]
+        box.setCurrentIndex(box.findData(key))                         # rebuilds from inside the box's signal
+        app.processEvents()
+        assert page.parts_filter["sort"] == key
+        if key != "stock":
+            assert order() == want
+    t = page._browser.table
+    t.sortItems(8, Qt.DescendingOrder)                                 # Stock column, numbers by value
+    assert order() == ["Alpha", "Mid", "Zeta"]
+    t.sortItems(8, Qt.AscendingOrder)
+    assert order() == ["Zeta", "Mid", "Alpha"]
+    t.setCurrentCell(0, 2)                                             # row 0 is now Zeta
+    app.processEvents()
+    assert page.parts_sel == "a"
+    t.sortItems(2, Qt.AscendingOrder)
+    page._browser._mark_row("a")
+    assert t.currentRow() == 2 or t.selectedItems()[0].row() == 2
