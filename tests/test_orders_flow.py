@@ -274,3 +274,24 @@ def test_project_weldments_nested_or_flat(tmp_path):
     page.set_weld_mode(pid, "nested")
     assert "FLAT, TAB" in texts(weld_cell())
     page.close()
+
+
+def test_unassigned_parts_right_click_assign(tmp_path):
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv, pid = shop()
+    a = M.new_part(name="Loose A", type="manufactured", partNumber="C10-0900")
+    b = M.new_part(name="Loose B", type="manufactured", partNumber="C10-0901")
+    inv.parts += [a, b]
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.goto("projects")
+    from PySide6.QtCore import Qt
+    from PySide6.QtWidgets import QTreeWidget
+    un = [t for t in page.pages["projects"].widget().findChildren(QTreeWidget) if "Right-click" in t.toolTip()]
+    assert un and un[0].contextMenuPolicy() == Qt.CustomContextMenu
+    page.assign_parts([a["id"], b["id"]], pid, qty=2)
+    assert inv.allocation(a, pid)["qty"] == 2 and inv.allocation(b, pid)["qty"] == 2
+    page.close()

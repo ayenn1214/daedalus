@@ -11,9 +11,10 @@ from pathlib import Path
 from PySide6.QtCore import QRectF, QSettings, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QBrush, QColor, QDesktopServices, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QAbstractItemView, QApplication, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
     QHeaderView, QInputDialog, QLabel, QLineEdit, QMessageBox, QPushButton, QScrollArea, QSizePolicy, QSpinBox,
-    QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QMenu, QTabWidget, QTableWidget, QTableWidgetItem, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout,
+    QWidget,
 )
 
 from ..inventory import model as M
@@ -720,7 +721,7 @@ class InventoryPage(QWidget):
         return w, v
 
     # ------------------------------------------------------------- tables
-    def parts_tree(self, parts, actions=True, selectable=False, max_h=None):
+    def parts_tree(self, parts, actions=True, selectable=False, max_h=None, assign_menu=False):
         inv = self.inv
         comp = inv.component_ids()
         cols = (["", ] if selectable else []) + ["Part", "Type", "Project", "Vendor", "Stock", "Level", "Reorder Pt",
@@ -802,6 +803,11 @@ class InventoryPage(QWidget):
         t.itemDoubleClicked.connect(lambda it, _c: self.edit_part(it.data(0, Qt.UserRole)))
         if selectable:
             t.itemChanged.connect(self._sel_changed)
+        if assign_menu:                                   # right-click: assign the selected parts to a project
+            t.setSelectionMode(QAbstractItemView.ExtendedSelection)
+            t.setContextMenuPolicy(Qt.CustomContextMenu)
+            t.customContextMenuRequested.connect(lambda pos, t=t: self._assign_menu(t, pos))
+            t.setToolTip("Right-click to assign to a project (Ctrl / Shift-click to pick several)")
         hdr = t.header()
         hdr.setSectionResizeMode(off, QHeaderView.Stretch)
         for c in range(len(cols)):
@@ -986,7 +992,7 @@ class InventoryPage(QWidget):
         from ..inventory import configs as C
         in_opts = set().union(*[C.option_parts(pr) for pr in inv.projects]) if inv.projects else set()
         un = [p for p in inv.parts if not inv.allocations(p) and p["id"] not in in_opts]
-        v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower())) if un
+        v.addWidget(self.parts_tree(sorted(un, key=lambda p: p["name"].lower()), assign_menu=True) if un
                     else _muted("Every part is assigned to at least one project."))
         arch = inv.archived_projects()
         if arch:
@@ -1020,6 +1026,60 @@ class InventoryPage(QWidget):
         if pid in flat:
             flat.remove(pid)
         self.refresh_current()
+
+    def _assign_menu(self, tree, pos):
+        it = tree.itemAt(pos)
+        if it is not None and not it.isSelected():
+            tree.clearSelection()
+            it.setSelected(True)
+        ids = []
+        for x in tree.selectedItems():
+            pid = x.data(0, Qt.UserRole)
+            if pid and pid not in ids and self.inv.part(pid):
+                ids.append(pid)
+        if not ids:
+            return
+        n = len(ids)
+        m = QMenu(self)
+        sub = m.addMenu(f"Assign {'to project' if n == 1 else f'{n} parts to project'}")
+        for pr in sorted(self.inv.projects, key=lambda p: p.get("order", 0)):
+            if pr.get("archived"):
+                continue
+            sub.addAction(pr["name"], lambda pid=pr["id"]: self.assign_parts(ids, pid))
+        sub.addSeparator()
+        sub.addAction("+ New project…", lambda: self.assign_parts(ids, None))
+        m.addSeparator()
+        m.addAction("Open profile", lambda: self.edit_part(ids[0])).setEnabled(n == 1)
+        m.exec(tree.viewport().mapToGlobal(pos))
+
+    def assign_parts(self, ids, project_id, qty=None):
+        """Put parts on a project at qty per unit (asked once for all of them); None = make a new project."""
+        if project_id is None:
+            name, ok = QInputDialog.getText(self, "New project", "Project name:")
+            if not ok or not name.strip():
+                return
+            project_id = self.inv.find_or_create_project(name.strip())
+        if qty is None:
+            names = ", ".join((self.inv.part(i) or {}).get("partNumber") or (self.inv.part(i) or {}).get("name", "")
+                              for i in ids[:3]) + ("…" if len(ids) > 3 else "")
+            qty, ok = QInputDialog.getInt(self, "Assign to project",
+                                          f"Qty per unit of {self.inv.project_name(project_id)} for {names}:", 1, 1,
+                                          100000)
+            if not ok:
+                return
+        done = []
+        for i in ids:
+            p = self.inv.part(i)
+            if p is not None:
+                self.inv.set_allocation(p, project_id, qty)
+                done.append(p)
+
+        def undo(done=done, pid=project_id):
+            for p in done:
+                self.inv.unassign(p, pid)
+            self.commit("Undone")
+        self.commit(f"Assigned {len(done)} part{'s' if len(done) != 1 else ''} to {self.inv.project_name(project_id)}",
+                    undo=undo)
 
     def toggle_nest(self, pid):
         """Nested ⇄ flat (kept for callers that only know the two)."""
