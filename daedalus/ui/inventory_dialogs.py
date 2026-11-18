@@ -1285,7 +1285,10 @@ company block, Date and P.O. No., Vendor and Ship To boxes, MPN · Description �
 footer notes. Edit any line or add free lines (drilling, freight …); <i>Mark as ordered</i> adds open part orders
 with the PO number. <b>PO settings…</b> holds your company name, address, phone, email, website, logo, ship-to,
 footer and PO numbering (prefix + next number) for the whole team — <i>Fill from a PO PDF…</i> reads them from a PO
-you already have. The vendor box comes from the vendor's address (tick <i>Save to the vendor</i> to keep an edit).</p>
+you already have. The vendor box comes from the vendor's address (tick <i>Save to the vendor</i> to keep an edit).
+The <b>Dashboard</b> shows the company profile with <b>Edit company profile…</b> and <b>Create PO…</b> — a PO for
+any vendor from scratch: <i>+ Part…</i> adds inventory parts (that vendor's first, with its part number and price),
+<i>+ Line</i> a free line.</p>
 
 <h3>Time-Phased · Analytics · Activity Log</h3>
 <ul>

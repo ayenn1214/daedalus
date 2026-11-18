@@ -901,6 +901,7 @@ class InventoryPage(QWidget):
             cv.addWidget(n)
             grid.addWidget(c, i // 3, i % 3)
         v.addLayout(grid)
+        v.addWidget(self._company_card())
         v.addWidget(_section("Low Stock"))
         v.addWidget(self.parts_tree(low[:8], actions=False) if low else _muted("Nothing to reorder."))
         v.addWidget(_section("Recent Activity"))
@@ -908,6 +909,69 @@ class InventoryPage(QWidget):
         v.addWidget(self.log_table(rec) if rec else _muted("No activity logged yet."))
         v.addStretch(1)
         return w
+
+    def _company_card(self):
+        """Dashboard: the company profile (what prints on purchase orders) with Edit and Create PO."""
+        import base64
+
+        from PySide6.QtCore import QByteArray
+        from PySide6.QtGui import QPixmap
+
+        from ..inventory import purchase_order as PO
+        st = PO.settings(self.inv)
+        c = QFrame()
+        c.setObjectName("invcard")
+        c.setStyleSheet(f"#invcard{{background:{theme.PANEL}; border:1px solid {theme.BORDER}; border-radius:8px;}}")
+        h = QHBoxLayout(c)
+        h.setContentsMargins(14, 10, 14, 12)
+        h.setSpacing(16)
+        if st.get("logo"):
+            pm = QPixmap()
+            pm.loadFromData(QByteArray(base64.b64decode(st["logo"])))
+            lg = QLabel()
+            lg.setPixmap(pm.scaledToHeight(48, Qt.SmoothTransformation))
+            h.addWidget(lg, 0, Qt.AlignTop)
+        col = QVBoxLayout()
+        col.setSpacing(2)
+        cap = QLabel("COMPANY PROFILE")
+        cap.setObjectName("h2")
+        col.addWidget(cap)
+        if st.get("companyName"):
+            col.addWidget(QLabel(f"<b>{st['companyName']}</b>"))
+            rest = (st.get("address") or "").splitlines() + [x for x in (st.get("phone"), st.get("email"),
+                                                                           st.get("website")) if x]
+            if rest:
+                col.addWidget(_muted(" · ".join(rest)))
+            nxt = PO.next_number(st)
+            col.addWidget(_muted(f"Purchase orders: next {nxt} · {st.get('currency') or 'CAD'}"
+                                 + (" · footer notes set" if st.get("footer") else "")))
+        else:
+            col.addWidget(_muted("Set your company name, address, logo, ship-to, footer notes and PO numbering — "
+                                 "they print on every purchase order."))
+        h.addLayout(col, 1)
+        bc = QVBoxLayout()
+        bc.addWidget(_btn("Edit company profile…", self.edit_company))
+        bc.addWidget(_btn("Create PO…", self.create_po, "Purchase order for any vendor — add parts or free lines",
+                          primary=True))
+        bc.addStretch(1)
+        h.addLayout(bc)
+        return c
+
+    def edit_company(self):
+        from ..inventory import purchase_order as PO
+        from .po_ui import POSettingsDialog
+        d = POSettingsDialog(self.inv, self)
+        if d.exec() == QDialog.Accepted:
+            PO.save_settings(self.inv, d.value())
+            self.commit("Company profile saved")
+
+    def create_po(self, items=None, vendor=None):
+        from .po_ui import PurchaseOrderDialog
+        if not self.inv.vendors and not items:
+            return self.toast.show_msg("Add a vendor first (Vendors tab)")
+        d = PurchaseOrderDialog(self, items or {}, vendor)
+        d.exec()
+        return d
 
     # ============================================================ projects
     def build_projects(self):

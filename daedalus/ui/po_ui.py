@@ -177,6 +177,10 @@ class PurchaseOrderDialog(QDialog):
         for name in sorted(items_by_vendor, key=lambda x: (x == "No vendor set", x.lower())):
             self.vendor.addItem(f"{name}  ({len(items_by_vendor[name])} line{'s' if len(items_by_vendor[name]) != 1 else ''})",
                                 name)
+        others = sorted((v.get("name") or "" for v in self.inv.vendors
+                         if v.get("name") and v["name"] not in items_by_vendor), key=str.lower)
+        for name in others:                             # any vendor — a PO from scratch (Dashboard)
+            self.vendor.addItem(name, name)
         if vendor:
             i = self.vendor.findData(vendor)
             if i >= 0:
@@ -224,6 +228,10 @@ class PurchaseOrderDialog(QDialog):
         add = QPushButton("+ Line")
         add.setToolTip("A free line (service, drilling, freight …)")
         add.clicked.connect(lambda: self._row({"partId": None, "mpn": "", "description": "", "qty": 1, "rate": 0}))
+        addp = QPushButton("+ Part…")
+        addp.setToolTip("Add a part from the inventory — its vendor part number and price fill in")
+        addp.clicked.connect(self.add_part)
+        tr.addWidget(addp)
         tr.addWidget(add)
         tr.addStretch(1)
         self.total = QLabel()
@@ -308,6 +316,36 @@ class PurchaseOrderDialog(QDialog):
         self.table.setCellWidget(r, 4, x)
         self.table.setRowHeight(r, 48)
         self._total()
+
+    def part_choices(self) -> list:
+        """Parts for + Part…: this vendor's parts first, then the rest (label, id)."""
+        name = (self.vendor.currentData() or "").lower()
+        mine, rest = [], []
+        for p in self.inv.parts:
+            if p.get("discontinued"):
+                continue
+            lab = M.label(p)
+            (mine if any((x.get("name") or "").lower() == name for x in self.inv.suppliers(p)) else rest).append(
+                (lab, p["id"]))
+        return sorted(mine) + sorted(rest)
+
+    def add_part(self, pid=None, qty=1):
+        if pid is None:
+            from PySide6.QtWidgets import QInputDialog
+            ch = self.part_choices()
+            if not ch:
+                return
+            lab, ok = QInputDialog.getItem(self, "Add part", "Part (this vendor's parts first)", [c[0] for c in ch],
+                                           0, True)
+            if not ok:
+                return
+            pid = next((i for l_, i in ch if l_ == lab), None)
+            if pid is None:
+                return
+        p = self.inv.part(pid)
+        if p is not None:
+            for ln in P.lines_from_parts(self.inv, [(p, qty)], self.vendor.currentData() or ""):
+                self._row(ln)
 
     def _remove(self, btn):
         for r in range(self.table.rowCount()):

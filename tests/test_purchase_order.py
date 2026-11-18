@@ -125,3 +125,39 @@ def test_po_dialog_from_buy_list(tmp_path, monkeypatch):
     assert len(o) == 2 and P.settings(page.inv)["nextPo"] == 1002
     assert P.file_name(P.settings(page.inv), "Acme Fab", "PO-1001", "Vacuum System", "2026-11-17") == \
         "261117_Acme_Fab_Widget_PO_PO-1001_Vacuum_System.pdf"
+
+
+def test_dashboard_company_profile_and_po_from_scratch(tmp_path):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication, QLabel, QPushButton
+    app = QApplication.instance() or QApplication([])
+    from daedalus.inventory.store import InventoryStore
+    from daedalus.ui import po_ui as PU
+    from daedalus.ui.inventory_ui import InventoryPage
+    inv = sample()
+    inv.vendors.append({"id": "v2", "name": "Bolt Bros"})
+    st = InventoryStore(tmp_path / "inv.json")
+    st.inv = inv
+    st.save()
+    page = InventoryPage(st, lite=True)
+    page.goto("dashboard")
+    app.processEvents()
+    w = page.pages["dashboard"].widget()
+    labels = " ".join(l.text() for l in w.findChildren(QLabel))
+    assert "COMPANY PROFILE" in labels and "Set your company name" in labels
+    btns = {b.text() for b in w.findChildren(QPushButton)}
+    assert {"Edit company profile…", "Create PO…"} <= btns
+    P.save_settings(page.inv, {**P.settings(page.inv), "companyName": "Widget Co", "address": "1 Way"})
+    page.commit()
+    app.processEvents()
+    labels = " ".join(l.text() for l in page.pages["dashboard"].widget().findChildren(QLabel))
+    assert "Widget Co" in labels and "next PO-1001" in labels
+    # PO from scratch: every vendor to pick, parts added by hand (that vendor's first)
+    d = PU.PurchaseOrderDialog(page, {}, None)
+    names = [d.vendor.itemData(i) for i in range(d.vendor.count())]
+    assert names == ["Acme Fab", "Bolt Bros"] and d.table.rowCount() == 0
+    assert [c[1] for c in d.part_choices()][:2] == ["b", "a"] or {c[1] for c in d.part_choices()[:2]} == {"a", "b"}
+    d.add_part("a", 4)
+    assert d.table.rowCount() == 1 and d.table.item(0, 0).text() == "AF-77" and d.total.text().endswith("CAD 50.00")
+    d.vendor.setCurrentIndex(1)                               # another vendor → its (empty) lines
+    assert d.table.rowCount() == 0 and d.vblock.toPlainText() == "Bolt Bros"
