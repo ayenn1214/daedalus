@@ -36,6 +36,18 @@ def _q(v) -> str:
     return urllib.parse.quote(str(v), safe="")
 
 
+def _local_day(at) -> str:
+    """The server's UTC timestamp as this PC's calendar day (an evening change in Vancouver is already the next
+    day in UTC)."""
+    import datetime as dt
+    t = str(at or "")
+    try:
+        from .chat import ts_ms
+        return dt.datetime.fromtimestamp(ts_ms(t) / 1000).date().isoformat()
+    except Exception:  # noqa: BLE001
+        return t[:10]
+
+
 class SupabaseRowStore(SupabaseStore):
     layout = "rows"
 
@@ -589,7 +601,7 @@ class SupabaseRowStore(SupabaseStore):
         for r in rows:
             old = (r.get("old") or {}).get(field)
             if old != value and r.get("record_id") not in out:
-                out[r["record_id"]] = str(r.get("at") or "")[:10]
+                out[r["record_id"]] = _local_day(r.get("at"))
         return out
 
     def people(self) -> list[dict]:

@@ -432,7 +432,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
-| **3.0.35** | Projects: parts inside a project part's BOM (weldment pieces, sub-weldments, assembly parts — any depth) are on that project; a weldment used by several projects is the same part on all of them · Unassigned lists only parts on no project · project column and filters follow · demand unchanged |
+| **3.0.35** | Projects: parts inside a project part's BOM (weldment pieces, sub-weldments, assembly parts — any depth) are on that project; a weldment used by several projects is the same part on all of them · Unassigned lists only parts on no project · project column and filters follow · demand unchanged · Fix: production completion dates use your local day (evening completions were dated the next day) |
 | **3.0.34** | Parts ▸ Components (renamed from Parts): the Sort box works again (it could crash the page), and clicking a column header sorts by it (numbers by value) |
 | **3.0.33** | Speed: team-server saves go up in the background (several records at once, kept-open connections) so the window never waits for the server · lookups worked out once per page build · Parts sub-tabs built when opened · the Shift-click link check only runs while DIMS is on screen · Fix: table rows no longer stay extra tall |
 | **3.0.32** | Dashboard: company profile card — Edit company profile… and Create PO… for any vendor (+ Part… adds inventory parts with the vendor's part number and price, + Line for free lines) · Part profile: 3D view is a compact panel beside the top of the form (View ▾ / Orient ▾) |
