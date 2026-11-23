@@ -221,35 +221,8 @@ class ResultOverlay:
         self.vp.apply_display_mode()
 
     def _streamlines(self, res, lut, lo, hi):
-        img = vtk.vtkImageData()
+        st = trace_streamlines(res)
         perm, sign = res.axes
-        nx, ny, nz = res.shape
-        # image data in world axes needs grid axes == world axes; build it in grid space then transform
-        img.SetDimensions(nx, ny, nz)
-        img.SetSpacing(res.spacing, res.spacing, res.spacing)
-        vel_grid = np.stack([res.velocity[perm[k]] * sign[k] for k in range(3)])     # grid-axis comps
-        V = np.ascontiguousarray(vel_grid.transpose(3, 2, 1, 0).reshape(-1, 3).astype(float))
-        va = numpy_to_vtk(V, deep=True)
-        va.SetName("vel")
-        img.GetPointData().SetVectors(va)
-        sp = np.ascontiguousarray(np.linalg.norm(V, axis=1))
-        sa = numpy_to_vtk(sp, deep=True)
-        sa.SetName("speed")
-        img.GetPointData().AddArray(sa)
-        seeds = vtk.vtkPointSource()
-        seeds.SetCenter(res.spacing * 2, res.spacing * ny / 2, res.spacing * nz / 2)
-        seeds.SetRadius(res.spacing * min(ny, nz) * 0.3)
-        seeds.SetNumberOfPoints(160)
-        if res.summary.get("mode") == "internal":
-            seeds.SetRadius(res.spacing * min(ny, nz) * 0.45)
-        st = vtk.vtkStreamTracer()
-        st.SetInputData(img)
-        st.SetSourceConnection(seeds.GetOutputPort())
-        st.SetMaximumPropagation(res.spacing * nx * 2)
-        st.SetIntegrationDirectionToForward()
-        st.SetIntegratorTypeToRungeKutta45()
-        st.SetInitialIntegrationStep(0.3)
-        st.Update()
         m = vtk.vtkPolyDataMapper()
         m.SetInputConnection(st.GetOutputPort())
         if lut is not None:
@@ -283,3 +256,48 @@ class ResultOverlay:
         self._pd = None
         self.vp.result_hidden = set()
         self.vp.apply_display_mode()
+
+
+def trace_streamlines(res, n=160):
+    """Streamlines of a flow result, in grid space (the actor's matrix places them). They start at the inlet:
+    the cells just inside the chosen inlet opening, or the inlet plane of an end-to-end / external flow."""
+    img = vtk.vtkImageData()
+    perm, sign = res.axes
+    nx, ny, nz = res.shape
+    img.SetDimensions(nx, ny, nz)
+    img.SetSpacing(res.spacing, res.spacing, res.spacing)
+    vel_grid = np.stack([res.velocity[perm[k]] * sign[k] for k in range(3)])     # grid-axis components
+    V = np.ascontiguousarray(vel_grid.transpose(3, 2, 1, 0).reshape(-1, 3).astype(float))
+    va = numpy_to_vtk(V, deep=True)
+    va.SetName("vel")
+    img.GetPointData().SetVectors(va)
+    sp = np.ascontiguousarray(np.linalg.norm(V, axis=1))
+    sa = numpy_to_vtk(sp, deep=True)
+    sa.SetName("speed")
+    img.GetPointData().AddArray(sa)
+    seeds_at = getattr(res, "seeds", None)
+    st = vtk.vtkStreamTracer()
+    st.SetInputData(img)
+    if seeds_at is not None and len(seeds_at):
+        g = np.asarray(seeds_at, float)
+        if len(g) > n:
+            g = g[np.linspace(0, len(g) - 1, n).astype(int)]
+        pts = vtk.vtkPoints()
+        pts.SetData(numpy_to_vtk(np.ascontiguousarray(g * res.spacing), deep=True))
+        pd = vtk.vtkPolyData()
+        pd.SetPoints(pts)
+        st.SetSourceData(pd)
+        st.SetMaximumPropagation(res.spacing * (nx + ny + nz) * 3)
+    else:
+        seeds = vtk.vtkPointSource()
+        seeds.SetCenter(res.spacing * 2, res.spacing * ny / 2, res.spacing * nz / 2)
+        seeds.SetRadius(res.spacing * min(ny, nz) * (0.45 if res.summary.get("mode") == "internal" else 0.3))
+        seeds.SetNumberOfPoints(n)
+        st.SetSourceConnection(seeds.GetOutputPort())
+        st.SetMaximumPropagation(res.spacing * nx * 2)
+    st.SetIntegrationDirectionToForward()
+    st.SetIntegratorTypeToRungeKutta45()
+    st.SetInitialIntegrationStep(0.3)
+    st.SetMaximumNumberOfSteps(4000)
+    st.Update()
+    return st

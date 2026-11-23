@@ -134,6 +134,9 @@ def test_flow_openings_and_inlet_at_a_side_port():
     assert s["pressure_drop_Pa"] > 0
     vy = r.velocity[1][np.isfinite(r.pressure)]
     assert vy.max() > 0.5 * U                                                              # flows in along +Y
+    from daedalus.ui.result_view import trace_streamlines
+    lines = trace_streamlines(r).GetOutput()                    # they start at the side port, not the X end
+    assert len(r.seeds) and lines.GetNumberOfLines() >= 10 and lines.GetNumberOfPoints() > 200
     # one outlet only: the other end is a wall
     top = ends[1]
     r2 = cfd.run({"Tee": tee}, {"fluid": "water", "velocity": U, "inlet": "smallest",

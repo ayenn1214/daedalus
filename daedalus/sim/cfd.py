@@ -755,6 +755,9 @@ def _run_ports(bodies, study, progress, cancel, t0):
     res = FlowResult(study.get("name", "Flow"), dlo.copy(), dx, ([0, 1, 2], [1, 1, 1]), (nx, ny, nz), solid_in,
                      vel, p.astype(np.float32), summary, curves, notes)
     res.openings = [{k: v for k, v in o.items() if not k.startswith("_")} for o in ops]
+    # streamline seeds: the fluid cells just inside the inlet, a little in from the walls
+    sd = pin_nb.astype(float) + 0.5 * n_in
+    res.seeds = sd[~(solid_in[tuple(pin_nb.T)] > 0)]
     res.ms = (time.perf_counter() - t0) * 1000
     return res
 
