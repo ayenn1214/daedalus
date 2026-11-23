@@ -10,7 +10,9 @@ import html
 import json
 import os
 
-from PySide6.QtCore import QObject, QSettings, Qt, QThread, Signal, Slot
+import time
+
+from PySide6.QtCore import QObject, QSettings, Qt, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QInputDialog, QLabel, QLineEdit, QPlainTextEdit, QPushButton,
     QTextBrowser, QVBoxLayout, QWidget,
@@ -53,6 +55,7 @@ class _Worker(QThread):
     text = Signal(str)
     tool = Signal(str, str, str, bool)
     failed = Signal(str)
+    progress = Signal(str)                            # what the model is doing now ('!…' = a tip for the chat)
 
     def __init__(self, copilot, prompt, state, bridge, images=None, documents=None):
         super().__init__()
@@ -70,11 +73,12 @@ class _Worker(QThread):
     def run(self):
         self.copilot.call_tool = self._call
         try:
+            extra = {"on_status": self.progress.emit} if getattr(self.copilot, "supports_status", False) else {}
             self.copilot.ask(
                 self.prompt, self.state,
                 on_text=self.text.emit,
                 on_tool=lambda n, a, r, e: self.tool.emit(n, json.dumps(a), r, e),
-                images=self.images, documents=self.documents,
+                images=self.images, documents=self.documents, **extra,
             )
         except Exception as e:  # noqa: BLE001
             if not self.killed:
@@ -489,12 +493,35 @@ class CopilotPanel(QWidget):
         self.worker.text.connect(lambda t: self._append(who, html.escape(t).replace("\n", "<br>")))
         self.worker.tool.connect(self._on_tool)
         self.worker.failed.connect(lambda e: self._append("Error", html.escape(e), theme.ERROR))
+        self.worker.progress.connect(self._on_progress)
         self.worker.finished.connect(self._done)
         self.send_btn.setEnabled(False)
         self.stop_btn.setEnabled(True)
         self.kill_btn.setEnabled(True)
-        self.status.setText("Working…")
+        self._phase, self._t0 = "Working…", time.monotonic()
+        if not hasattr(self, "_tick"):
+            self._tick = QTimer(self)
+            self._tick.setInterval(1000)
+            self._tick.timeout.connect(self._show_phase)
+        self._tick.start()
+        self._show_phase()
         self.worker.start()
+
+    def _on_progress(self, text):
+        if text.startswith("!"):                      # a tip, e.g. the model doesn't fit on the graphics card
+            self._append("Icarus", html.escape(text[1:]), theme.WARN)
+            return
+        self._phase = text
+        self._show_phase()
+
+    def _show_phase(self):
+        """'Waiting for qwen2.5:14b … · 42 s' — so a slow local model doesn't look like a frozen one."""
+        if self.worker is None or not self.worker.isRunning():
+            if hasattr(self, "_tick"):
+                self._tick.stop()
+            return
+        secs = int(time.monotonic() - getattr(self, "_t0", time.monotonic()))
+        self.status.setText(f"{self._phase} · {secs} s" if secs >= 2 else self._phase)
 
     def send(self):
         prompt = self.input.toPlainText().strip()
@@ -567,7 +594,7 @@ class CopilotPanel(QWidget):
         self._verify_rounds = 0
         if w is not None and w.isRunning():
             w.killed = True
-            for sig in (w.text, w.tool, w.failed, w.finished):
+            for sig in (w.text, w.tool, w.failed, w.finished, w.progress):
                 try:
                     sig.disconnect()
                 except (RuntimeError, TypeError):
@@ -588,6 +615,8 @@ class CopilotPanel(QWidget):
         self._append("Icarus", "Stopped. Anything already done stays (Ctrl+Z to undo a model change).", theme.MUTED)
 
     def _done(self):
+        if hasattr(self, "_tick"):
+            self._tick.stop()
         stopped = self.copilot is not None and self.copilot._stop
         if self._verify_rounds > 0 and not stopped and self.doc is not None and self.doc.result.body is not None:
             self._verify_rounds -= 1

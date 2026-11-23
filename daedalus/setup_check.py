@@ -151,11 +151,39 @@ def ram_gb() -> float | None:
     return None
 
 
-def recommended_model(ram: float | None = None) -> str:
+# (minimum graphics-card memory GB, model): a model that doesn't fit on the card runs partly on the CPU — many
+# times slower (a 14b with Icarus's long prompt then takes minutes per reply)
+MODEL_BY_VRAM = [(12, "qwen2.5:14b"), (6, "qwen2.5:7b"), (0, "qwen2.5:3b")]
+
+
+def vram_gb() -> float | None:
+    """Biggest NVIDIA card's memory in GB (None when there's no NVIDIA card / driver tool)."""
+    exe = shutil.which("nvidia-smi")
+    if not exe and sys.platform == "win32":
+        p = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32" / "nvidia-smi.exe"
+        exe = str(p) if p.exists() else None
+    if not exe:
+        return None
+    try:
+        out = subprocess.run([exe, "--query-gpu=memory.total", "--format=csv,noheader,nounits"], capture_output=True,
+                             text=True, timeout=8, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+        vals = [float(x) for x in out.split() if x.replace(".", "", 1).isdigit()]
+        return max(vals) / 1024 if vals else None
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+
+
+def recommended_model(ram: float | None = None, vram: float | None = -1) -> str:
+    """With an NVIDIA card: what fits on it. Without one (vram 0 / None): at most a 7b — on the CPU a 14b answers
+    far too slowly. vram=-1 → look it up."""
     ram = ram_gb() if ram is None else ram
-    if ram is None:
-        return MODEL_BY_RAM[0][1]
-    return next(m for need, m in MODEL_BY_RAM if ram >= need)
+    vram = vram_gb() if vram == -1 else vram
+    by_ram = MODEL_BY_RAM[0][1] if ram is None else next(m for need, m in MODEL_BY_RAM if ram >= need)
+    if vram:
+        by_card = next(m for need, m in MODEL_BY_VRAM if vram >= need)
+        order = [m for _n, m in MODEL_BY_RAM]                 # biggest first: the smaller of the two wins
+        return max(by_ram, by_card, key=order.index)
+    return by_ram if by_ram != "qwen2.5:14b" else "qwen2.5:7b"
 
 
 def ollama_exe() -> str | None:
@@ -228,10 +256,14 @@ def check_agent(rep: Report | None = None, host: str | None = None, model: str |
     g = "Icarus agent"
     h0, m0 = agent_config()
     host, model = host or h0, model or m0
-    ram = ram_gb()
-    rec = recommended_model(ram)
-    rep.add(g, "Memory", None, (f"{ram:.0f} GB RAM — recommended model {rec}" if ram else
+    ram, vram = ram_gb(), vram_gb()
+    rec = recommended_model(ram, vram)
+    card = f", {vram:.0f} GB graphics card" if vram else ", no NVIDIA card (runs on the CPU)"
+    rep.add(g, "Memory", None, (f"{ram:.0f} GB RAM{card} — recommended model {rec}" if ram else
                                 f"unknown — recommended model {rec}"), required=False)
+    if model == "qwen2.5:14b" and rec != model:
+        rep.add(g, "Model size", False, f"{model} is too big for this PC — replies take minutes (or seem stuck)",
+                fix=f"Pick {rec} in Icarus (model box), or: ollama pull {rec}", required=False)
     exe = ollama_exe()
     local = host.startswith(("http://127.0.0.1", "http://localhost"))
     if local:

@@ -377,9 +377,11 @@ def test_setup_check_agent_offline_and_online(tmp_path):
 def test_recommended_model_and_defaults():
     from daedalus import setup_check as SC
     from daedalus.ai import ollama
-    assert SC.recommended_model(32) == "qwen2.5:14b"
-    assert SC.recommended_model(16) == "qwen2.5:7b"
-    assert SC.recommended_model(8) == "qwen2.5:3b"
+    assert SC.recommended_model(32, vram=16) == "qwen2.5:14b"
+    assert SC.recommended_model(32, vram=8) == "qwen2.5:7b"          # 14b wouldn't fit on an 8 GB card
+    assert SC.recommended_model(32, vram=None) == "qwen2.5:7b"       # CPU only: a 14b is far too slow
+    assert SC.recommended_model(16, vram=24) == "qwen2.5:7b"
+    assert SC.recommended_model(8, vram=None) == "qwen2.5:3b"
     assert SC.DEFAULT_HOST == ollama.DEFAULT_HOST and SC.DEFAULT_MODEL == ollama.DEFAULT_MODEL
     assert SC.normalize_host("0.0.0.0") == ollama.normalize_host("0.0.0.0")
 

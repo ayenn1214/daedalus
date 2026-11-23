@@ -180,7 +180,20 @@ function Pick-Model {
     if ($Model) { return $Model }
     $gb = [math]::Round((Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory / 1GB)
     if ($gb -ge 24) { $m = "qwen2.5:14b" } elseif ($gb -ge 12) { $m = "qwen2.5:7b" } else { $m = "qwen2.5:3b" }
-    Say "  $gb GB RAM -> model $m (use -Model to choose another)" DarkGray
+    # the model has to fit on the graphics card, or it runs on the CPU and replies take minutes
+    $vram = 0
+    try {
+        $smi = Get-Command nvidia-smi -ErrorAction SilentlyContinue
+        if ($smi) { $vram = [math]::Round(((& $smi.Source --query-gpu=memory.total --format=csv,noheader,nounits) |
+                                           Measure-Object -Maximum).Maximum / 1024) }
+    } catch { $vram = 0 }
+    if ($vram -gt 0) {
+        if ($vram -lt 6) { $m = "qwen2.5:3b" } elseif ($vram -lt 12 -and $m -eq "qwen2.5:14b") { $m = "qwen2.5:7b" }
+        Say "  $gb GB RAM, $vram GB graphics card -> model $m (use -Model to choose another)" DarkGray
+    } else {
+        if ($m -eq "qwen2.5:14b") { $m = "qwen2.5:7b" }
+        Say "  $gb GB RAM, no NVIDIA card -> model $m (use -Model to choose another)" DarkGray
+    }
     return $m
 }
 
