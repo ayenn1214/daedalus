@@ -142,3 +142,20 @@ def test_real_window_pages(clean):
         d.nav.setCurrentRow(i)
     text = " ".join(l.text() for l in d.findChildren(S.QLabel))
     assert "Couldn't show this part" not in text
+
+
+def test_material_dialog_values_visible(qapp):
+    """Read-only property boxes once showed blank (NoButtons squeezed the text to 1 px under the app stylesheet)."""
+    from daedalus.core.document import Document
+    from daedalus.ui import theme
+    from daedalus.ui.materials_ui import MaterialDialog
+    qapp.setStyleSheet(theme.QSS)
+    d = MaterialDialog(Document())
+    d._select("Titanium Ti-6Al-4V (annealed)")
+    d.resize(660, 560)
+    d.show()
+    qapp.processEvents()
+    sp = d.spins["yield_"]
+    assert sp.value() == 880 and sp.isReadOnly() and sp.lineEdit().width() > 50
+    qapp.setStyleSheet("")
+    d.close()

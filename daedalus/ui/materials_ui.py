@@ -159,8 +159,7 @@ class MaterialDialog(QDialog):
     def _set_editing(self, on):
         self._editing = on
         for sp in self.spins.values():
-            sp.setReadOnly(not on)
-            sp.setButtonSymbols(QDoubleSpinBox.UpDownArrows if on else QDoubleSpinBox.NoButtons)
+            sp.setReadOnly(not on)          # NoButtons + the app stylesheet squeezes the text to 1 px: keep the arrows
         self.ductile.setEnabled(on)
         self.endurance.setEnabled(on)
         self.name_edit.setVisible(on)
