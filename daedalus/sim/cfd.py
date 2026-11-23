@@ -4,6 +4,9 @@ External flow: parts sit in a wind/water tunnel (far-field velocity on the tunne
   drag & lift forces and coefficients, velocity and pressure fields.
 Internal flow: fluid fills the passages of the parts between an inlet plane and an outlet plane
   (both at the ends of the parts' bounding box along the flow axis) → pressure drop, flow rate.
+  Or between openings you choose (inlet = a point near an opening, e.g. a side port; outlets = other openings or
+  all the rest): openings() finds every opening of the part's passages, the flow enters through the inlet
+  normal to it and leaves through the outlets → pressure drop, flow rate and the split between outlets.
 
 Incompressible, isothermal. Above Re ≈ 1000 the Smagorinsky sub-grid model stands in for turbulence
 (large-eddy simulation); coefficients are then averaged over the last part of the run.
@@ -324,6 +327,438 @@ def _kernels():
 
 # -------------------------------------------------------------------- run ---
 
+# ------------------------------------------------------------- openings ---
+
+def _surface_cells(V, T, dx, nx, ny, nz):
+    """Cells the surface passes through (V in grid units): keeps walls thinner than a cell watertight."""
+    A, B, Cc = V[T[:, 0]], V[T[:, 1]], V[T[:, 2]]
+    P = np.stack([A, B, Cc], 1)                                   # (t, 3 vertices, 3)
+    e = np.stack([np.linalg.norm(B - Cc, axis=1), np.linalg.norm(Cc - A, axis=1),
+                  np.linalg.norm(A - B, axis=1)], 1)               # edge k is opposite vertex k
+    k = 3 - np.argmax(e, 1) - np.argmin(e, 1)                      # vertex between the longest and shortest edge
+    k = np.where(np.argmax(e, 1) == np.argmin(e, 1), 0, k)
+    t = np.arange(len(T))
+    O = P[t, k]
+    P1, P2 = P[t, (k + 1) % 3], P[t, (k + 2) % 3]
+    n1 = np.ceil(np.linalg.norm(P1 - O, axis=1) / 0.5).astype(np.int64) + 1   # half-cell steps
+    n2 = np.ceil(np.linalg.norm(P2 - O, axis=1) / 0.5).astype(np.int64) + 1
+    out = np.zeros((nx, ny, nz), bool)
+    cnt = (n1 + 1) * (n2 + 1)
+    order = np.argsort(cnt)
+    chunk, acc = [], 0
+    for ti in list(order) + [None]:
+        if ti is not None:
+            chunk.append(ti)
+            acc += cnt[ti]
+        if chunk and (ti is None or acc > 4_000_000):
+            ids = np.array(chunk)
+            c = cnt[ids]
+            tid = np.repeat(ids, c)
+            loc = np.arange(c.sum()) - np.repeat(np.cumsum(c) - c, c)
+            i = loc // (n2[tid] + 1)
+            j = loc % (n2[tid] + 1)
+            u, v = i / n1[tid], j / n2[tid]
+            m = u + v <= 1.0 + 1e-9
+            pts = O[tid[m]] + u[m, None] * (P1 - O)[tid[m]] + v[m, None] * (P2 - O)[tid[m]]
+            g = np.rint(pts).astype(np.int64)
+            g = g[(g >= 0).all(1) & (g[:, 0] < nx) & (g[:, 1] < ny) & (g[:, 2] < nz)]
+            out[g[:, 0], g[:, 1], g[:, 2]] = True
+            chunk, acc = [], 0
+    return out
+
+
+def _world_grid(bodies: dict, dx: float, pad: int = 3):
+    """Parts voxelized on a world-aligned grid (solid id per cell, surface cells included)."""
+    names = list(bodies)
+    lo = np.full(3, np.inf)
+    hi = np.full(3, -np.inf)
+    tris = []
+    for n in names:
+        b = bodies[n]
+        V, T = _tris_of(b, max(0.05, b.bounding_box().diagonal * 0.002))
+        lo, hi = np.minimum(lo, V.min(0)), np.maximum(hi, V.max(0))
+        tris.append((V, T))
+    dlo = lo - pad * dx
+    dims = np.ceil((hi + pad * dx - dlo) / dx).astype(int) + 1
+    nx, ny, nz = map(int, dims)
+    solid = np.zeros((nx, ny, nz), np.uint8)
+    for k, (V, T) in enumerate(tris):
+        G = (V - dlo) / dx
+        ins = _voxelize(G, T, nx, ny, nz) | _surface_cells(G, T, dx, nx, ny, nz)
+        solid[ins & (solid == 0)] = k + 1
+    return names, dlo, solid
+
+
+def _shift2(a, d1, d2):
+    """out[y, z] = a[y + d1, z + d2] (0 outside)."""
+    out = np.zeros_like(a)
+    ny, nz = a.shape
+    ys, yd = (slice(d1, None), slice(0, ny - d1)) if d1 >= 0 else (slice(0, ny + d1), slice(-d1, None))
+    zs, zd = (slice(d2, None), slice(0, nz - d2)) if d2 >= 0 else (slice(0, nz + d2), slice(-d2, None))
+    out[yd, zd] = a[ys, zs]
+    return out
+
+
+def _hits(filled, d):
+    """True where a ray from the cell along d meets solid before leaving the grid."""
+    a = int(np.flatnonzero(d)[0])
+    f = np.moveaxis(filled, a, 0)
+    o = [k for k in range(3) if k != a]
+    step, s1, s2 = int(d[a]), int(d[o[0]]), int(d[o[1]])
+    H = np.zeros_like(f)
+    n = f.shape[0]
+    for i in (range(n - 2, -1, -1) if step > 0 else range(1, n)):
+        H[i] = _shift2(f[i + step] | H[i + step], s1, s2)       # H[i][y, z] = (f | H)[i + step][y + s1, z + s2]
+    return np.moveaxis(H, 0, a)
+
+
+_D26 = [np.array((i, j, k)) for i in (-1, 0, 1) for j in (-1, 0, 1) for k in (-1, 0, 1) if (i, j, k) != (0, 0, 0)]
+
+
+def _enclosed(solid):
+    """Empty cells inside the parts (a passage, bore or port — not the air around the part): walled in both
+    ways along two of the three axes, or by at least half of the 26 directions (a bore seen through a side port)."""
+    filled = solid > 0
+    pairs = np.zeros(filled.shape, np.int8)
+    for ax in range(3):
+        c = np.cumsum(filled, axis=ax, dtype=np.int32)
+        tot = np.take(c, [-1], axis=ax)
+        pairs += ((tot - c) > 0) & ((c - filled) > 0)
+    hit = np.zeros(filled.shape, np.int8)
+    for d in _D26:
+        hit += _hits(filled, d)
+    return ~filled & ((pairs >= 2) | (hit >= 13))
+
+
+_N6 = [np.array(v) for v in ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))]
+
+
+def _find_openings(solid, dlo, dx, min_cells=8):
+    """Openings of the passages: the layer of outside cells against each mouth.
+    Returns (component labels of the passages, [opening dicts with grid cells])."""
+    from scipy import ndimage
+    inner = _enclosed(solid)
+    lab, n = ndimage.label(inner)
+    if not n:
+        return lab, []
+    outside = (solid == 0) & ~inner
+    sh = np.array(solid.shape)
+    port = np.zeros(solid.shape, bool)
+    pairs = []
+    idx = np.argwhere(inner)
+    for d in _N6:
+        q = idx + d
+        ok = ((q >= 0) & (q < sh)).all(1)
+        a, b = idx[ok], q[ok]
+        m = outside[b[:, 0], b[:, 1], b[:, 2]]
+        a, b = a[m], b[m]
+        port[b[:, 0], b[:, 1], b[:, 2]] = True
+        pairs.append((a, b, d))
+    plab, pn = ndimage.label(port, structure=np.ones((3, 3, 3)))
+    out = []
+    for k in range(1, pn + 1):
+        cells = np.argwhere(plab == k)
+        if len(cells) < min_cells:
+            continue
+        inn, outc, comp = [], [], []
+        nsum = np.zeros(3)
+        for a, b, d in pairs:
+            m = plab[b[:, 0], b[:, 1], b[:, 2]] == k
+            if m.any():
+                inn.append(a[m])
+                outc.append(b[m])
+                nsum += d * m.sum()
+                comp.append(lab[a[m, 0], a[m, 1], a[m, 2]])
+        inn, outc, comp = np.concatenate(inn), np.concatenate(outc), np.concatenate(comp)
+        nrm = nsum / max(np.linalg.norm(nsum), 1e-9)
+        ax = int(np.argmax(np.abs(nrm)))
+        axial = (outc - inn)[:, ax] != 0
+        area = float(len(np.unique(outc[axial][:, [a_ for a_ in range(3) if a_ != ax]], axis=0))) * dx * dx
+        cen = dlo + cells.mean(0) * dx
+        out.append({"center": [round(float(v), 2) for v in cen], "normal": [round(float(v), 3) for v in nrm],
+                    "area_mm2": round(area, 1), "diameter_mm": round(math.sqrt(4 * area / math.pi), 1),
+                    "component": int(np.bincount(comp).argmax()), "_cells": outc, "_inner": inn})
+    # a passage needs a way in and a way out: drop pockets, grooves and stray cells with a single mouth
+    vol = np.bincount(lab.ravel())
+    big = vol[1:].max() if n else 0
+    per = {}
+    for o in out:
+        per[o["component"]] = per.get(o["component"], 0) + 1
+    out = [o for o in out if per[o["component"]] >= 2 and vol[o["component"]] >= 0.02 * big]
+    out.sort(key=lambda o: -o["area_mm2"])
+    for i, o in enumerate(out):
+        o["id"] = i + 1
+        o["label"] = _opening_label(o)
+    return lab, out
+
+
+def _opening_label(o):
+    ax = int(np.argmax(np.abs(o["normal"])))
+    side = ("+" if o["normal"][ax] > 0 else "-") + "XYZ"[ax]
+    return f"Opening {o['id']} · Ø{o['diameter_mm']:g} mm facing {side} at ({', '.join(f'{v:g}' for v in o['center'])})"
+
+
+def openings(bodies: dict, resolution: float = 20, max_cells: float = 3e6) -> list[dict]:
+    """Every opening of the parts' passages: id, label, center (mm), outward normal, area, diameter — pick the
+    inlet (and outlets) of an internal flow study from these."""
+    if not bodies:
+        return []
+    size = max(b.bounding_box().size.X for b in bodies.values()), \
+        max(b.bounding_box().size.Y for b in bodies.values()), max(b.bounding_box().size.Z for b in bodies.values())
+    dx = max(size) / 80.0
+    while np.prod(np.array(size) / dx + 8) > max_cells:
+        dx *= 1.15
+    _names, dlo, solid = _world_grid(bodies, dx)
+    _lab, ops = _find_openings(solid, dlo, dx)
+    return [{k: v for k, v in o.items() if not k.startswith("_")} for o in ops]
+
+
+def _point(s):
+    if isinstance(s, (list, tuple)):
+        return np.array(s, float)
+    try:
+        v = [float(x) for x in str(s).replace(";", ",").split(",") if x.strip()]
+    except ValueError:
+        v = []
+    if len(v) != 3:
+        raise FlowError(f"“{s}” isn't a point — give x, y, z in mm (near the opening)")
+    return np.array(v)
+
+
+def _nearest(ops, p):
+    """An opening by its label (“Opening 3 · Ø34 mm facing -Y at (0, -68.6, 44.4)” — the point is what counts,
+    numbering can change with the grid), “Opening 3”, or a point x, y, z near it."""
+    import re
+    if isinstance(p, str):
+        m = re.search(r"\(([-\d.eE+]+),\s*([-\d.eE+]+),\s*([-\d.eE+]+)\)", p)
+        if m:
+            p = ",".join(m.groups())
+        elif p.strip().lower().startswith("opening"):
+            k = re.search(r"\d+", p)
+            o = next((o for o in ops if k and o["id"] == int(k.group())), None)
+            if o is None:
+                raise FlowError(f"No {p.strip()} on this passage")
+            return o
+    p = _point(p)
+    d = [np.linalg.norm(np.array(o["center"]) - p) for o in ops]
+    return ops[int(np.argmin(d))]
+
+
+def _pick_openings(ops, inlet, outlets):
+    if not ops:
+        raise FlowError("No openings found — the flow needs a passage that opens to the outside")
+    key = str(inlet).strip().lower()
+    if key in ("smallest", "largest"):
+        src = min(ops, key=lambda o: o["area_mm2"]) if key == "smallest" else ops[0]
+    else:
+        src = _nearest(ops, str(inlet))
+    same = [o for o in ops if o["component"] == src["component"] and o is not src]
+    if str(outlets or "").strip():
+        outs = []
+        for part in str(outlets).split(";"):
+            if part.strip():
+                o = _nearest(same, part) if same else None
+                if o is not None and o not in outs:
+                    outs.append(o)
+    else:
+        outs = same
+    if not outs:
+        raise FlowError("The inlet's passage has no other opening — choose an outlet")
+    return src, outs
+
+
+def _port_kernel():
+    global _PK
+    if "_PK" in globals():
+        return _PK
+    from numba import njit
+    Cx, Cy, Cz = C[:, 0].astype(np.float64), C[:, 1].astype(np.float64), C[:, 2].astype(np.float64)
+    Wq = W.copy()
+
+    @njit(cache=True)
+    def ports(f, pin, pin_nb, ux, uy, uz, pout, pout_nb):
+        for k in range(pin.shape[0]):
+            x, y, z = pin[k, 0], pin[k, 1], pin[k, 2]
+            a, b, c = pin_nb[k, 0], pin_nb[k, 1], pin_nb[k, 2]
+            r = 0.0
+            for i in range(19):
+                r += f[i, a, b, c]
+            usq = 1.5 * (ux * ux + uy * uy + uz * uz)
+            for i in range(19):
+                cu = 3.0 * (Cx[i] * ux + Cy[i] * uy + Cz[i] * uz)
+                f[i, x, y, z] = Wq[i] * r * (1.0 + cu + 0.5 * cu * cu - usq)
+        for k in range(pout.shape[0]):
+            x, y, z = pout[k, 0], pout[k, 1], pout[k, 2]
+            a, b, c = pout_nb[k, 0], pout_nb[k, 1], pout_nb[k, 2]
+            r = 0.0
+            vx = 0.0
+            vy = 0.0
+            vz = 0.0
+            for i in range(19):
+                fi = f[i, a, b, c]
+                r += fi
+                vx += fi * Cx[i]
+                vy += fi * Cy[i]
+                vz += fi * Cz[i]
+            vx /= r
+            vy /= r
+            vz /= r
+            usq = 1.5 * (vx * vx + vy * vy + vz * vz)
+            for i in range(19):
+                cu = 3.0 * (Cx[i] * vx + Cy[i] * vy + Cz[i] * vz)
+                f[i, x, y, z] = Wq[i] * (1.0 + cu + 0.5 * cu * cu - usq)
+    _PK = ports
+    return _PK
+
+
+def _run_ports(bodies, study, progress, cancel, t0):
+    """Internal flow between chosen openings (see openings())."""
+    collide, stream, macro, _b = _kernels()
+    ports = _port_kernel()
+    fluid = study.get("fluid", "air")
+    rho_p, mu_p = FLUIDS.get(fluid, (float(study.get("density", 1.2)), float(study.get("viscosity", 1.8e-5))))
+    U = float(study.get("velocity", 5.0))
+    if U <= 0:
+        raise FlowError("Velocity must be > 0")
+    if progress:
+        progress("Flow: finding the openings…")
+    found = openings(bodies, max_cells=float(study.get("max_cells", 3e6)))
+    src0, _o = _pick_openings(found, study.get("inlet"), study.get("outlets"))
+    across = float(study.get("resolution", 20))
+    dx = max(src0["diameter_mm"], 1e-3) / across
+    size = np.array([max(b.bounding_box().size.X for b in bodies.values()),
+                     max(b.bounding_box().size.Y for b in bodies.values()),
+                     max(b.bounding_box().size.Z for b in bodies.values())])
+    max_cells = float(study.get("max_cells", 3e6))
+    notes = []
+    while np.prod(size / dx + 8) > max_cells:
+        dx *= 1.15
+    if dx > src0["diameter_mm"] / across * 1.01:
+        notes.append(f"Grid coarsened to {dx:.3g} mm cells (raise max cells for more detail)")
+    if progress:
+        progress("Flow: building the grid…")
+    names, dlo, solid = _world_grid(bodies, dx)
+    lab, ops = _find_openings(solid, dlo, dx)
+    src, outs = _pick_openings(ops, study.get("inlet"), study.get("outlets"))
+    comp = src["component"]
+    fluid_mask = lab == comp
+    nx, ny, nz = solid.shape
+    nobj = max(len(names), 1)
+    solid_in = solid.copy()
+    blocked = (solid == 0) & ~fluid_mask
+    pin, pin_nb = src["_cells"], src["_inner"]
+    pout = np.concatenate([o["_cells"] for o in outs])
+    pout_nb = np.concatenate([o["_inner"] for o in outs])
+    for c in (pin, pout):
+        blocked[c[:, 0], c[:, 1], c[:, 2]] = False                # the port layers are fluid (set every step)
+    solid_in[blocked] = nobj + 1
+    closed = [o for o in ops if o["component"] == comp and o is not src and o not in outs]
+    if closed:
+        notes.append("Closed (walls): " + ", ".join(f"Opening {o['id']}" for o in closed))
+    # unique port cells (a cell next to two mouth cells appears twice)
+    pin, ui = np.unique(pin, axis=0, return_index=True)
+    pin_nb = src["_inner"][ui]
+    pout, uo = np.unique(pout, axis=0, return_index=True)
+    pout_nb = np.concatenate([o["_inner"] for o in outs])[uo]
+    n_in = -np.array(src["normal"], float)                           # into the part
+    D = src["diameter_mm"]
+    nu_p = mu_p / rho_p
+    Re = U * (D / 1000.0) / nu_p
+    L_cells = D / dx
+    U_lb = float(study.get("lattice_velocity", 0.06))
+    nu_lb = U_lb * L_cells / Re
+    tau = 3 * nu_lb + 0.5
+    smag = 0.0
+    if tau < 0.51:
+        smag = 0.17 ** 2
+        tau = max(tau, 0.5 + 1e-4)
+        notes.append(f"Re = {Re:.3g}: resolved as a large-eddy simulation (Smagorinsky); values are time-averaged "
+                     "estimates")
+    dt = (dx / 1000.0) * U_lb / U
+    path = float(np.ptp(np.argwhere(fluid_mask), axis=0).sum()) if fluid_mask.any() else max(nx, ny, nz)
+    steps = int(float(study.get("flow_throughs", 2.0)) * path / U_lb)
+    steps = max(200, min(steps, int(study.get("max_steps", 40000))))
+    f = np.empty((19, nx, ny, nz), np.float32)
+    for i in range(19):
+        f[i] = W[i]
+    g = f.copy()
+    rho = np.ones((nx, ny, nz), np.float32)
+    u = np.zeros((3, nx, ny, nz), np.float32)
+    facc = np.zeros((nobj + 2, 3))
+    pscale = rho_p * ((dx / 1000.0) / dt) ** 2 / 3.0
+    ramp = max(1, int(steps * 0.1))
+    avg_from = int(steps * 0.6)
+    uavg = np.zeros((3, nx, ny, nz))
+    pavg = np.zeros((nx, ny, nz))
+    navg = 0
+    sample_every = max(1, steps // 200)
+    hist_t, hist_dp, hist_q = [], [], []
+    pin_i = tuple(pin_nb.T)
+    pout_i = tuple(pout_nb.T)
+    area_in = src["area_mm2"] / 1e6
+    it = 0
+    for it in range(steps):
+        s = U_lb * min(1.0, (it + 1) / ramp)
+        collide(f, solid_in, tau, smag)
+        stream(f, g, solid_in, False, facc, nobj + 1)
+        f, g = g, f
+        ports(f, pin, pin_nb, s * n_in[0], s * n_in[1], s * n_in[2], pout, pout_nb)
+        if it % sample_every == 0 or it == steps - 1:
+            macro(f, solid_in, rho, u)
+            dp = float((rho[pin_i].mean() - rho[pout_i].mean()) * pscale)
+            if not math.isfinite(dp):
+                raise FlowError("Flow solution diverged — lower the velocity or raise the resolution")
+            hist_t.append(it * dt)
+            hist_dp.append(dp)
+            hist_q.append(U * min(1.0, (it + 1) / ramp) * area_in * 60000)
+            if progress and len(hist_t) % 10 == 0:
+                progress(f"Flow: step {it + 1:,} / {steps:,}")
+            if cancel and cancel():
+                notes.append(f"Stopped at step {it + 1:,} of {steps:,}")
+                break
+        if it >= avg_from and (it - avg_from) % max(1, (steps - avg_from) // 40) == 0:
+            macro(f, solid_in, rho, u)
+            uavg += u
+            pavg += rho
+            navg += 1
+    macro(f, solid_in, rho, u)
+    u_f = (uavg / navg).astype(np.float32) if navg else u
+    rho_f = (pavg / navg).astype(np.float32) if navg else rho
+    vel = u_f * (U / U_lb)
+    p = (rho_f - 1.0) * pscale
+    p -= float(np.mean(p[pout_i]))
+    p[solid_in > 0] = np.nan
+    vel[:, solid_in > 0] = 0.0
+    a3 = (dx / 1000.0) ** 2
+    Q_in = U * area_in
+    split = []
+    tot_out = 0.0
+    for o in outs:
+        nb = tuple(o["_inner"].T)
+        q = float(np.sum(vel[:, nb[0], nb[1], nb[2]].T @ np.array(o["normal"], float))) * a3
+        tot_out += max(q, 0.0)
+        split.append((o, q))
+    summary = {"mode": "internal (openings)", "fluid": fluid, "velocity_m_s": U,
+               "inlet": src["label"], "outlets": [o["label"] for o in outs],
+               "reynolds": round(Re, 2), "grid": [nx, ny, nz], "cell_mm": round(dx, 4), "steps": it + 1,
+               "simulated_time_s": round((it + 1) * dt, 5),
+               "turbulence_model": "Smagorinsky LES" if smag else "laminar",
+               "pressure_drop_Pa": round(float(np.nanmean(p[pin_i])), 4),
+               "flow_rate_m3_s": Q_in, "flow_rate_L_min": round(Q_in * 60000, 4),
+               "inlet_area_mm2": src["area_mm2"], "mass_flow_kg_s": round(Q_in * rho_p, 6),
+               "outlet_split": {f"Opening {o['id']}": {"share_pct": round(100 * max(q, 0) / tot_out, 1) if tot_out
+                                                       else None, "flow_rate_L_min": round(q * 60000, 4)}
+                                for o, q in split},
+               "max_velocity_m_s": round(float(np.nanmax(np.linalg.norm(vel, axis=0))), 4)}
+    notes.append(f"Inlet {src['label']} — flow enters normal to it at {U:g} m/s")
+    curves = {"pressure drop": (hist_t, hist_dp, "time (s)", "Pa"), "inlet flow": (hist_t, hist_q, "time (s)", "L/min")}
+    res = FlowResult(study.get("name", "Flow"), dlo.copy(), dx, ([0, 1, 2], [1, 1, 1]), (nx, ny, nz), solid_in,
+                     vel, p.astype(np.float32), summary, curves, notes)
+    res.openings = [{k: v for k, v in o.items() if not k.startswith("_")} for o in ops]
+    res.ms = (time.perf_counter() - t0) * 1000
+    return res
+
+
 def run(bodies: dict, study: dict, progress=None, cancel=None) -> FlowResult:
     """bodies: {object name: solid placed in world coordinates (mm)}.
     study keys: mode external|internal, fluid, density/viscosity (custom), velocity (m/s),
@@ -336,6 +771,8 @@ def run(bodies: dict, study: dict, progress=None, cancel=None) -> FlowResult:
     if not bodies:
         raise FlowError("Nothing to put in the flow")
     mode = study.get("mode", "external")
+    if str(study.get("inlet") or "").strip():                    # an inlet chosen: internal flow through openings
+        return _run_ports(bodies, study, progress, cancel, t0)
     fluid = study.get("fluid", "air")
     rho_p, mu_p = FLUIDS.get(fluid, (float(study.get("density", 1.2)), float(study.get("viscosity", 1.8e-5))))
     U = float(study.get("velocity", 5.0))

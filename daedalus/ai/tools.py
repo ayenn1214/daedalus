@@ -219,7 +219,9 @@ TOOLS: list[dict] = [
                         "(S-N life from a static study: options source, loading reversed|zero|ratio, cycles, mean, "
                         "surface, reliability), harmonic (forced vibration: fmin, fmax, damping), flow (CFD: mode "
                         "external|internal, fluid air|water|oil (SAE 30)|glycerin, velocity m/s, direction +X…-Z, "
-                        "resolution cells across body), assembly (several parts: options objects 'A,B', contact "
+                        "resolution cells across body; internal flow between chosen openings: inlet 'Opening N'/'x,y,z'/'smallest'/"
+                        "'largest', outlets 'Opening N; x,y,z' (blank = every other opening) — find them with "
+                        "flow_openings), assembly (several parts: options objects 'A,B', contact "
                         "bonded|free; fixtures/loads take 'object'; add_bolt for bolts), drop (drop test: height mm, "
                         "steps), topology (SIMP: volume_fraction, iterations; uses its fixtures/loads; then "
                         "topology_to_body). Options can be passed in 'options'. mesh_size mm (default auto)."),
@@ -345,6 +347,14 @@ TOOLS: list[dict] = [
         "input_schema": {"type": "object",
                          "properties": {"material": {"type": "string"}, "object": {"type": "string"}},
                          "required": ["material"]},
+    },
+    {
+        "name": "flow_openings",
+        "description": ("Openings of the visible parts' passages (ports, bores) for an internal flow study: id, label, "
+                        "centre (mm), outward normal, area, diameter. Use a label or 'x,y,z' as the flow study's "
+                        "inlet / outlets options."),
+        "input_schema": {"type": "object", "properties": {"objects": {"type": "string",
+                                                                      "description": "comma list, blank = all"}}},
     },
     {
         "name": "list_materials",
@@ -1258,6 +1268,12 @@ class ToolExecutor:
                 self.doc.set_material(args["material"], obj=obj or None, checkpoint=False)
                 return json.dumps({"ok": True, "material": self.doc.material_of(obj).name,
                                    "mass": self.doc.mass_properties().get("mass_kg")}), False
+            if name == "flow_openings":
+                from ..sim import cfd
+                names = [n.strip() for n in str(args.get("objects") or "").split(",") if n.strip()]
+                bodies = {n: b for n, b in self.doc.placed_bodies().items()
+                          if (not names or n in names) and self.doc.obj(n).visible}
+                return json.dumps(cfd.openings(bodies)), False
             if name == "list_materials":
                 from ..core import materials as matlib
                 ms = matlib.search(args.get("search", ""), args.get("category") or None,

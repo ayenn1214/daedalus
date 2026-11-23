@@ -108,6 +108,41 @@ def test_pipe_flow_pressure_drop():
     assert s["pressure_drop_Pa"] == pytest.approx(dp, rel=0.25)
 
 
+def _tee():
+    """Block with a Ø20 bore along Z (open top and bottom) and a Ø10 side port from -Y into it."""
+    body = Box(40, 40, 60) - Cylinder(10, 60) - Pos(0, -10, 0) * Rot(90, 0, 0) * Cylinder(5, 20)
+    return body
+
+
+def test_flow_openings_and_inlet_at_a_side_port():
+    tee = _tee()
+    ops = cfd.openings({"Tee": tee})
+    assert len(ops) == 3
+    side = [o for o in ops if abs(o["normal"][1]) > 0.9]
+    assert len(side) == 1 and side[0]["normal"][1] < 0 and side[0]["diameter_mm"] == pytest.approx(10, abs=2.5)
+    ends = sorted((o for o in ops if abs(o["normal"][2]) > 0.9), key=lambda o: o["center"][2])
+    assert ends[0]["normal"][2] < 0 < ends[1]["normal"][2] and ends[0]["diameter_mm"] == pytest.approx(20, abs=3)
+    U = 0.05
+    r = cfd.run({"Tee": tee}, {"mode": "internal", "fluid": "water", "velocity": U, "inlet": side[0]["label"],
+                               "resolution": 6, "flow_throughs": 2})
+    s = r.summary
+    assert s["inlet"].startswith(f"Opening {side[0]['id']}") and len(s["outlets"]) == 2
+    split = [v["share_pct"] for v in s["outlet_split"].values()]
+    assert sum(split) == pytest.approx(100, abs=0.5) and all(25 < v < 75 for v in split)   # symmetric tee
+    q_out = sum(v["flow_rate_L_min"] for v in s["outlet_split"].values())
+    assert q_out == pytest.approx(s["flow_rate_L_min"], rel=0.3)                            # mass in ≈ out
+    assert s["pressure_drop_Pa"] > 0
+    vy = r.velocity[1][np.isfinite(r.pressure)]
+    assert vy.max() > 0.5 * U                                                              # flows in along +Y
+    # one outlet only: the other end is a wall
+    top = ends[1]
+    r2 = cfd.run({"Tee": tee}, {"fluid": "water", "velocity": U, "inlet": "smallest",
+                                "outlets": ",".join(map(str, top["center"])), "resolution": 6, "flow_throughs": 2})
+    assert len(r2.summary["outlets"]) == 1 and "Closed" in " ".join(r2.notes)
+    with pytest.raises(cfd.FlowError, match="isn't a point"):
+        cfd.run({"Tee": tee}, {"velocity": U, "inlet": "near the port"})
+
+
 def test_document_studies_and_claude_tools(tmp_path):
     d = Document()
     d.add("sketch", {"entities": [{"type": "rect", "x": 0, "y": 0, "w": 200, "h": 20}]})

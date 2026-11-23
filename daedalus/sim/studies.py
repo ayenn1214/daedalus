@@ -44,7 +44,11 @@ OPTIONS = {   # type -> {option: (default, help)}
     "flow": {"mode": ("external", "external | internal"), "fluid": ("air", "air | water | oil (SAE 30) | glycerin"),
              "velocity": (5.0, "Free-stream / inlet velocity m/s"), "direction": ("+X", "+X -X +Y -Y +Z -Z"),
              "resolution": (20, "Cells across the body / passage"), "flow_throughs": (2.0, "Run length"),
-             "max_cells": (3e6, "Cell limit"), "objects": ("", "Objects in the flow (comma list, blank = all)")},
+             "max_cells": (3e6, "Cell limit"), "objects": ("", "Objects in the flow (comma list, blank = all)"),
+             "inlet": ("", "Where the flow enters (internal flow through openings) — Opening N, x,y,z near it, smallest or largest (blank = "
+                           "the flow-axis end)"),
+             "outlets": ("", "Internal: where it leaves — Opening N or x,y,z; separate with ; (blank = every other "
+                             "opening of that passage)")},
     "assembly": {"objects": ("", "Objects in the study (comma list, blank = all visible)"),
                  "contact": ("bonded", "bonded (touching faces glued) | free (joined only by bolts)")},
     "drop": {"height": (1000.0, "Drop height mm (impact speed √(2gh))"), "steps": (200, "Time steps"),
@@ -286,6 +290,9 @@ def summary_text(res) -> str:
         parts = [f"Re {s['reynolds']:.3g}"]
         if s.get("pressure_drop_Pa") is not None:
             parts.append(f"Δp {s['pressure_drop_Pa']:.4g} Pa, Q {s['flow_rate_L_min']:.4g} L/min")
+        for n, o in (s.get("outlet_split") or {}).items():
+            if o.get("share_pct") is not None:
+                parts.append(f"{n} out {o['share_pct']:.0f} %")
         for n, o in (s.get("objects") or {}).items():
             parts.append(f"{n}: drag {o['drag_N']:.4g} N" + (f", Cd {o['Cd']:.3g}" if "Cd" in o else ""))
         return " · ".join(parts)

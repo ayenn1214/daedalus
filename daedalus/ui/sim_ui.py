@@ -444,6 +444,8 @@ class StudiesPanel(QWidget):
             w.setToolTip(help_)
             form.addRow(k.replace("_", " "), w)
             widgets[k] = w
+        if st["type"] == "flow":
+            self._openings_row(form, widgets, st)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(dlg.accept)
         bb.rejected.connect(dlg.reject)
@@ -465,6 +467,61 @@ class StudiesPanel(QWidget):
         except (FeatureError, ValueError) as e:
             QMessageBox.warning(self, "Options", str(e))
         self._fill()
+
+    def _openings_row(self, form, widgets, st):
+        """Flow: find the part's openings and pick the inlet / outlets from them (e.g. a side port as the inlet)."""
+        from PySide6.QtCore import Qt as _Qt
+        from PySide6.QtWidgets import QHBoxLayout, QLabel, QPushButton, QWidget
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        btn = QPushButton("Find openings")
+        btn.setToolTip("Find the ports and bores of the parts, then pick where the flow enters and leaves")
+        lab = QLabel("Inlet blank = flow along the direction axis, end to end")
+        lab.setObjectName("muted")
+        lab.setWordWrap(True)
+        h.addWidget(btn)
+        h.addWidget(lab, 1)
+        form.insertRow(form.rowCount(), "openings", box)
+        for k in ("inlet", "outlets"):
+            w = widgets.get(k)
+            if isinstance(w, QComboBox):
+                w.clear()
+                w.addItems(["", "smallest", "largest"] if k == "inlet" else [""])
+                w.setCurrentText(str(st["options"].get(k, "")))
+                w.setMinimumWidth(420)
+
+        def find():
+            from PySide6.QtWidgets import QApplication
+            from ..sim import cfd
+            names = [n.strip() for n in str(st["options"].get("objects", "")).split(",") if n.strip()]
+            bodies = {n: b for n, b in self.doc.placed_bodies().items()
+                      if (not names or n in names) and self.doc.obj(n).visible}
+            QApplication.setOverrideCursor(_Qt.WaitCursor)
+            try:
+                ops = cfd.openings(bodies)
+            except Exception as e:  # noqa: BLE001
+                ops = []
+                lab.setText(f"Couldn't find openings: {e}")
+            finally:
+                QApplication.restoreOverrideCursor()
+            if not ops:
+                lab.setText(lab.text() if lab.text().startswith("Couldn't") else
+                            "No through-passages found (a passage needs a way in and a way out)")
+                return
+            lab.setText(f"{len(ops)} openings — pick the inlet (e.g. the side port); outlets blank = all the others")
+            for k in ("inlet", "outlets"):
+                w = widgets.get(k)
+                if isinstance(w, QComboBox):
+                    cur = w.currentText()
+                    w.clear()
+                    w.addItems((["", "smallest", "largest"] if k == "inlet" else [""]) + [o["label"] for o in ops])
+                    w.setCurrentText(cur)
+            mode = widgets.get("mode")
+            if isinstance(mode, QComboBox):
+                mode.setCurrentText("internal")
+            self._openings = ops
+        btn.clicked.connect(find)
 
     # ------------------------------------------------------------- items
     def _tree_menu(self, pos):
