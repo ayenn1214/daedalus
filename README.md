@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.35</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.36</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -432,6 +432,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.36** | Icarus on Ollama: checks Ollama is running and the model is downloaded before sending (clear message instead of spinning) · replies stream with progress and elapsed time · tells you when the model runs on the CPU · bypasses the system proxy · keeps the model loaded · 16k context · model recommended by graphics-card memory (setup check, installer) |
 | **3.0.35** | Projects: parts inside a project part's BOM (weldment pieces, sub-weldments, assembly parts — any depth) are on that project; a weldment used by several projects is the same part on all of them · Unassigned lists only parts on no project · project column and filters follow · demand unchanged · Fix: production completion dates use your local day (evening completions were dated the next day) |
 | **3.0.34** | Parts ▸ Components (renamed from Parts): the Sort box works again (it could crash the page), and clicking a column header sorts by it (numbers by value) |
 | **3.0.33** | Speed: team-server saves go up in the background (several records at once, kept-open connections) so the window never waits for the server · lookups worked out once per page build · Parts sub-tabs built when opened · the Shift-click link check only runs while DIMS is on screen · Fix: table rows no longer stay extra tall |
