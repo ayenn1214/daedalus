@@ -33,6 +33,7 @@ everything around it through tools:
   STEP with its properties — into its open assembly if there is one.
 - In Fusion, part numbers/descriptions are component properties, other properties are attributes, mates are
   joints, macros don't apply and command ids are strings.
+- sw_open_file / sw_insert_file open a STEP or part file in the CAD program, or put it into the open assembly.
 - open_in_daedalus sends the active model to Daedalus for simulation (FEA, frequency, buckling, thermal),
   CAM, physics or 2D drawings.
 Don't try to model geometry — say that's done in SolidWorks. Units: mm, kg. Reply in 1–3 short sentences
@@ -81,6 +82,11 @@ SW_TOOLS = [
     _t("send_to_other_cad", "Send the active document to the other connected CAD program (SolidWorks ⇄ "
                             "Fusion), inserted into its open assembly when there is one.",
        {"as_component": {"type": "boolean"}}),
+    _t("sw_open_file", "Open a file in the CAD program: STEP / IGES (e.g. a part exported from Daedalus) or a "
+                       "native part / assembly. Absolute path.", {"path": {"type": "string"}}, ["path"]),
+    _t("sw_insert_file", "Insert a file (STEP / IGES / native part) into the active assembly as a component, "
+                         "optionally mated to the hole or face selected in the CAD program, with custom properties.",
+       {"path": {"type": "string"}, "mate": {"type": "boolean"}, "properties": {"type": "object"}}, ["path"]),
     _t("open_in_daedalus", "Send the active SolidWorks model to Daedalus (geometry, mates, properties) for "
                            "simulation, CAM, physics or drawings."),
     _t("sw_bom_review", "Read the open assembly's full BOM (all levels) and compare it with DIMS: per line status "
@@ -218,9 +224,44 @@ class SWToolExecutor:
             return BI.apply(L, items=a.get("items"), project=a.get("project"), units=a.get("units"),
                             numbers=a.get("numbers", True), update_existing=a.get("update_existing", False),
                             preview=a.get("preview", True), overrides=a.get("overrides"))
+        if name == "sw_open_file":
+            return L.open_file(a["path"])
+        if name == "sw_insert_file":
+            return L.insert_file(a["path"], mate=bool(a.get("mate")), properties=a.get("properties"))
         if name == "open_in_daedalus":
             path = L.to_daedalus()
             if self.on_open_daedalus:
                 self.on_open_daedalus(path)
             return {"ok": True, "opened": path}
         raise ValueError(f"Unknown tool {name}")
+
+
+# ------------------------------------------------------------------ Claude Desktop (CAD Link's own tool server)
+CLAUDE_CAD_GUIDE = """CAD Link tools work in the CAD program the user has open through Daedalus's CAD Link (SolidWorks,
+Fusion, Inventor, Solid Edge or Rhino — sw_status says which and what document is active). Next to them are Daedalus's
+own tools (3D modelling: add_*, get_model, export_file, import_file…) and DIMS (dims_*). Move work between them with
+files:
+- CAD → Daedalus: sw_command(action="export", arg="step") returns the STEP path → import_file(path) in Daedalus
+  (or cad_open_in_daedalus for the full round trip with mates). Then simulate, CAM or draw it there.
+- Daedalus → CAD: export_file(path=".../name.step") → sw_open_file(path), or sw_insert_file(path, mate=true) into the
+  open assembly (select the hole first in the CAD program).
+- CAD BOM → DIMS: sw_bom_review, then sw_bom_to_inventory (preview first, apply when the user agrees).
+- CAD ⇄ CAD: cad_send_to_other_cad when both programs are connected in CAD Link.
+The CAD program does the CAD program's modelling — Daedalus's add_* tools model only in Daedalus.
+""" + SW_SYSTEM
+
+
+def claude_cad_tools():
+    """CAD Link's tools as Claude Desktop sees them: names that could clash with Daedalus's own get a cad_ prefix
+    (cad_inventory_search…); sw_* and dims_* keep theirs. Returns (tools, aliases {seen: own})."""
+    tools, aliases = [], {}
+    for t in SW_TOOLS:
+        n = t["name"]
+        seen = n if n.startswith("sw_") or n in DIMS_NAMES else f"cad_{n}"
+        if seen != n:
+            aliases[seen] = n
+        d = dict(t, name=seen)
+        if n not in DIMS_NAMES:
+            d["description"] = "[CAD Link] " + t["description"]
+        tools.append(d)
+    return tools, aliases

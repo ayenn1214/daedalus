@@ -258,3 +258,102 @@ def test_dialog_edits_the_settings_file_by_hand(tmp_path, monkeypatch, home):
     assert QSettings("Daedalus", "Daedalus").value("claude/config_path") == str(cfg)   # remembered for Connect
     QSettings("Daedalus", "Daedalus").remove("claude/config_path")
     d.close()
+
+
+def test_claude_bridges_cad_link_daedalus_and_dims(home, tmp_path):
+    """Daedalus and CAD Link both open: Claude sees both tool sets, each call reaches the right one, and a part
+    moves Daedalus → SolidWorks assembly and SolidWorks → Daedalus through files."""
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from daedalus.ai.copilot import SYSTEM
+    from daedalus.ai.tools import TOOLS, ToolExecutor
+    from daedalus.core.document import Document
+    from daedalus.sw import SWLink
+    from daedalus.sw.backend import FakeBackend
+    from daedalus.sw.tools import CLAUDE_CAD_GUIDE, SWToolExecutor, claude_cad_tools
+    from daedalus.ui.claude_bridge import ClaudeBridge
+    doc = Document()
+    a = ClaudeBridge(ToolExecutor(doc), TOOLS, SYSTEM, "3d", doc=doc)
+    fake = FakeBackend(tmp_path / "sw")
+    link = SWLink(fake, cache_dir=tmp_path / "cache")
+    tools, aliases = claude_cad_tools()
+    c = ClaudeBridge(SWToolExecutor(link), tools, CLAUDE_CAD_GUIDE, "cad", role="cad", aliases=aliases,
+                     info=lambda: {"cad": "SolidWorks", "document": fake.active_doc().title})
+    a.start()
+    c.start()
+    step = tmp_path / "bracket.step"
+    m = MCP(home / "dhome")
+    try:
+        def talk():
+            m.ask("initialize", {"protocolVersion": "2025-06-18"})
+            names = {t["name"] for t in m.ask("tools/list")["result"]["tools"]}
+            st = json.loads(m.ask("tools/call", {"name": "daedalus_status", "arguments": {}})
+                            ["result"]["content"][0]["text"])
+            cg = m.ask("tools/call", {"name": "daedalus_guide", "arguments": {"part": "cad"}})["result"]
+            bom = m.ask("tools/call", {"name": "sw_bom", "arguments": {}})["result"]
+            inv = m.ask("tools/call", {"name": "inventory_search", "arguments": {"query": "x"}})["result"]
+            m.ask("tools/call", {"name": "add_sketch", "arguments": {
+                "plane": "XY", "entities": [{"type": "rect", "x": 0, "y": 0, "w": 40, "h": 30}]}})
+            m.ask("tools/call", {"name": "add_extrude", "arguments": {"sketch": "Sketch1", "depth": 6}})
+            ex = m.ask("tools/call", {"name": "export_file", "arguments": {"path": str(step)}})["result"]
+            ins = m.ask("tools/call", {"name": "sw_insert_file", "arguments": {
+                "path": str(step), "properties": {"PartNo": "C10-0099"}}})["result"]
+            out = m.ask("tools/call", {"name": "sw_command", "arguments": {"action": "export", "arg": "step"}})
+            path = json.loads(out["result"]["content"][0]["text"])["file"]
+            imp = m.ask("tools/call", {"name": "import_file", "arguments": {"path": path}})["result"]
+            return names, st, cg, bom, inv, ex, ins, imp
+        names, st, cg, bom, inv, ex, ins, imp = _pump(app, talk)
+        assert {"add_extrude", "dims_search_parts", "sw_bom", "sw_insert_file", "cad_inventory_search",
+                "cad_open_in_daedalus", "inventory_search"} <= names
+        assert st["open"] and st["cad_link"]["open"] and st["cad_link"]["cad"] == "SolidWorks"
+        assert "CAD → Daedalus" in cg["content"][0]["text"]
+        assert "Base Frame" in bom["content"][0]["text"] or "RG-3001" in bom["content"][0]["text"]
+        assert not inv["isError"] and a.calls >= 1                       # inventory_search: Daedalus's own
+        assert not ex["isError"] and step.exists()
+        assert not ins["isError"], ins
+        assert any(cp.name.startswith("bracket") for cp in fake.comps)    # Daedalus part → SolidWorks assembly
+        assert any(d.properties.get("PartNo") == "C10-0099" for d in fake.docs.values())
+        assert not imp["isError"], imp                                   # SolidWorks → Daedalus
+        assert len(doc.objects) >= 2
+    finally:
+        m.close()
+        c.stop()
+        a.stop()
+    assert L.read_link("cad") is None and L.read_link() is None
+    m = MCP(home / "dhome")
+    try:
+        m.ask("initialize", {})
+        assert "sw_bom" in {t["name"] for t in m.ask("tools/list")["result"]["tools"]}     # remembered
+        r = m.ask("tools/call", {"name": "sw_bom", "arguments": {}})["result"]
+        assert r["isError"] and "CAD Link isn't open" in r["content"][0]["text"]
+    finally:
+        m.close()
+
+
+def test_cad_link_window_starts_its_claude_server(home):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    QApplication.instance() or QApplication([])
+    from daedalus.sw import SWLink
+    from daedalus.sw.backend import FakeBackend
+    from daedalus.sw.ui import LinkWindow
+    w = LinkWindow(SWLink(FakeBackend()))
+    try:
+        assert w.start_claude() is not None
+        lk = L.read_link("cad")
+        tf = json.loads(L.tools_file("cad").read_text())
+        assert lk and lk["kind"] == "cad" and "--sw" in tf["launch"] and "--demo" in tf["launch"]
+        assert w._claude_info()["connected"]
+    finally:
+        w.stop_claude()
+        w.hub.set_enabled(False) if hasattr(w, "hub") else None
+    assert L.read_link("cad") is None
+
+
+def test_mcp_tells_claude_when_tools_change(home):
+    import daedalus.mcp as MC
+    MC._listed = {"a"}
+    note = MC.changed_notice()
+    assert note == {"jsonrpc": "2.0", "method": "notifications/tools/list_changed"}
+    assert MC.changed_notice() is None

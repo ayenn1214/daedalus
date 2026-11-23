@@ -5,6 +5,9 @@
 * Claude Desktop starts `python -m daedalus.mcp` (an MCP server on stdin / stdout), which forwards each tool call to
   the open Daedalus — the part builds live in your window, DIMS changes go through your account.
 * connect() adds that server to Claude Desktop's settings (claude_desktop_config.json); restart Claude Desktop once.
+* CAD Link (SolidWorks, Fusion, Inventor, Solid Edge, Rhino) runs its own tool server next to Daedalus's
+  (role "cad": claude-link-cad.json). The MCP server offers both tool sets at once, so Claude can carry work
+  between them — a SolidWorks BOM into DIMS, a Daedalus part into the SolidWorks assembly, and back.
 """
 from __future__ import annotations
 
@@ -22,13 +25,20 @@ def home() -> Path:
     return Path(os.environ.get("DAEDALUS_HOME") or Path.home() / ".daedalus")
 
 
-def link_file() -> Path:
-    return home() / "claude-link.json"
+ROLES = ("app", "cad")                     # Daedalus (3D + DIMS, or DIMS only) · CAD Link
 
 
-def tools_file() -> Path:
+def _sfx(role: str) -> str:
+    return "" if role == "app" else f"-{role}"
+
+
+def link_file(role: str = "app") -> Path:
+    return home() / f"claude-link{_sfx(role)}.json"
+
+
+def tools_file(role: str = "app") -> Path:
     """The last tool list (so Claude Desktop knows the tools even before Daedalus is opened) + how to start it."""
-    return home() / "claude-tools.json"
+    return home() / f"claude-tools{_sfx(role)}.json"
 
 
 def root() -> Path:
@@ -55,15 +65,21 @@ def launch_command() -> list[str]:
     return [exe, "-m", "daedalus"]
 
 
-def read_link() -> dict | None:
-    """The running Daedalus's link, if its process is still alive."""
+def read_link(role: str = "app") -> dict | None:
+    """The running Daedalus's (or CAD Link's) link, if its process is still alive."""
     try:
-        d = json.loads(link_file().read_text(encoding="utf-8"))
+        d = json.loads(link_file(role).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
     if not _alive(int(d.get("pid") or 0)):
         return None
+    d["role"] = role
     return d
+
+
+def read_links() -> dict:
+    """{role: link} for every tool server that's running now."""
+    return {r: l for r in ROLES if (l := read_link(r))}
 
 
 def _alive(pid: int) -> bool:
@@ -87,26 +103,38 @@ def _alive(pid: int) -> bool:
     return True
 
 
-def write_link(port: int, token: str, kind: str, tools: list[dict], guide: str, version: str):
+def write_link(port: int, token: str, kind: str, tools: list[dict], guide: str, version: str, role: str = "app",
+               launch: list[str] | None = None):
     home().mkdir(parents=True, exist_ok=True)
-    tmp = link_file().with_suffix(".tmp")
+    tmp = link_file(role).with_suffix(".tmp")
     tmp.write_text(json.dumps({"port": port, "token": token, "pid": os.getpid(), "kind": kind, "version": version,
                                "started": time.time()}), encoding="utf-8")
-    os.replace(tmp, link_file())
+    os.replace(tmp, link_file(role))
     try:
-        old = json.loads(tools_file().read_text(encoding="utf-8"))
+        old = json.loads(tools_file(role).read_text(encoding="utf-8"))
     except (OSError, ValueError):
         old = {}
     if kind == "3d" or old.get("kind") != "3d":    # keep the fuller 3D list when a DIMS-only window opens
-        tools_file().write_text(json.dumps({"kind": kind, "tools": tools, "guide": guide, "version": version,
-                                            "launch": launch_command(), "cwd": str(root())}), encoding="utf-8")
+        tools_file(role).write_text(json.dumps({"kind": kind, "tools": tools, "guide": guide, "version": version,
+                                                "launch": launch or launch_command(), "cwd": str(root())}),
+                                    encoding="utf-8")
 
 
-def clear_link():
+def seed_tools(role: str, tools: list[dict], guide: str, launch: list[str], version: str):
+    """Write a role's tool list if it was never written — Claude Desktop then knows CAD Link's tools before it's
+    first opened (and daedalus_open(cad=...) can open it)."""
+    if tools_file(role).exists():
+        return
+    home().mkdir(parents=True, exist_ok=True)
+    tools_file(role).write_text(json.dumps({"kind": role, "tools": tools, "guide": guide, "version": version,
+                                            "launch": launch, "cwd": str(root())}), encoding="utf-8")
+
+
+def clear_link(role: str = "app"):
     try:
-        d = json.loads(link_file().read_text(encoding="utf-8"))
+        d = json.loads(link_file(role).read_text(encoding="utf-8"))
         if int(d.get("pid") or 0) == os.getpid():
-            link_file().unlink()
+            link_file(role).unlink()
     except (OSError, ValueError):
         pass
 

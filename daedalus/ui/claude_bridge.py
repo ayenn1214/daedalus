@@ -22,9 +22,12 @@ class ClaudeBridge(QObject):
     request = Signal(str, object)
     activity = Signal(str)                              # 'Claude Desktop: add_extrude' — for the status bar
 
-    def __init__(self, executor, tools: list[dict], guide: str, kind: str, doc=None, parent=None):
+    def __init__(self, executor, tools: list[dict], guide: str, kind: str, doc=None, parent=None, role="app",
+                 aliases: dict | None = None, launch=None, info=None):
         super().__init__(parent)
         self.executor, self.tools, self.guide, self.kind, self.doc = executor, tools, guide, kind, doc
+        self.role, self.launch, self.extra_info = role, launch, info
+        self.aliases = aliases or {}                    # name Claude sees → the executor's own name
         self.token = secrets.token_urlsafe(24)
         self.result = ("", False)
         self.calls = 0
@@ -36,6 +39,9 @@ class ClaudeBridge(QObject):
     # ---------------------------------------------------------------- GUI thread
     @Slot(str, object)
     def _run(self, name, args):
+        if name == "\x00info":
+            self.result = self.info()
+            return
         try:
             now = time.time()
             if self.doc is not None and now - self._last > GROUP_S and not name.startswith(("get_", "list_", "dims_find",
@@ -45,7 +51,7 @@ class ClaudeBridge(QObject):
                 except Exception:  # noqa: BLE001
                     pass
             self._last = now
-            self.result = self.executor.run(name, args)
+            self.result = self.executor.run(self.aliases.get(name, name), args)
             self.calls += 1
             self.activity.emit(f"Claude Desktop: {name}")
         except Exception as e:  # noqa: BLE001
@@ -53,6 +59,11 @@ class ClaudeBridge(QObject):
 
     def info(self) -> dict:
         d = {"tools": len(self.tools), "calls": self.calls}
+        if self.extra_info is not None:
+            try:
+                d.update(self.extra_info())
+            except Exception as e:  # noqa: BLE001
+                d["error"] = str(e)
         if self.doc is not None:
             try:
                 d["objects"] = [o.name for o in self.doc.objects]
@@ -91,7 +102,10 @@ class ClaudeBridge(QObject):
                 if self.path == "/guide":
                     return self._send(200, bridge.guide)
                 if self.path == "/info":
-                    return self._send(200, bridge.info())
+                    with bridge._lock:                  # asks the CAD program: same thread rules as a tool call
+                        bridge.request.emit("\x00info", {})
+                        info = bridge.result
+                    return self._send(200, info)
                 self._send(404, {"error": "not found"})
 
             def do_POST(self):  # noqa: N802
@@ -115,7 +129,8 @@ class ClaudeBridge(QObject):
         self.server.daemon_threads = True
         threading.Thread(target=self.server.serve_forever, daemon=True, name="claude-link").start()
         port = self.server.server_address[1]
-        L.write_link(port, self.token, self.kind, self.tools, self.guide, __version__)
+        L.write_link(port, self.token, self.kind, self.tools, self.guide, __version__, role=self.role,
+                     launch=self.launch)
         return port
 
     def stop(self):
@@ -126,17 +141,17 @@ class ClaudeBridge(QObject):
             except Exception:  # noqa: BLE001
                 pass
             self.server = None
-        L.clear_link()
+        L.clear_link(self.role)
 
 
-def start_bridge(window, executor, tools, guide, kind, doc=None):
+def start_bridge(window, executor, tools, guide, kind, doc=None, **kw):
     """Start the link for a window (unless turned off in settings); stops when the app quits."""
     from PySide6.QtCore import QSettings
     from PySide6.QtWidgets import QApplication
     if not QSettings("Daedalus", "Daedalus").value("claude/link", True, type=bool):
         return None
     try:
-        b = ClaudeBridge(executor, tools, guide, kind, doc, parent=window)
+        b = ClaudeBridge(executor, tools, guide, kind, doc, parent=window, **kw)
         b.start()
     except OSError:
         return None
@@ -159,8 +174,9 @@ class ClaudeDesktopDialog(QDialog):
         v = QVBoxLayout(self)
         intro = QLabel("<b>Use Daedalus from Claude Desktop.</b> Claude gets Icarus's tools — 3D modelling and DIMS "
                        "inventory — and works in this window: parts build live here (each request is one undo "
-                       "step), inventory changes save under your account. It runs on your Claude plan, no Ollama "
-                       "needed.")
+                       "step), inventory changes save under your account. With CAD Link open it also works in "
+                       "SolidWorks / Fusion / Inventor / Solid Edge / Rhino and moves parts and BOMs between them, "
+                       "Daedalus and DIMS. It runs on your Claude plan, no Ollama needed.")
         intro.setWordWrap(True)
         v.addWidget(intro)
         self.state = QLabel()
@@ -308,6 +324,11 @@ class ClaudeDesktopDialog(QDialog):
                                               f"tools, {len(self.bridge.tools)} of them)" if self.bridge and link else
                                               "Daedalus link is off (Help ▸ Connect to Claude Desktop turns it on at the "
                                               "next start)")]
+        cad = L.read_link("cad")
+        lines.append(("✓ CAD Link is open — Claude can also work in your CAD program and move parts and BOMs between "
+                      "it, Daedalus and DIMS" if cad else
+                      "· CAD Link isn't open — open it (SolidWorks, Fusion, Inventor, Solid Edge, Rhino) to let Claude "
+                      "work there too"))
         if not st["installed"]:
             lines.append("✗ Claude Desktop isn't installed on this computer (claude.ai/download) — connecting writes "
                          "its settings anyway, ready for when it is.")

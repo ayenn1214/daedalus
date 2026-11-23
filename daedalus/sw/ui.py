@@ -189,6 +189,7 @@ class LinkWindow(QMainWindow):
         self._timer.timeout.connect(self._poll)
         self._timer.start()
         self._last_title = None
+        self.claude_bridge = None
         self.refresh()
 
     def show_settings(self, section=None):
@@ -828,11 +829,41 @@ class LinkWindow(QMainWindow):
     def showEvent(self, e):
         super().showEvent(e)
         QTimer.singleShot(50, self.hub.sync)
+        if self.claude_bridge is None:
+            self.start_claude()
 
     def closeEvent(self, e):
         for w in [self.hub.disk, *self.hub.bars.values()]:
             w.hide()
+        self.stop_claude()
         super().closeEvent(e)
+
+    # ------------------------------------------------------------------ Claude Desktop
+    def start_claude(self):
+        """CAD Link's own tool server for Claude Desktop, next to Daedalus's: Claude works in the CAD program and
+        carries parts / BOMs between it, Daedalus and DIMS."""
+        from ..ui.claude_bridge import start_bridge
+        from .tools import CLAUDE_CAD_GUIDE, claude_cad_tools
+        tools, aliases = claude_cad_tools()
+        app, demo = self._key(self.link)
+        flag = "--sw" if app == "solidworks" else f"--{app}"
+        from .. import claude_link as CL
+        launch = CL.launch_command() + [flag] + (["--demo"] if demo else [])
+        self.claude_bridge = start_bridge(self, self.copilot.executor, tools, CLAUDE_CAD_GUIDE, "cad", role="cad",
+                                          aliases=aliases, launch=launch, info=self._claude_info)
+        return self.claude_bridge
+
+    def stop_claude(self):
+        if self.claude_bridge is not None:
+            self.claude_bridge.stop()
+            self.claude_bridge = None
+
+    def _claude_info(self):
+        st = self.link.status()
+        doc = st.get("document") or {}
+        return {"cad": self.app_name(), "connected": bool(st.get("connected")),
+                "document": doc.get("title"), "document_kind": doc.get("kind"),
+                "other_cad": [self.app_name(l) for l in self.others()]}
 
 
 def install_rhino(parent=None):

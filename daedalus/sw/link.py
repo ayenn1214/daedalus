@@ -295,6 +295,27 @@ class SWLink:
         self.b.open_doc(str(out))
         return str(out)
 
+    def open_file(self, path: str) -> dict:
+        """Open a file (STEP / IGES / native part or assembly) in the CAD program."""
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"No file {p}")
+        nd = self.b.open_doc(str(p))
+        return {"opened": nd.title if nd else p.name}
+
+    def insert_file(self, path: str, mate: bool = False, properties: dict | None = None) -> dict:
+        """Insert a file into the active assembly as a component (STEP is converted to a native part first,
+        next to the link's cache), mated to the selected hole / face when mate=True."""
+        p = Path(path)
+        if not p.exists():
+            raise FileNotFoundError(f"No file {p}")
+        self._active((ASSEMBLY,))
+        if p.suffix.lower() in (".step", ".stp", ".iges", ".igs"):
+            native = self._native(p, self.cache / "inserted" / _safe(p.stem))
+        else:
+            native = str(p)
+        return self._place(native, properties or {}, mate)
+
     # ------------------------------------------------------------------ CAD ⇄ CAD
     def transfer_to(self, other: "SWLink", as_component: bool = True) -> dict:
         """The active document here → the other CAD program (STEP), with its custom properties. Into the

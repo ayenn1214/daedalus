@@ -910,6 +910,13 @@ class MainWindow(QMainWindow):
             from ..ai.tools import TOOLS
             from .claude_bridge import start_bridge
             self.claude_bridge = start_bridge(self, self.copilot.executor, TOOLS, SYSTEM, "3d", doc=self.doc)
+            try:                                       # Claude Desktop knows CAD Link's tools before it's opened
+                from .. import __version__ as _v
+                from .. import claude_link as _CL
+                from ..sw.tools import CLAUDE_CAD_GUIDE, claude_cad_tools
+                _CL.seed_tools("cad", claude_cad_tools()[0], CLAUDE_CAD_GUIDE, _CL.launch_command() + ["--sw"], _v)
+            except Exception:  # noqa: BLE001
+                pass
             if self.claude_bridge is not None:
                 self.claude_bridge.activity.connect(lambda _t: self._claude_refresh())
         except Exception:  # noqa: BLE001
