@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.39</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.40</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -448,6 +448,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.40** | Flow: choose where the flow enters and leaves — Find openings lists the part's ports and bores, pick the inlet (e.g. a side port) and outlets (or all the others), results show the flow split per outlet · Claude Desktop ⇄ CAD Link: Claude works in SolidWorks / Fusion / Inventor / Solid Edge / Rhino alongside Daedalus and DIMS and moves parts and BOMs between them (sw_open_file, sw_insert_file, daedalus_open(cad=…)) · Material window shows property values again |
 | **3.0.39** | Settings window (File ▸ Settings…, Ctrl+, · gear in CAD Link): every setting in one place — General, 3D view, Sketch, Units, Icarus, Claude Desktop, DIMS, Company profile, Folders, CAD Link, Updates, Advanced · search finds any setting · changes apply as you make them · reset per section · export / import all settings (keys and tokens never exported) · Ollama Test connection and recommended model |
 | **3.0.38** | Claude Desktop: Connect finds the settings of newer installs (AppData\Local\Claude-Data\<id>) · edit the settings file by hand in the Connect window (path, contents with a JSON check, Insert Daedalus entry, Save with backup) · Choose settings file… · Copy settings |
 | **3.0.37** | Claude Desktop: Help ▸ Connect to Claude Desktop… gives Claude Icarus's tools (3D modelling + DIMS) — parts build live in your window, one undo step per request, Claude can open Daedalus · Updates: the update window shows what's new in every version since yours |
