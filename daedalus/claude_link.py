@@ -112,19 +112,69 @@ def clear_link():
 
 
 # ------------------------------------------------------------------ Claude Desktop's settings
+CONFIG = "claude_desktop_config.json"
+
+
+def _app_data_dirs(base: Path, depth: int = 4) -> list[Path]:
+    """Claude Desktop's own data folders under base: where its settings file is, or where Electron keeps the
+    app's data ('Local State' / config.json) — the settings file belongs next to those."""
+    if not base.exists():
+        return []
+    found, marked = [], []
+    stack = [(base, 0)]
+    while stack:
+        d, n = stack.pop()
+        try:
+            names = {p.name for p in d.iterdir()}
+        except OSError:
+            continue
+        if CONFIG in names:
+            found.append(d)
+        elif "Local State" in names or "config.json" in names:
+            marked.append(d)
+        if n < depth:
+            stack.extend((d / x, n + 1) for x in names if (d / x).is_dir() and x not in (
+                "Cache", "Code Cache", "GPUCache", "blob_storage", "IndexedDB", "Local Storage", "Session Storage",
+                "Service Worker", "logs", "Crashpad", "DawnCache", "DawnGraphiteCache", "Shared Dictionary",
+                "node_modules", "vm_bundles", "claude-code"))
+    return found or marked
+
+
 def config_paths() -> list[Path]:
-    """Where Claude Desktop keeps claude_desktop_config.json on this computer (the Store version too)."""
+    """Where Claude Desktop keeps claude_desktop_config.json on this computer: the usual place, the Store
+    version, and newer installs that keep their data under %LOCALAPPDATA%\\Claude-Data\\<id>. A file chosen by
+    hand (Choose settings file…) comes first."""
+    out: list[Path] = []
+    try:
+        from PySide6.QtCore import QSettings
+        chosen = QSettings("Daedalus", "Daedalus").value("claude/config_path")
+        if chosen:
+            out.append(Path(chosen))
+    except Exception:  # noqa: BLE001
+        pass
     if sys.platform == "win32":
-        out = [Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Claude"
-               / "claude_desktop_config.json"]
-        pk = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local")) / "Packages"
+        local = Path(os.environ.get("LOCALAPPDATA", Path.home() / "AppData" / "Local"))
+        for d in _app_data_dirs(local / "Claude-Data"):
+            out.append(d / CONFIG)
+        pk = local / "Packages"
         if pk.exists():
             for d in pk.glob("Claude_*"):
-                out.append(d / "LocalCache" / "Roaming" / "Claude" / "claude_desktop_config.json")
-        return out
+                out.append(d / "LocalCache" / "Roaming" / "Claude" / CONFIG)
+        out.append(Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming")) / "Claude" / CONFIG)
+        seen, uniq = set(), []
+        for p in out:
+            if str(p).lower() not in seen:
+                seen.add(str(p).lower())
+                uniq.append(p)
+        return uniq
     if sys.platform == "darwin":
-        return [Path.home() / "Library" / "Application Support" / "Claude" / "claude_desktop_config.json"]
-    return [Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "Claude" / "claude_desktop_config.json"]
+        return out + [Path.home() / "Library" / "Application Support" / "Claude" / CONFIG]
+    return out + [Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "Claude" / CONFIG]
+
+
+def snippet() -> str:
+    """What to paste into Claude Desktop ▸ Settings ▸ Developer ▸ Edit Config, when connecting by hand."""
+    return json.dumps({"mcpServers": {SERVER_NAME: server_entry()}}, indent=2)
 
 
 def server_entry() -> dict:

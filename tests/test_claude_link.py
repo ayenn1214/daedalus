@@ -199,3 +199,27 @@ def test_bad_token_is_refused(home):
         assert e.value.code == 403
     finally:
         b.stop()
+
+
+def test_finds_claude_desktop_data_under_claude_data(tmp_path, monkeypatch):
+    """Newer Claude Desktop installs keep their data in %LOCALAPPDATA%\\Claude-Data\\claude_<id>\\…"""
+    monkeypatch.setattr(L.sys, "platform", "win32")
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setattr(L, "_chosen", lambda: None, raising=False)
+    data = tmp_path / "Local" / "Claude-Data" / "claude_pzs8sxrjxfjjc" / "Roaming" / "Claude"
+    data.mkdir(parents=True)
+    (data / "Local State").write_text("{}")                             # Electron's own file: the app's data folder
+    (data / "Cache").mkdir()
+    paths = [p for p in L.config_paths() if "Claude-Data" in str(p)]
+    assert paths == [data / L.CONFIG]
+    (data / L.CONFIG).write_text(json.dumps({"mcpServers": {}}))
+    deeper = data / "x"
+    deeper.mkdir()
+    (deeper / "config.json").write_text("{}")
+    assert [p for p in L.config_paths() if "Claude-Data" in str(p)] == [data / L.CONFIG]   # the real file wins
+    done = L.connect()
+    assert str(data / L.CONFIG) in done
+    assert "daedalus" in json.loads((data / L.CONFIG).read_text())["mcpServers"]
+    snip = json.loads(L.snippet())
+    assert snip["mcpServers"]["daedalus"]["args"] == ["-m", "daedalus.mcp"]

@@ -182,6 +182,15 @@ class ClaudeDesktopDialog(QDialog):
         row.addWidget(self.connect_btn)
         row.addWidget(self.disconnect_btn)
         row.addStretch(1)
+        pick = QPushButton("Choose settings file…")
+        pick.setToolTip("If Claude Desktop keeps its settings somewhere else: in Claude Desktop, Settings ▸ Developer ▸ "
+                        "Edit Config shows the file — pick that claude_desktop_config.json here")
+        pick.clicked.connect(self.choose_file)
+        copy = QPushButton("Copy settings")
+        copy.setToolTip("Copy the Daedalus entry, to paste into Claude Desktop ▸ Settings ▸ Developer ▸ Edit Config")
+        copy.clicked.connect(self.copy_snippet)
+        row.addWidget(pick)
+        row.addWidget(copy)
         v.addLayout(row)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
         bb.rejected.connect(self.reject)
@@ -206,6 +215,24 @@ class ClaudeDesktopDialog(QDialog):
         self.state.setText("<br><br>".join(lines))
         self.connect_btn.setText("Connect again" if st["connected"] else "Connect")
         self.disconnect_btn.setEnabled(st["connected"])
+
+    def choose_file(self):
+        from PySide6.QtCore import QSettings
+        from PySide6.QtWidgets import QFileDialog
+        paths = L.status()["paths"]
+        start = paths[0] if paths else ""
+        fn, _ = QFileDialog.getOpenFileName(self, "Claude Desktop's settings (claude_desktop_config.json)", start,
+                                            "Claude Desktop settings (claude_desktop_config.json);;JSON (*.json)")
+        if fn:
+            QSettings("Daedalus", "Daedalus").setValue("claude/config_path", fn)
+            self.refresh()
+
+    def copy_snippet(self):
+        from PySide6.QtWidgets import QApplication
+        QApplication.clipboard().setText(L.snippet())
+        QMessageBox.information(self, "Claude Desktop", "Copied. In Claude Desktop: Settings ▸ Developer ▸ Edit Config "
+                                "opens its settings file — paste the \"daedalus\" entry inside \"mcpServers\" (or the "
+                                "whole thing if the file is empty), save, then quit and reopen Claude Desktop.")
 
     def do_connect(self):
         try:
