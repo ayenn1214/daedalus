@@ -27,7 +27,7 @@ from dataclasses import asdict, dataclass, field
 SHEETS = {  # name: (width, height) landscape, mm
     "A4": (297, 210), "A3": (420, 297), "A2": (594, 420), "A1": (841, 594), "A0": (1189, 841),
     "Letter (A)": (279.4, 215.9), "Tabloid (B)": (431.8, 279.4), "ANSI C": (558.8, 431.8),
-    "ANSI D": (863.6, 558.8), "ANSI E": (1117.6, 863.6), "Model space": (0, 0),
+    "ANSI D": (863.6, 558.8), "ANSI E": (1117.6, 863.6), "Model space": (0, 0), "Custom": (420, 297),
 }
 SCALES = [(50, 1), (20, 1), (10, 1), (5, 1), (2, 1), (1, 1), (1, 2), (1, 2.5), (1, 5), (1, 10), (1, 20),
           (1, 25), (1, 50), (1, 100), (1, 200)]
@@ -37,12 +37,17 @@ STYLES = {  # line weight mm, dash pattern (mm on/off) or None, colour
     "dim": (0.18, None, "#000000"), "section": (0.35, (10.0, 2.0, 2.0, 2.0), "#000000"),
     "border": (0.7, None, "#000000"), "text": (0.25, None, "#000000"), "hatch": (0.13, None, "#000000"),
     "construction": (0.13, (2.0, 2.0), "#7a8794"),
+    "phantom": (0.18, (12.0, 1.5, 2.0, 1.5, 2.0, 1.5), "#000000"),      # cutting planes, explode lines, alternates
+    "cutting": (0.5, (12.0, 1.5, 2.0, 1.5, 2.0, 1.5), "#000000"),       # thick cutting-plane line
+    "break": (0.25, None, "#000000"),
 }
 VIEW_DIRS = {  # name: (direction from the part to the viewer, up)
     "front": ((0, -1, 0), (0, 0, 1)), "back": ((0, 1, 0), (0, 0, 1)), "top": ((0, 0, 1), (0, 1, 0)),
     "bottom": ((0, 0, -1), (0, -1, 0)), "right": ((1, 0, 0), (0, 0, 1)), "left": ((-1, 0, 0), (0, 0, 1)),
     "iso": ((1, -1, 1), (0, 0, 1)), "dimetric": ((1, -2, 1.2), (0, 0, 1)), "trimetric": ((1, -1.6, 0.9), (0, 0, 1)),
+    "oblique": ((0, -1, 0), (0, 0, 1)),            # cabinet oblique: the front true size, depth at 45° × ½
 }
+PICTORIAL = ("iso", "dimetric", "trimetric", "oblique")
 
 
 def new_id():
@@ -69,6 +74,17 @@ class Options:
     dxf_version: str = "R2010"
     snap: bool = True
     grid: float = 0.0                # sheet-mm snap grid, 0 = off
+    # dimensioning standard (practice.DIM_STANDARDS presets set these together)
+    dim_standard: str = ""
+    dim_text: str = "aligned"        # aligned (readable from the bottom / right) | unidirectional (horizontal)
+    leading_zero: bool = True        # 0.5 (metric) / .500 (ASME inch)
+    decimal_sep: str = "."           # . or ,
+    trailing_zeros: bool = False
+    angle_format: str = "decimal"    # decimal 27.5° | dms 27°30'
+    dual_units: bool = False         # secondary units in [ ]
+    material_hatch: bool = True      # section hatch pattern by material (ANSI31…38)
+    section_fasteners: bool = False  # cut shafts, bolts, nuts, keys, pins in assembly sections
+    explode_lines: bool = True
 
     def to_dict(self):
         return asdict(self)
@@ -90,9 +106,12 @@ class Sheet:
     layers: dict = field(default_factory=lambda: {"0": {"color": "#000000", "visible": True}})
     border: bool = True
     revisions: list = field(default_factory=list)   # [{"rev", "description", "date", "approved", "zone"}]
+    notes: list = field(default_factory=list)       # numbered notes, lower left
+    format: dict = field(default_factory=dict)      # {"name": a sheet format} or {"custom": {...}} (practice.py)
+    custom_size: list = field(default_factory=lambda: [420.0, 297.0])
 
     def dims(self):
-        w, h = SHEETS.get(self.size, (420, 297))
+        w, h = tuple(self.custom_size) if self.size == "Custom" else SHEETS.get(self.size, (420, 297))
         return (w, h) if self.landscape else (h, w)
 
     def to_dict(self):

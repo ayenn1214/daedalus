@@ -28,6 +28,192 @@ def _shapes(doc, view):
     return out
 
 
+def _named_shapes(doc, view):
+    names = view.get("objects") or [o.name for o in doc.objects if o.visible]
+    poses = doc.display_poses() if view.get("exploded") else {o.name: o.pose for o in doc.objects}
+    from ..core.assembly import location_of
+    out = []
+    for n in names:
+        b = doc.result.bodies.get(n)
+        if b is None:
+            continue
+        p = poses.get(n, [0] * 6)
+        out.append((n, b.moved(location_of(p)) if any(p) else b))
+    return out
+
+
+def _is_std(doc, name):
+    if not doc.has_obj(name):
+        return False
+    o = doc.obj(name)
+    return bool(o.part_no) or (o.std or {}).get("kind") == "purchased"
+
+
+def _halfspace(point, normal, size):
+    """A big box on the side of the plane the normal points to."""
+    from build123d import Box, Plane, Pos
+    pl = Plane(origin=tuple(float(x) for x in point), z_dir=tuple(float(x) for x in normal))
+    return pl.location * Pos(0, 0, size / 2) * Box(size, size, size)
+
+
+def _planar_faces_on(shape, point, normal, tol=1e-3):
+    out = []
+    for f in shape.faces():
+        try:
+            if f.geom_type.name != "PLANE":
+                continue
+            c = f.center()
+            nn = f.normal_at(c)
+            P = np.array([c.X, c.Y, c.Z])
+            if abs(abs(np.dot([nn.X, nn.Y, nn.Z], normal)) - 1) < 1e-4 and abs((P - point) @ normal) < tol:
+                out.append(f)
+        except Exception:  # noqa: BLE001
+            pass
+    return out
+
+
+def _section_cut(doc, named, sec, size, opts):
+    """(kept shapes, [(object, cut face)]) for a section: full, half, offset, aligned, removed or revolved.
+    Standard parts (bolts, nuts, pins, keys, bearings) stay whole unless the options say to cut them."""
+    typ = sec.get("type", "full")
+    n = np.asarray(sec["normal"], float)
+    n = n / np.linalg.norm(n)
+    P0 = np.asarray(sec["point"], float)
+    kept, faces = [], []
+    planes = [(P0, n)]
+    region = None
+    if typ in ("offset",) and sec.get("planes"):
+        planes = [(np.asarray(a, float), np.asarray(b, float) / np.linalg.norm(b)) for a, b in sec["planes"]]
+        region = _prism(sec["polygon3d"], np.asarray(sec["depth_dir"], float), size)
+    for name, s in named:
+        whole_std = _is_std(doc, name) and not opts.section_fasteners
+        if whole_std:
+            if typ not in ("removed", "revolved"):
+                kept.append(s)
+            continue
+        if typ == "aligned" and sec.get("rotate"):
+            s = _aligned_shape(s, sec, size)
+        try:
+            if region is not None:
+                c = s & region
+            elif typ == "half":
+                L = np.asarray(sec["along"], float)
+                quarter = _halfspace(P0, n, size) & _halfspace(np.asarray(sec["split"], float), L, size)
+                c = s - quarter
+            else:
+                c = s - _halfspace(P0, n, size)           # remove the side towards the viewer
+        except Exception:  # noqa: BLE001
+            continue
+        if c is None or c.volume <= 1e-9:
+            continue
+        kept.append(c)
+        for (pp, nn) in planes:
+            for f in _planar_faces_on(c, pp, nn):
+                if typ == "half":
+                    fc = f.center()
+                    if (np.array([fc.X, fc.Y, fc.Z]) - np.asarray(sec["split"], float)) @ np.asarray(sec["along"],
+                                                                                                 float) < 0:
+                        continue
+                if any(f.is_same(g) for _o, g in faces):
+                    continue
+                faces.append((name, f))
+    if not kept:
+        return None
+    return kept, faces
+
+
+def _prism(poly3d, direction, size):
+    from build123d import Face, Vector, Wire, extrude
+    w = Wire.make_polygon([Vector(*q) for q in poly3d], close=True)
+    f = Face(w)
+    return extrude(f, amount=size, dir=Vector(*direction), both=True)
+
+
+def _aligned_shape(s, sec, size):
+    """Aligned section: the material on the second arm's side turned into the first arm's plane."""
+    from build123d import Axis, Vector
+    V = np.asarray(sec["vertex"], float)
+    m = np.asarray(sec["bisector_normal"], float)
+    try:
+        b_side = s & _halfspace(V, m, size)
+        a_side = s - _halfspace(V, m, size)
+    except Exception:  # noqa: BLE001
+        return s
+    parts = [x for x in (a_side,) if x is not None and x.volume > 1e-9]
+    if b_side is not None and b_side.volume > 1e-9:
+        parts.append(b_side.rotate(Axis(Vector(*V), Vector(*sec["axis"])), float(sec["rotate"])))
+    return _compound(parts) if parts else s
+
+
+def _broken_out(doc, named, view, center, d, u, r, size, opts):
+    """Broken-out section: material inside the region, in front of the depth plane, is broken away; the
+    exposed faces are hatched and a freehand break line drawn round the region."""
+    bo = view["broken_out"]
+    reg = bo["region"]
+    pts3 = [list(center + r * q[0] + u * q[1]) for q in reg]
+    prism = _prism(pts3, d, size)
+    depth_pt = center + d * float(bo.get("depth", 0.0))
+    remove = prism & _halfspace(depth_pt, d, size)
+    kept, hatch = [], []
+    for k, (name, s) in enumerate(named):
+        try:
+            c = s if (_is_std(doc, name) and not opts.section_fasteners) else s - remove
+        except Exception:  # noqa: BLE001
+            c = s
+        kept.append(c)
+        for f in _planar_faces_on(c, depth_pt, d):
+            loops = []
+            for w in [f.outer_wire(), *f.inner_wires()]:
+                pts = []
+                for e in w.edges():
+                    m = 2 if e.geom_type.name == "LINE" else 24
+                    pts += [_project_point([q.X, q.Y, q.Z], center, d, u, r)
+                            for q in (e.position_at(i / m) for i in range(m))]
+                loops.append(pts)
+            from .practice import hatch_for
+            mat = doc.material_of(name)
+            hatch.append({"t": "hatch", "loops": loops, "pattern": hatch_for(mat) if opts.material_hatch else "ANSI31",
+                          "style": "hatch", "spacing": opts.hatch_spacing, "angle": 45.0 if k % 2 == 0 else 135.0})
+    return _compound(kept), hatch, [_freehand(reg)]
+
+
+def _freehand(reg, amp=0.9):
+    """A wavy break line round a region (closed)."""
+    out = []
+    pts = list(reg) + [reg[0]]
+    k = 0
+    for a, b in zip(pts, pts[1:]):
+        L = math.hypot(b[0] - a[0], b[1] - a[1])
+        n = max(2, int(L / 3))
+        nx, ny = (-(b[1] - a[1]) / (L or 1), (b[0] - a[0]) / (L or 1))
+        for i in range(n):
+            t = i / n
+            w = amp * math.sin(k * 1.7)
+            k += 1
+            out.append([a[0] + (b[0] - a[0]) * t + nx * w, a[1] + (b[1] - a[1]) * t + ny * w])
+    out.append(out[0])
+    return {"t": "poly", "pts": out, "closed": True, "style": "break"}
+
+
+def _explode_lines(doc, view, center, d, u, r):
+    """Explode lines: from where each part sits in the assembly to where the exploded view shows it."""
+    off = getattr(doc, "explode", {}) or {}
+    out = []
+    names = view.get("objects") or [o.name for o in doc.objects if o.visible]
+    from ..core.assembly import pose_matrix
+    for nme in names:
+        if nme not in off or doc.result.bodies.get(nme) is None:
+            continue
+        o = doc.obj(nme)
+        c = doc.result.bodies[nme].center()
+        P = (pose_matrix(o.pose) @ np.array([c.X, c.Y, c.Z, 1.0]))[:3]
+        Q = P + np.asarray(off[nme][:3], float)
+        a, b = _project_point(P, center, d, u, r), _project_point(Q, center, d, u, r)
+        if math.hypot(b[0] - a[0], b[1] - a[1]) > 1.0:
+            out.append((a, b))
+    return out
+
+
 def _compound(shapes):
     from build123d import Compound
     return shapes[0] if len(shapes) == 1 else Compound(shapes)
@@ -175,10 +361,11 @@ def compute(doc, view, opts: Options):
                               "align": "center", "style": "text", "fixed_size": True})
         view["_prims"], view["_bbox"], view["_circles"] = prims, prim_bbox(prims), []
         return
-    shapes = _shapes(doc, view)
-    if not shapes:
+    named = _named_shapes(doc, view)
+    if not named:
         view["_prims"], view["_bbox"], view["_circles"] = [], (0, 0, 0, 0), []
         return
+    shapes = [b for _n, b in named]
     whole = _compound(shapes)
     bb = whole.bounding_box()
     center = np.array([(bb.min.X + bb.max.X) / 2, (bb.min.Y + bb.max.Y) / 2, (bb.min.Z + bb.max.Z) / 2])
@@ -188,58 +375,67 @@ def compute(doc, view, opts: Options):
     dname = view.get("dir", "front")
     direction, up = (view["vector"], view.get("up", (0, 0, 1))) if dname == "custom" else VIEW_DIRS[dname]
     d, u, r = _basis(direction, up)
-    hatch = []
+    hatch, outline = [], []
+    size = bb.diagonal * 4 + 10
     if kind == "section":
         sec = view["section"]
-        P0, n = np.asarray(sec["point"], float), np.asarray(sec["normal"], float)
+        n = np.asarray(sec["normal"], float)
         n = n / np.linalg.norm(n)
         d, u, r = _basis(n, up if abs(np.dot(np.asarray(up, float), n)) < 0.99 else (0, 1, 0))
-        from build123d import Box, Face, Location, Plane, Pos
-        size = bb.diagonal * 4 + 10
-        pl = Plane(origin=tuple(P0), z_dir=tuple(n))
-        keep = pl.location * Pos(0, 0, -size / 2) * Box(size, size, size)      # the side away from the viewer
-        cut = []
-        for s in shapes:
-            try:
-                c = s & keep
-                if c.volume > 1e-9:
-                    cut.append(c)
-            except Exception:  # noqa: BLE001
-                pass
-        if not cut:
+        res = _section_cut(doc, named, sec, size, opts)
+        if res is None:
             view["_prims"], view["_bbox"], view["_circles"] = [], (0, 0, 0, 0), []
             return
-        whole = _compound(cut)
-        disc = Face.make_rect(size, size, pl)
-        for s in cut:
-            try:
-                f = s & disc
-                for face in f.faces():
-                    loops = []
-                    for w in [face.outer_wire(), *face.inner_wires()]:
-                        pts = []
-                        for e in w.edges():
-                            m = 2 if e.geom_type.name == "LINE" else 24
-                            pts += [_project_point([q.X, q.Y, q.Z], center, d, u, r)
-                                    for q in (e.position_at(i / m) for i in range(m))]
-                        loops.append(pts)
-                    hatch.append({"t": "hatch", "loops": loops, "pattern": "ANSI31", "style": "hatch",
-                                  "spacing": opts.hatch_spacing})
-            except Exception:  # noqa: BLE001
-                pass
+        kept, faces = res
+        for k, (oname, f) in enumerate(faces):
+            loops = []
+            for w in [f.outer_wire(), *f.inner_wires()]:
+                pts = []
+                for e in w.edges():
+                    m = 2 if e.geom_type.name == "LINE" else 24
+                    pts += [_project_point([q.X, q.Y, q.Z], center, d, u, r)
+                            for q in (e.position_at(i / m) for i in range(m))]
+                loops.append(pts)
+            if not loops or len(loops[0]) < 3:
+                continue
+            idx = [nm for nm, _b in named].index(oname) if oname in [nm for nm, _b in named] else k
+            mat = doc.material_of(oname) if oname and doc.has_obj(oname) else None
+            from .practice import hatch_for
+            pat = hatch_for(mat) if (opts.material_hatch and mat is not None) else "ANSI31"
+            hatch.append({"t": "hatch", "loops": loops, "pattern": pat, "style": "hatch",
+                          "spacing": opts.hatch_spacing * (1.0 if idx % 3 != 2 else 0.7),
+                          "angle": 45.0 if idx % 2 == 0 else 135.0, "object": oname})
+            if sec.get("type") in ("removed", "revolved"):
+                for lp in loops:
+                    outline.append({"t": "poly", "pts": lp, "closed": True, "style": "visible"})
+        if sec.get("type") in ("removed", "revolved"):
+            prims = hatch + outline
+            view["_prims"], view["_bbox"], view["_circles"] = prims, prim_bbox(prims), []
+            view["_basis"] = (list(d), list(u), list(r))
+            return
+        whole = _compound(kept)
+    elif view.get("broken_out"):
+        whole, hatch, brk = _broken_out(doc, named, view, center, d, u, r, size, opts)
+        outline += brk
+    if dname == "oblique":
+        from .practice import oblique
+        whole = oblique(whole)
+        bb2 = whole.bounding_box()
+        center = np.array([(bb2.min.X + bb2.max.X) / 2, (bb2.min.Y + bb2.max.Y) / 2, (bb2.min.Z + bb2.max.Z) / 2])
     viewer = center + d * (bb.diagonal * 10 + 1000)
     vis, hid = whole.project_to_viewport(tuple(viewer), tuple(u), tuple(center))
     vprims = _edge_prims(vis)
-    hprims = _drop_covered(_edge_prims(hid, hidden=True), vprims) if view.get("hidden", opts.hidden_lines) else []
-    prims = vprims + hprims
-    # the projection's 2D frame: x right, y up, origin at the look-at point — normalise to (r, u)
-    prims = hatch + prims
+    hidden_on = view.get("hidden", False if kind == "section" else opts.hidden_lines)
+    hprims = _drop_covered(_edge_prims(hid, hidden=True), vprims) if hidden_on and dname != "oblique" else []
+    prims = hatch + vprims + hprims + outline
     circles = []
     for p in prims:
         if p["t"] == "circle" and p.get("style") == "visible":
             circles.append({"c": p["c"], "r": p["r"]})
     view["_prims"], view["_bbox"], view["_circles"] = prims, prim_bbox(prims), circles
     view["_basis"] = (list(d), list(u), list(r))
+    if view.get("exploded"):
+        view["_explode_lines"] = _explode_lines(doc, view, center, d, u, r)
 
 
 def _clip_circle(prims, c, R):
@@ -286,18 +482,24 @@ def _clip_circle(prims, c, R):
 
 # -------------------------------------------------------- annotations -----
 
-def fmt(v, opts: Options):
-    if opts.units == "in":
-        return f"{v / 25.4:.{max(opts.decimals, 2) + 1}f}"
-    s = f"{v:.{opts.decimals}f}"
-    return s.rstrip("0").rstrip(".") if "." in s else s
+def fmt(v, opts: Options, secondary=False):
+    """A length in the drawing's units, written per its dimensioning standard; secondary = the other unit
+    (dual dimensioning)."""
+    from .practice import format_number
+    inch = (opts.units == "in") != bool(secondary)
+    if secondary:
+        return format_number(v / 25.4, opts, 2, trailing=True) if inch else format_number(v, opts, 1)
+    if inch:
+        dec = opts.decimals if opts.dim_standard else max(opts.decimals, 2) + 1
+        return format_number(v / 25.4, opts, dec)
+    return format_number(v, opts, opts.decimals)
 
 
 def auto_annotations(doc, view, opts: Options):
     """Overall dimensions, centre marks and hole callouts for an orthographic view (view-local)."""
     out = []
     if view.get("kind") not in ("base", "projected", "section", "flat", "auxiliary") or view.get("dir") in (
-            "iso", "dimetric", "trimetric"):
+            "iso", "dimetric", "trimetric", "oblique") or (view.get("section") or {}).get("type") in ("revolved",):
         return out
     x0, y0, x1, y1 = view.get("_bbox", (0, 0, 0, 0))
     if x1 - x0 < 1e-6 and y1 - y0 < 1e-6:
@@ -404,9 +606,9 @@ def standard_views(doc, drawing: Drawing, sheet: Sheet, which=("front", "top", "
     # extents of the projected neighbours
     others = []
     for name in which[1:]:
-        v = {"id": new_id(), "kind": "iso" if name in ("iso", "dimetric", "trimetric") else "projected", "dir": name,
+        v = {"id": new_id(), "kind": "iso" if name in ("iso", "dimetric", "trimetric", "oblique") else "projected", "dir": name,
              "objects": objects or [], "parent": base["id"], "hidden": opts.hidden_lines if name not in
-             ("iso", "dimetric", "trimetric") else False, "center": base["center"]}
+             ("iso", "dimetric", "trimetric", "oblique") else False, "center": base["center"]}
         compute(doc, v, opts)
         others.append(v)
     ext_w = bw + sum((v["_bbox"][2] - v["_bbox"][0]) for v in others if v["dir"] in ("right", "left", "iso")) + 1e-6
@@ -421,7 +623,7 @@ def standard_views(doc, drawing: Drawing, sheet: Sheet, which=("front", "top", "
     rules = PROJ[opts.standard]
     for v in others:
         vw, vh = (v["_bbox"][2] - v["_bbox"][0]) * s, (v["_bbox"][3] - v["_bbox"][1]) * s
-        if v["dir"] in ("iso", "dimetric", "trimetric"):
+        if v["dir"] in ("iso", "dimetric", "trimetric", "oblique"):
             v.update(x=W - 20 - vw / 2 - 15, y=H - 20 - vh / 2 - 15, scale=s)
         else:
             dx, dy = rules.get(v["dir"], (1, 0))

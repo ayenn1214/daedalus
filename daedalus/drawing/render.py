@@ -8,15 +8,16 @@ from __future__ import annotations
 
 import datetime as _dt
 import math
+from pathlib import Path
 
 from .model import STYLES, Drawing, Sheet, scale_factor, scale_text
 from .views import fmt, prim_bbox
 
 LAYER_OF = {"visible": "VISIBLE", "hidden": "HIDDEN", "center": "CENTER", "dim": "DIM", "thin": "THIN",
             "hatch": "HATCH", "text": "TEXT", "border": "BORDER", "section": "SECTION",
-            "construction": "CONSTRUCTION"}
+            "construction": "CONSTRUCTION", "phantom": "PHANTOM", "cutting": "SECTION", "break": "THIN"}
 
-TITLE_FIELDS = ["title", "number", "material", "author", "checked", "date", "company", "revision"]
+from .practice import EDITABLE as TITLE_FIELDS  # noqa: E402  title block fields the user fills in
 
 
 # ------------------------------------------------------------ geometry -----
@@ -50,41 +51,51 @@ def transform(prim, view):
         q["_unit"] = 1.0 / s                      # sheet mm → model mm
     elif t == "balloon":
         q["p"], q["at"] = _xf(prim["p"], view), _xf(prim["at"], view) if "at" in prim else None
+    elif t == "image":
+        q["p"], q["w"], q["h"] = _xf(prim["p"], view), prim["w"] * s, prim["h"] * s
     return q
 
 
 def dim_value(d, opts):
-    """Displayed text of a dimension."""
+    """Displayed text of a dimension: value per the dimensioning standard, tolerance, [dual units],
+    (reference) — not-to-scale dimensions are underlined when drawn (see explode_dim)."""
+    from .practice import format_angle
     if d.get("kind") == "ordinate":
         from .annot import ordinate_value
         return ordinate_value(d, opts)
     if d.get("text") and "<>" not in d["text"]:
-        return d["text"]
+        s = d["text"]
+        return f"({s})" if d.get("ref") and not s.startswith("(") else s
     k = d.get("_unit", 1.0)
     kind = d.get("kind", "aligned")
     p1, p2 = d.get("p1", [0, 0]), d.get("p2", [0, 0])
+    v = None
+    pre = ""
     if kind == "h":
         v = abs(p2[0] - p1[0]) * k
-        s = fmt(v, opts)
     elif kind == "v":
         v = abs(p2[1] - p1[1]) * k
-        s = fmt(v, opts)
     elif kind == "dia":
-        s = "Ø" + fmt(2 * d.get("r", 0) * k, opts)
+        v, pre = 2 * d.get("r", 0) * k, "Ø"
     elif kind == "rad":
-        s = "R" + fmt(d.get("r", 0) * k, opts)
+        v, pre = d.get("r", 0) * k, "R"
     elif kind == "angle":
         c = d.get("c", p1)
         a1 = math.atan2(p1[1] - c[1], p1[0] - c[0])
         a2 = math.atan2(p2[1] - c[1], p2[0] - c[0])
-        s = f"{abs(math.degrees((a2 - a1 + math.pi) % (2 * math.pi) - math.pi)):.{max(0, opts.decimals - 1)}f}°"
+        s = format_angle(math.degrees((a2 - a1 + math.pi) % (2 * math.pi) - math.pi), opts)
     else:
         v = math.hypot(p2[0] - p1[0], p2[1] - p1[1]) * k
-        s = fmt(v, opts)
+    if v is not None:
+        s = pre + fmt(v, opts)
     if d.get("tol"):
         s += f" {d['tol']}"
+    if v is not None and (d.get("dual", opts.dual_units)):
+        s += f" [{pre}{fmt(v, opts, secondary=True)}]"
     if d.get("text"):
         s = d["text"].replace("<>", s)
+    if d.get("ref"):
+        s = f"({s})"
     return s
 
 
@@ -114,9 +125,11 @@ def explode_dim(d, opts):
     def L(a, b):
         out.append({"t": "line", "a": list(a), "b": list(b), "style": "dim", "layer": lay})
 
+    ul = bool(d.get("nts"))                         # not to scale: underlined
+
     def T(p, ang=0.0, align="center"):
         out.append({"t": "text", "p": list(p), "text": txt, "h": th, "angle": ang, "align": align, "style": "text",
-                    "layer": lay})
+                    "layer": lay, **({"underline": True} if ul else {})})
 
     if kind in ("h", "v", "aligned"):
         if kind == "h":
@@ -134,16 +147,25 @@ def explode_dim(d, opts):
         q2 = [q1[0] + u[0] * t2, q1[1] + u[1] * t2]
         sg = 1 if off >= 0 else -1
         gap, ext = 1.0, 2.0
-        for p, q in ((p1, q1), (p2, q2)):
+        for p, q in (((p2, q2),) if d.get("half") else ((p1, q1), (p2, q2))):
             L([p[0] + n[0] * gap * sg, p[1] + n[1] * gap * sg], [q[0] + n[0] * ext * sg, q[1] + n[1] * ext * sg])
-        L(q1, q2)
         dirn = (q2[0] - q1[0], q2[1] - q1[1])
-        if math.hypot(*dirn) > 2.5 * A:
-            out.append(_arrow(q1, (-dirn[0], -dirn[1]), A))
+        if d.get("half"):                           # dimension not complete: free end gets a double arrowhead
+            f0 = [q1[0] + dirn[0] * 0.35, q1[1] + dirn[1] * 0.35]
+            L(f0, q2)
             out.append(_arrow(q2, dirn, A))
-        else:                                       # arrows outside on short dims
-            out.append(_arrow(q1, dirn, A))
-            out.append(_arrow(q2, (-dirn[0], -dirn[1]), A))
+            out.append(_arrow(f0, (-dirn[0], -dirn[1]), A * 0.8))
+            Ln_ = math.hypot(*dirn) or 1
+            out.append(_arrow([f0[0] + dirn[0] / Ln_ * A * 0.8, f0[1] + dirn[1] / Ln_ * A * 0.8],
+                              (-dirn[0], -dirn[1]), A * 0.8))
+        else:
+            L(q1, q2)
+            if math.hypot(*dirn) > 2.5 * A:
+                out.append(_arrow(q1, (-dirn[0], -dirn[1]), A))
+                out.append(_arrow(q2, dirn, A))
+            else:                                       # arrows outside on short dims
+                out.append(_arrow(q1, dirn, A))
+                out.append(_arrow(q2, (-dirn[0], -dirn[1]), A))
         ang = math.degrees(math.atan2(u[1], u[0]))
         if ang > 90.0001 or ang < -89.9999:
             ang -= 180 if ang > 0 else -180
@@ -151,9 +173,18 @@ def explode_dim(d, opts):
         tpos = min(max(tpos, min(0, t2)), max(0, t2)) if abs(t2) > 3 * th else t2 / 2
         ar = math.radians(ang)
         up = (-math.sin(ar), math.cos(ar))
-        mid = [q1[0] + u[0] * tpos + up[0] * 0.8, q1[1] + u[1] * tpos + up[1] * 0.8]
-        out.append({"t": "text", "p": mid, "text": txt, "h": th, "angle": ang, "align": "center", "valign": "bottom",
-                    "style": "text", "layer": lay})
+        if getattr(opts, "dim_text", "aligned") == "unidirectional" and abs(ang) > 0.5:
+            # horizontal text, beside the dimension line, away from the part
+            tw = len(txt) * th * 0.62
+            side = sg if abs(n[0]) > 1e-6 else 1
+            base = [q1[0] + u[0] * tpos, q1[1] + u[1] * tpos]
+            mid = [base[0] + n[0] * side * (tw / 2 + 1.2), base[1] + n[1] * side * (tw / 2 + 1.2)]
+            out.append({"t": "text", "p": mid, "text": txt, "h": th, "angle": 0.0, "align": "center",
+                        "valign": "middle", "style": "text", "layer": lay, **({"underline": True} if ul else {})})
+        else:
+            mid = [q1[0] + u[0] * tpos + up[0] * 0.8, q1[1] + u[1] * tpos + up[1] * 0.8]
+            out.append({"t": "text", "p": mid, "text": txt, "h": th, "angle": ang, "align": "center",
+                        "valign": "bottom", "style": "text", "layer": lay, **({"underline": True} if ul else {})})
     elif kind in ("dia", "rad"):
         c, r = d.get("c", p1), d.get("r", 0)
         dx, dy = at[0] - c[0], at[1] - c[1]
@@ -208,75 +239,100 @@ def _text(p, s, h=3.5, align="left", layer="TEXT", valign="bottom", angle=0):
             "style": "text", "layer": layer}
 
 
+def title_values(doc, drawing: Drawing, sheet: Sheet) -> dict:
+    """What the title block shows: your fields, plus the ones Daedalus fills in (scale, size, sheet n of N,
+    units, CAD version, file names, material, mass, drawing number)."""
+    from .. import __version__
+    from . import practice as P
+    t = dict(sheet.title)
+    if "author" in t and not t.get("drawn"):
+        t["drawn"] = t["author"]
+    if "date" in t and not t.get("drawn_date"):
+        t["drawn_date"] = t["date"]
+    t.setdefault("drawn_date", _dt.date.today().isoformat())
+    t.setdefault("title", getattr(doc, "name", "") or "Part")
+    t["revision"] = t.get("revision") or (getattr(sheet, "revisions", None) or [{}])[-1].get("rev", "A") or "A"
+    t["scale"] = scale_text(sheet.scale)
+    t["size"] = sheet.size if sheet.size != "Custom" else f"{sheet.dims()[0]:g}×{sheet.dims()[1]:g}"
+    t["sheet"] = f"{drawing.sheets.index(sheet) + 1} OF {len(drawing.sheets)}" if sheet in drawing.sheets else "1 OF 1"
+    t["units"] = t.get("units") or ("MM" if drawing.options.units == "mm" else "INCH")
+    if drawing.options.dual_units:
+        t["units"] += " [IN]" if drawing.options.units == "mm" else " [MM]"
+    fn = Path(getattr(doc, "path", "") or "").name if doc is not None else ""
+    t["file"] = t.get("file") or (f"{drawing.name} · {fn}" if fn else drawing.name)
+    objs = sorted({o for v in sheet.views for o in (v.get("objects") or [])})
+    if not objs and sheet.views and getattr(doc, "objects", None):
+        objs = [o.name for o in doc.objects if o.visible and doc.result.bodies.get(o.name) is not None]
+    t["source"] = t.get("source") or (", ".join(objs)[:60] if objs else fn or "")
+    t["cad"] = t.get("cad") or (f"Daedalus {__version__} · {drawing.name}" + (f" · {fn}" if fn else "") +
+                                (f" · SOURCE: {t['source']}" if t["source"] and t["source"] != fn else ""))
+    if not t.get("material") and getattr(doc, "objects", None):
+        try:
+            names = objs or [o.name for o in doc.objects if o.visible]
+            mats = {doc.material_of(n).name for n in names}
+            t["material"] = ", ".join(sorted(mats))[:60]
+        except Exception:  # noqa: BLE001
+            pass
+    if not t.get("mass") and doc is not None and objs:
+        try:
+            m = sum(doc.result.bodies[n].volume * doc.material_of(n).density / 1e6 for n in objs
+                    if doc.result.bodies.get(n) is not None)
+            t["mass"] = f"{m:.3g} kg"
+        except Exception:  # noqa: BLE001
+            pass
+    if not t.get("number") and doc is not None and hasattr(doc, "objects"):
+        try:
+            t["number"] = P.number_for(doc, objs, getattr(doc, "numbering", None))
+        except Exception:  # noqa: BLE001
+            pass
+    if not t.get("tolerance"):
+        t["tolerance"] = "LINEAR ±0.1 · ANGULAR ±0.5°" if drawing.options.units == "mm" else \
+            ".XX ±.01 · .XXX ±.005 · ANGULAR ±0.5°"
+    if drawing.options.dim_standard:
+        t["tolerance"] += f" · {drawing.options.dim_standard.split(' (')[0]}"
+    return t
+
+
 def border_and_title(doc, drawing: Drawing, sheet: Sheet):
+    """Frame, zones and title block per the sheet's format (practice.py)."""
+    from . import practice as P
     W, H = sheet.dims()
     if not W or not sheet.border:
         return []
-    m = 10.0
-    out = [_rect(0, 0, W, H, "thin", "BORDER"), _rect(m, m, W - m, H - m)]
-    # zone ticks
-    nx, ny = max(2, int(W // 100)), max(2, int(H // 100))
-    for i in range(1, nx):
-        x = m + (W - 2 * m) * i / nx
-        out += [{"t": "line", "a": [x, m], "b": [x, m - 4], "style": "thin", "layer": "BORDER"},
-                {"t": "line", "a": [x, H - m], "b": [x, H - m + 4], "style": "thin", "layer": "BORDER"}]
-    for i in range(nx):
-        x = m + (W - 2 * m) * (i + 0.5) / nx
-        out += [_text([x, m - 3.2], i + 1, 2.5, "center", "BORDER", "middle"),
-                _text([x, H - m + 3.2], i + 1, 2.5, "center", "BORDER", "middle")]
-    for j in range(ny):
-        y = m + (H - 2 * m) * (j + 0.5) / ny
-        ch = chr(ord("A") + ny - 1 - j)
-        out += [_text([m - 5, y], ch, 2.5, "center", "BORDER", "middle"),
-                _text([W - m + 5, y], ch, 2.5, "center", "BORDER", "middle")]
-    # title block, bottom right, 180 × 40
-    tw, thh = min(180.0, W - 2 * m), 40.0
-    x0, y0 = W - m - tw, m
-    out.append(_rect(x0, y0, W - m, y0 + thh))
-    t = {"title": doc.name if hasattr(doc, "name") else "Part", "number": "", "material": "", "author": "",
-         "checked": "", "date": _dt.date.today().isoformat(), "company": "",
-         "revision": (getattr(sheet, "revisions", None) or [{}])[-1].get("rev", "A") or "A", **sheet.title}
-    if not t.get("material") and getattr(doc, "objects", None):
-        try:
-            mats = {doc.material_of(o.name).name for o in doc.objects if o.visible}
-            t["material"] = ", ".join(sorted(mats))[:40]
-        except Exception:  # noqa: BLE001
-            pass
-    cols = [x0, x0 + tw * 0.25, x0 + tw * 0.5, x0 + tw * 0.75, W - m]
-    rows = [y0, y0 + 10, y0 + 20, y0 + 40]
-    for x in cols[1:-1]:
-        out.append({"t": "line", "a": [x, y0], "b": [x, y0 + 20], "style": "thin", "layer": "BORDER"})
-    for y in rows[1:-1]:
-        out.append({"t": "line", "a": [x0, y], "b": [W - m, y], "style": "thin", "layer": "BORDER"})
-    cells = [("SCALE", scale_text(sheet.scale)), ("SHEET", f"{drawing.sheets.index(sheet) + 1} / {len(drawing.sheets)}"),
-             ("SIZE", sheet.size), ("REV", t["revision"]),
-             ("DRAWN", t["author"]), ("CHECKED", t["checked"]), ("DATE", t["date"]), ("DWG NO", t["number"])]
-    for i, (lab, val) in enumerate(cells):
-        cx, cy = cols[i % 4], rows[1 - i // 4]
-        out.append(_text([cx + 1.5, cy + 7], lab, 1.8, layer="BORDER"))
-        out.append(_text([cx + 1.5, cy + 1.6], val, 3.0, layer="TITLE"))
-    out.append(_text([x0 + 2, y0 + 33], t["title"], 6.0, layer="TITLE"))
-    out.append(_text([x0 + 2, y0 + 23], f"MATERIAL: {t['material']}", 2.5, layer="TITLE"))
-    if t["company"]:
-        out.append(_text([W - m - 2, y0 + 33], t["company"], 3.5, "right", "TITLE"))
-    proj = "FIRST ANGLE" if drawing.options.standard == "ISO" else "THIRD ANGLE"
-    unit = "mm" if drawing.options.units == "mm" else "inch"
-    out.append(_text([W - m - 2, y0 + 23], f"{proj} PROJECTION · DIMENSIONS IN {unit.upper()}", 2.0, "right",
-                     "BORDER"))
+    f = P.sheet_format(drawing, sheet)
+    L, B, R, T = P.frame_rect(drawing, sheet)
+    out = [_rect(0, 0, W, H, "thin", "BORDER"), _rect(L, B, R, T)]
+    out += P.zones(drawing, sheet)
+    if f.get("title_block", {}).get("rows"):
+        out += P.title_block(doc, drawing, sheet, title_values(doc, drawing, sheet))
+    out += P.notes_block(drawing, sheet, drawing.options.text_height * 0.8)
     return out
 
 
-def bom_table(doc, sheet: Sheet, at=None):
+def bom_table(doc, sheet: Sheet, at=None, drawing=None):
+    """Parts list, bottom right just above the title block: item, part no., description, material, qty and the
+    drawing number of each part (when the model is numbered)."""
     try:
         rows = doc.bom()
     except Exception:  # noqa: BLE001
         return []
     if not rows:
         return []
+    from . import practice as P
     W, H = sheet.dims()
+    nums = {}
+    try:
+        nums = P.object_numbers(doc, getattr(doc, "numbering", None)) if getattr(doc, "numbering", None) else {}
+    except Exception:  # noqa: BLE001
+        nums = {}
     cols = [("ITEM", 12), ("PART NO.", 38), ("DESCRIPTION", 70), ("MATERIAL", 40), ("QTY", 12)]
+    if nums:
+        cols = [("ITEM", 12), ("PART NO.", 34), ("DESCRIPTION", 58), ("MATERIAL", 34), ("DWG NO.", 30), ("QTY", 12)]
     tw = sum(w for _, w in cols)
     rh = 6.0
+    if at is None and drawing is not None:
+        x0_, y0_, x1_, y1_ = P.title_block_rect(drawing, sheet)
+        at = [x1_ - tw, y1_ + rh * (len(rows) + 1)]
     x0 = (at or [W - 10 - tw, 0])[0]
     ytop = (at or [0, 10 + 40 + rh * (len(rows) + 1)])[1]
     out = []
@@ -284,9 +340,13 @@ def bom_table(doc, sheet: Sheet, at=None):
     for i, row in enumerate([None, *rows]):
         out.append(_rect(x0, y - rh, x0 + tw, y, "thin", "BOM"))
         x = x0
-        vals = (["ITEM", "PART NO.", "DESCRIPTION", "MATERIAL", "QTY"] if row is None else
-                [row["item"], row.get("part", ""), row.get("description", ""),
-                 row.get("material", ""), row.get("qty", 1)])
+        if row is None:
+            vals = [c for c, _ in cols]
+        else:
+            vals = [row["item"], row.get("part", ""), row.get("description", ""), row.get("material", "")]
+            if nums:
+                vals.append(next((nums[n] for n in row.get("objects", []) if n in nums), ""))
+            vals.append(row.get("qty", 1))
         for (lab, w), v in zip(cols, vals):
             out.append({"t": "line", "a": [x, y - rh], "b": [x, y], "style": "thin", "layer": "BOM"})
             out.append(_text([x + 1.2, y - rh + 1.6], str(v)[: int(w / 1.9)], 2.5 if row is None else 2.8, layer="BOM"))
@@ -315,20 +375,22 @@ def flatten(doc, drawing: Drawing, sheet: Sheet, include_views=True):
         x0, y0, x1, y1 = v.get("_bbox", (0, 0, 0, 0))
         label = v.get("label") or ""
         if v.get("kind") == "section":
-            label = label or f"SECTION {v.get('section', {}).get('name', 'A')}-{v.get('section', {}).get('name', 'A')}"
+            from .practice import section_label
+            label = label or section_label(v)
         if v.get("kind") == "detail":
             label = label or f"DETAIL {v.get('detail', {}).get('name', 'B')}"
         if label:
             if v["scale"] != scale_factor(sheet.scale):
                 label += f" ({_scale_str(v['scale'])})"
             out.append(_text([v["x"], v["y"] + y0 * v["scale"] - 8], label, 3.5, "center", "TEXT", "top"))
-        for sv in sheet.views:                       # section line / detail circle markers on the parent
-            if sv.get("parent") == v["id"] and sv.get("kind") == "section" and sv.get("section", {}).get("line"):
-                a, b = sv["section"]["line"]
-                out.append({**transform({"t": "line", "a": a, "b": b}, v), "style": "section", "layer": "SECTION"})
-                nm = sv["section"].get("name", "A")
-                for pt in (a, b):
-                    out.append(_text(_xf(pt, v), nm, 5, "center", "TEXT", "middle"))
+        if v.get("exploded") and opts.explode_lines and v.get("_explode_lines"):
+            for a, b in v["_explode_lines"]:
+                out.append({**transform({"t": "line", "a": a, "b": b}, v), "style": "phantom", "layer": "PHANTOM"})
+        for sv in sheet.views:                       # cutting-plane lines / detail circles on the parent
+            sec = sv.get("section") or {}
+            if sv.get("parent") == v["id"] and sv.get("kind") == "section" and (sec.get("path") or sec.get("line")):
+                out += cutting_plane(sv, v)
+
             if sv.get("parent") == v["id"] and sv.get("kind") == "detail":
                 dt = sv["detail"]
                 out.append({**transform({"t": "circle", "c": dt["c"], "r": dt["r"]}, v), "style": "thin",
@@ -344,9 +406,10 @@ def flatten(doc, drawing: Drawing, sheet: Sheet, include_views=True):
                 at = [p[0] + 18 * math.cos(ang), p[1] + 18 * math.sin(ang)]
                 out.append({"t": "balloon", "p": p, "at": at, "text": str(b["item"]), "style": "dim", "layer": "DIM"})
     if drawing.options.bom and any(v.get("bom") for v in sheet.views):
-        out += bom_table(doc, sheet)
+        out += bom_table(doc, sheet, drawing=drawing)
     from .annot import revision_table
-    out += revision_table(sheet)
+    from .practice import frame_rect
+    out += revision_table(sheet, frame_rect(drawing, sheet) if sheet.dims()[0] else None)
     for it in sheet.items:
         if not sheet.layers.get(it.get("layer", "0"), {}).get("visible", True):
             continue
@@ -355,6 +418,38 @@ def flatten(doc, drawing: Drawing, sheet: Sheet, include_views=True):
         if q["t"] == "dim" and "_unit" not in q:
             q["_unit"] = q.get("unit") or (1.0 / scale_factor(sheet.scale) if sheet.dims()[0] else 1.0)
         out.append(q)
+    return out
+
+
+def cutting_plane(sv, parent):
+    """Cutting-plane line on the parent view: thin chain, thick ends, arrows towards the viewing direction
+    (looking at the part that's kept), letters at the arrows. Revolved sections draw none."""
+    sec = sv["section"]
+    if sec.get("type") == "revolved":
+        return []
+    pts = [list(map(float, q)) for q in (sec.get("path") or sec["line"])]
+    S = [_xf(q, parent) for q in pts]
+    out = [{"t": "poly", "pts": S, "closed": False, "style": "phantom", "layer": "SECTION"}]
+    nm = sec.get("name", "A")
+    look = sec.get("look2d")                        # viewing direction in the parent view (unit 2D)
+    for i, (end, nxt) in enumerate(((S[0], S[1]), (S[-1], S[-2]))):
+        dx, dy = nxt[0] - end[0], nxt[1] - end[1]
+        Ln = math.hypot(dx, dy) or 1.0
+        ux, uy = dx / Ln, dy / Ln
+        out.append({"t": "line", "a": end, "b": [end[0] + ux * 7, end[1] + uy * 7], "style": "cutting",
+                    "layer": "SECTION"})
+        if look:
+            lx, ly = look
+        else:
+            lx, ly = -uy, ux
+        tip = [end[0] + lx * 9, end[1] + ly * 9]       # arrow from the line, pointing the way you look
+        out.append({"t": "line", "a": end, "b": tip, "style": "thin", "layer": "SECTION"})
+        out.append(_arrow(tip, (lx, ly), 3.0))
+        out[-1]["layer"] = "SECTION"
+        out.append(_text([tip[0] + lx * 3.5 - ux * 3.5, tip[1] + ly * 3.5 - uy * 3.5], nm, 5, "center", "TEXT",
+                         "middle"))
+    for a, b in zip(S[1:-1], S[2:-1]) if sec.get("path") and len(S) > 2 else []:
+        out.append({"t": "line", "a": a, "b": b, "style": "cutting", "layer": "SECTION"})
     return out
 
 
@@ -402,7 +497,19 @@ def extents(prims):
 
 # ------------------------------------------------------------------ Qt ------
 
-def _hatch_lines(loops, spacing, angle=45.0):
+def hatch_segments(p, opts):
+    """[(a, b, dashed)] for a hatch prim: its pattern's line families (ANSI31…38) at its angle and spacing."""
+    from .practice import hatch_families
+    sp = p.get("spacing", opts.hatch_spacing)
+    ang = p.get("angle", 45.0)
+    out = []
+    for da, mult, phase, dashed in hatch_families(p.get("pattern", "ANSI31")):
+        for a, b in _hatch_lines(p["loops"], sp * mult, ang + da, phase):
+            out.append((a, b, dashed))
+    return out
+
+
+def _hatch_lines(loops, spacing, angle=45.0, phase=0.0):
     """Hatch segments clipped to the loops (even-odd), pure python."""
     a = math.radians(angle)
     u = (math.cos(a), math.sin(a))
@@ -414,9 +521,9 @@ def _hatch_lines(loops, spacing, angle=45.0):
     lo, hi = min(proj), max(proj)
     segs = []
     edges = [(lp[i], lp[(i + 1) % len(lp)]) for lp in loops for i in range(len(lp))]
-    k = math.floor(lo / spacing) + 1
-    while k * spacing < hi:
-        c = k * spacing
+    k = math.floor(lo / spacing - phase) + 1
+    while (k + phase) * spacing < hi:
+        c = (k + phase) * spacing
         ts = []
         for p, q in edges:
             dp, dq = p[0] * n[0] + p[1] * n[1] - c, q[0] * n[0] + q[1] * n[1] - c
@@ -506,8 +613,28 @@ def paint(painter, prims, opts, k=4.0, oy=0.0, ox=0.0, screen=True, selected=(),
             if p.get("solid"):
                 painter.fillPath(path, QColor(p.get("color", "#000000")))
                 continue
-            for a, b in _hatch_lines(p["loops"], p.get("spacing", opts.hatch_spacing), p.get("angle", 45.0)):
-                painter.drawLine(P(a), P(b))
+            dpen = None
+            for a, b, dashed in hatch_segments(p, opts):
+                if dashed:
+                    if dpen is None:
+                        dpen = QPen(painter.pen())
+                        ww = max(dpen.widthF(), 1e-3)
+                        dpen.setDashPattern([max(0.5, 1.5 * k / ww), max(0.5, 1.0 * k / ww)])
+                    painter.save()
+                    painter.setPen(dpen)
+                    painter.drawLine(P(a), P(b))
+                    painter.restore()
+                else:
+                    painter.drawLine(P(a), P(b))
+        elif t == "image":
+            from PySide6.QtGui import QImage
+            img = QImage(str(p.get("path", "")))
+            if not img.isNull():
+                w, h = p["w"] * k, p["h"] * k
+                sc = min(w / img.width(), h / img.height())
+                rw, rh = img.width() * sc, img.height() * sc
+                x0, y0 = p["p"][0] * k + ox, oy - p["p"][1] * k - h
+                painter.drawImage(QRectF(x0 + (w - rw) / 2, y0 + (h - rh) / 2, rw, rh), img)
         elif t == "text":
             h = p.get("h", opts.text_height)
             px = max(h * k, 1.0)
@@ -517,6 +644,9 @@ def paint(painter, prims, opts, k=4.0, oy=0.0, ox=0.0, screen=True, selected=(),
                 f = QFont(key[0])
                 f.setPixelSize(max(1, int(round(px * 1.0 / 0.72))))   # cap height ≈ 0.72 em
                 font_cache[key] = f
+            if p.get("underline"):                    # not-to-scale dimension
+                f = QFont(f)
+                f.setUnderline(True)
             painter.setFont(f)
             painter.save()
             painter.translate(P(p["p"]))

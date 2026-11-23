@@ -2,6 +2,7 @@
 Needs from the host: drawings, dirty, checkpoint(), _emit(); model views also use objects, obj(), result."""
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import numpy as np
@@ -61,7 +62,7 @@ class DrawingDocMixin:
             placed = dv.standard_views(self, dr, sh, tuple(views), objects=list(objects or []))
             multi = len([o for o in self.objects if self.result.bodies.get(o.name) is not None]) > 1
             if placed and (bom if bom is not None else multi):
-                iso = next((v for v in placed if v["dir"] in ("iso", "dimetric", "trimetric")), placed[0])
+                iso = next((v for v in placed if v["dir"] in ("iso", "dimetric", "trimetric", "oblique")), placed[0])
                 iso["balloons"] = True
                 iso["bom"] = True
         self.drawings.append(dr)
@@ -74,8 +75,9 @@ class DrawingDocMixin:
                          x: float | None = None, y: float | None = None, scale: float | None = None,
                          parent: str | None = None, line=None, flip: bool = False, center=None, radius=None,
                          label: str = "", objects=None, sheet: str | None = None, exploded=False, hidden=None,
-                         feature: str | None = None, breaks=None):
-        """Add a view: projected/iso (dir), section (line [[x,y],[x,y]] in the parent view), detail
+                         feature: str | None = None, breaks=None, section_type: str | None = None, path=None):
+        """Add a view: projected/iso/oblique (dir), section (line [[x,y],[x,y]] in the parent view, or path for an
+        offset / aligned section; section_type full | half | offset | aligned | removed | revolved), detail
         (center [x,y] + radius in the parent view) or flat (sheet-metal feature)."""
         from ..drawing import views as dv
         from ..drawing.model import VIEW_DIRS, scale_factor
@@ -110,26 +112,78 @@ class DrawingDocMixin:
             if dir not in VIEW_DIRS:
                 raise FeatureError(f"dir must be one of {list(VIEW_DIRS)}")
             v["dir"] = dir
-            if kind == "iso" or dir in ("iso", "dimetric", "trimetric"):
+            if kind == "iso" or dir in ("iso", "dimetric", "trimetric", "oblique"):
                 v["kind"], v["hidden"] = "iso", v.get("hidden", False)
             if par is not None:
                 v["parent"], v["center"] = par["id"], par.get("center")
         elif kind == "section":
-            if not line or len(line) != 2:
-                raise FeatureError("A section needs line=[[x1,y1],[x2,y2]] in the parent view's mm")
+            pts = [list(map(float, q)) for q in (path or line or [])]
+            styp = section_type or ("offset" if len(pts) > 2 else "full")
+            if styp not in ("full", "half", "offset", "aligned", "removed", "revolved"):
+                raise FeatureError("section_type: full | half | offset | aligned | removed | revolved")
+            if len(pts) < 2:
+                raise FeatureError("A section needs line=[[x1,y1],[x2,y2]] (or path=[…] for offset / aligned) in the "
+                                   "parent view's mm")
+            if styp == "aligned" and len(pts) != 3:
+                raise FeatureError("An aligned section needs path=[end A, vertex, end B] (two arms meeting at the "
+                                   "centre)")
+            if styp == "offset" and len(pts) < 3:
+                raise FeatureError("An offset section needs path=[p1, p2, p3, …] (the cutting line, bent at 90°)")
             d, u, r = (np.asarray(q, float) for q in par["_basis"])
             c = np.asarray(par["center"], float)
-            a3 = c + r * line[0][0] + u * line[0][1]
-            b3 = c + r * line[1][0] + u * line[1][1]
-            L3 = b3 - a3
-            if np.linalg.norm(L3) < 1e-9:
-                raise FeatureError("Section line has zero length")
-            n = np.cross(L3, d)
-            n = n / np.linalg.norm(n) * (-1 if flip else 1)
+            P3 = [c + r * q[0] + u * q[1] for q in pts]
+            sec = {"name": nxt, "type": styp, "line": [pts[0], pts[-1]] if styp != "offset" else [pts[0], pts[1]]}
+            if styp == "aligned":
+                A, V, B = P3
+                a_ = (A - V) / np.linalg.norm(A - V)
+                b_ = (B - V) / np.linalg.norm(B - V)
+                ang = math.degrees(math.atan2(np.dot(np.cross(b_, -a_), d), np.dot(b_, -a_)))
+                w = a_ + b_
+                w = w / np.linalg.norm(w) if np.linalg.norm(w) > 1e-9 else np.cross(d, a_)
+                m = np.cross(d, w)
+                m = m if np.dot(m, b_) > 0 else -m
+                end = V - a_ * np.linalg.norm(B - V)
+                L3 = end - A
+                n = np.cross(L3, d)
+                n = n / np.linalg.norm(n) * (-1 if flip else 1)
+                sec.update(point=list(A), normal=list(n), path=pts, vertex=list(V), axis=list(d), rotate=float(ang),
+                           bisector_normal=list(m))
+            elif styp == "offset":
+                L0 = P3[1] - P3[0]
+                n = np.cross(L0, d)
+                n = n / np.linalg.norm(n) * (-1 if flip else 1)
+                planes = []
+                for p_, q_ in zip(P3, P3[1:]):
+                    nn = np.cross(q_ - p_, d)
+                    if np.linalg.norm(nn) > 1e-9:
+                        planes.append([list(p_), list(nn / np.linalg.norm(nn))])
+                BIG = 1e4
+                e0 = np.asarray(pts[0]) - (np.asarray(pts[1]) - pts[0]) / np.linalg.norm(np.subtract(pts[1], pts[0])) * BIG
+                ek = np.asarray(pts[-1]) + (np.asarray(pts[-1]) - pts[-2]) / np.linalg.norm(np.subtract(pts[-1], pts[-2])) * BIG
+                n2 = np.array([n @ r, n @ u])
+                n2 = n2 / (np.linalg.norm(n2) or 1)
+                poly2 = [e0, *[np.asarray(q) for q in pts], ek, ek - n2 * BIG, e0 - n2 * BIG]
+                sec.update(point=list(P3[0]), normal=list(n), path=pts, planes=planes,
+                           polygon3d=[list(c + r * q[0] + u * q[1]) for q in poly2], depth_dir=list(d))
+                L3 = L0
+            else:
+                L3 = P3[1] - P3[0]
+                if np.linalg.norm(L3) < 1e-9:
+                    raise FeatureError("Section line has zero length")
+                n = np.cross(L3, d)
+                n = n / np.linalg.norm(n) * (-1 if flip else 1)
+                sec.update(point=list(P3[0]), normal=list(n))
+                if styp == "half":
+                    sec.update(along=list(L3 / np.linalg.norm(L3)), split=list(c))
+            look = -n
+            lk = np.array([look @ r, look @ u])
+            sec["look2d"] = list(lk / (np.linalg.norm(lk) or 1))
             v.update(parent=par["id"], dir="custom", vector=list(n), up=list(d if abs(n @ d) < 0.99 else u),
-                     section={"point": list(a3), "normal": list(n), "line": [list(line[0]), list(line[1])],
-                              "name": nxt}, center=par.get("center"))
+                     section=sec, center=par.get("center"))
             v["up"] = list(np.cross(n, L3 / np.linalg.norm(L3)))
+            if styp == "revolved":
+                v["up"] = list(L3 / np.linalg.norm(L3))
+                v["annotate"] = False
         elif kind == "auxiliary":
             if not line or len(line) != 2:
                 raise FeatureError("An auxiliary view needs line=[[x1,y1],[x2,y2]] along an edge in the parent view")
@@ -159,6 +213,12 @@ class DrawingDocMixin:
         self.checkpoint()
         sh.views.append(v)
         dv.regenerate(self, dr)
+        if kind == "section" and v["section"]["type"] == "revolved" and (x is None or y is None):
+            a_, b_ = v["section"]["line"]
+            mx, my = (a_[0] + b_[0]) / 2, (a_[1] + b_[1]) / 2
+            x0, y0, x1, y1 = v.get("_bbox", (0, 0, 0, 0))
+            x = par["x"] + mx * par["scale"] - (x0 + x1) / 2 * v["scale"]
+            y = par["y"] + my * par["scale"] - (y0 + y1) / 2 * v["scale"]
         if x is None or y is None:                  # first free spot on a coarse grid, right of / below the parent
             x0, y0, x1, y1 = v.get("_bbox", (0, 0, 0, 0))
             vw, vh = (x1 - x0) * v["scale"], (y1 - y0) * v["scale"]
@@ -169,7 +229,9 @@ class DrawingDocMixin:
                 a, b, c_, d_ = o.get("_bbox", (0, 0, 0, 0))
                 taken.append((o["x"] + a * o["scale"] - 8, o["y"] + b * o["scale"] - 14, o["x"] + c_ * o["scale"] + 8,
                               o["y"] + d_ * o["scale"] + 8))
-            taken.append((W - 200, 0, W, 60))             # title block
+            from ..drawing.practice import title_block_rect
+            tb = title_block_rect(dr, sh)
+            taken.append((tb[0] - 5, 0, W, tb[3] + 5))     # title block
             best = None
             for gy in np.arange(H - 25 - vh / 2, 25 + vh / 2, -5.0):
                 for gx in np.arange(25 + vw / 2, W - 25 - vw / 2, 5.0):
@@ -227,7 +289,7 @@ class DrawingDocMixin:
 
     def set_drawing_view(self, view: str, drawing: str | None = None, sheet: str | None = None, breaks=None,
                          label: str | None = None, scale: float | None = None, x: float | None = None,
-                         y: float | None = None, hidden: bool | None = None):
+                         y: float | None = None, hidden: bool | None = None, broken_out=None):
         """Change a view: breaks [{"axis": "x"|"y", "a": lo, "b": hi}] in view mm (broken view; [] = none),
         label, scale, position, hidden lines."""
         from ..drawing import views as dv
@@ -253,10 +315,153 @@ class DrawingDocMixin:
             v["y"] = float(y)
         if hidden is not None:
             v["hidden"] = bool(hidden)
+        if broken_out is not None:
+            if broken_out and len(broken_out.get("region") or []) < 3:
+                raise FeatureError("broken_out: {region: [[x,y], …] (≥3 points, view mm), depth: mm from the view "
+                                   "centre towards you (0 = through the middle)}")
+            if broken_out:
+                v["broken_out"] = {"region": [list(map(float, q)) for q in broken_out["region"]],
+                                   "depth": float(broken_out.get("depth", 0.0))}
+            else:
+                v.pop("broken_out", None)
         dv.regenerate(self, dr)
         self.dirty = True
         self._emit()
         return v
+
+    # ------------------------------------------------------------ working-drawing practice
+    def add_drawing_note(self, text: str | None = None, drawing: str | None = None, sheet: str | None = None,
+                         template: str | None = None, index: int | None = None) -> list:
+        """A numbered note (lower left of the sheet): your text or a standard template (practice.NOTE_TEMPLATES)."""
+        from ..drawing.practice import NOTE_TEMPLATES
+        dr = self.drawing(drawing)
+        sh = dr.sheet(sheet)
+        if template:
+            if template not in NOTE_TEMPLATES:
+                raise FeatureError(f"template: one of {list(NOTE_TEMPLATES)}")
+            text = text or NOTE_TEMPLATES[template]
+        if not (text or "").strip():
+            raise FeatureError("Give the note's text (or a template)")
+        self.checkpoint()
+        if index is None:
+            sh.notes.append(text.strip())
+        else:
+            sh.notes.insert(int(index), text.strip())
+        self.dirty = True
+        self._emit()
+        return sh.notes
+
+    def set_drawing_notes(self, notes: list, drawing: str | None = None, sheet: str | None = None) -> list:
+        dr = self.drawing(drawing)
+        sh = dr.sheet(sheet)
+        self.checkpoint()
+        sh.notes = [str(n).strip() for n in notes if str(n).strip()]
+        self.dirty = True
+        self._emit()
+        return sh.notes
+
+    def set_numbering(self, **opts) -> dict:
+        """Drawing-number format for the model (XXXXX.AA.BB…): base, separator, digits, start, step, fill,
+        subassemblies_first, standard_parts, prefix, suffix, order, levels."""
+        from ..drawing.practice import NUMBERING
+        bad = [k for k in opts if k not in NUMBERING]
+        if bad:
+            raise FeatureError(f"Unknown numbering option(s) {bad}. Options: {list(NUMBERING)}")
+        self.checkpoint()
+        cur = dict(getattr(self, "numbering", None) or {})
+        cur.update(opts)
+        self.numbering = cur
+        self.dirty = True
+        self._emit()
+        return cur
+
+    def drawing_numbers(self, **opts) -> list:
+        from ..drawing.practice import drawing_numbers
+        o = dict(getattr(self, "numbering", None) or {})
+        o.update(opts)
+        return drawing_numbers(self, o)
+
+    def apply_drawing_numbers(self) -> dict:
+        """Write each drawing's number into its title block (from the model's numbering)."""
+        from ..drawing.practice import number_for
+        self.checkpoint()
+        out = {}
+        for dr in self.drawings:
+            for sh in dr.sheets:
+                objs = sorted({o for v in sh.views for o in (v.get("objects") or [])})
+                num = number_for(self, objs, getattr(self, "numbering", None))
+                if num:
+                    sh.title["number"] = num
+                    out[f"{dr.name}/{sh.name}"] = num
+        self.dirty = True
+        self._emit()
+        return out
+
+    def set_sheet_format(self, drawing: str | None = None, sheet: str | None = None, name: str | None = None,
+                         custom: dict | None = None, save_as: str | None = None, size: str | None = None,
+                         custom_size=None, all_sheets: bool = False) -> dict:
+        """The sheet's frame, margins, zones and title block layout: a named format (built-in or saved), or a
+        custom one ({margins [l,b,r,t], zones, zone_size, frame_weight, projection_symbol, labels,
+        title_block {width, rows [{h, cells [[field, width], …]}]}}); save_as keeps it as a template."""
+        from ..drawing import practice as P
+        from ..drawing import views as dv
+        dr = self.drawing(drawing)
+        sheets = dr.sheets if all_sheets else [dr.sheet(sheet)]
+        if name and name not in P.list_formats():
+            raise FeatureError(f"No sheet format '{name}'. Formats: {list(P.list_formats())}")
+        if custom:
+            try:
+                P.check_format({**P.FORMATS["ISO 5457 (filing margin)"], **custom})
+            except ValueError as e:
+                raise FeatureError(str(e)) from None
+        if custom_size is not None:
+            w, h = (float(q) for q in custom_size)
+            if w < 50 or h < 50:
+                raise FeatureError("custom_size: [width, height] mm, at least 50 × 50")
+        self.checkpoint()
+        for sh in sheets:
+            if name:
+                sh.format = {"name": name}
+            if custom:
+                sh.format = {"custom": dict(custom)}
+            if custom_size is not None:
+                sh.custom_size = [w, h]
+                sh.size = "Custom"
+            elif size:
+                sh.size = size
+        if save_as:
+            fm = P.sheet_format(dr, sheets[0])
+            P.save_format(save_as, fm)
+        dv.regenerate(self, dr)
+        self.dirty = True
+        self._emit()
+        return P.sheet_format(dr, sheets[0])
+
+    def set_dimension_standard(self, standard: str, drawing: str | None = None) -> dict:
+        """Dimension the drawing to a standard: ISO 129-1, ASME Y14.5 (inch / metric / dual), DIN 406, JIS,
+        BS 8888 — text orientation, decimal sign, leading / trailing zeros, units, projection angle, sizes."""
+        from ..drawing.practice import DIM_STANDARDS
+        if standard not in DIM_STANDARDS:
+            raise FeatureError(f"standard: one of {list(DIM_STANDARDS)}")
+        return self.set_drawing(drawing, options={**DIM_STANDARDS[standard], "dim_standard": standard}).options.to_dict()
+
+    def add_dimension_set(self, kind: str, points, axis: str = "x", at=None, step: float = 8.0,
+                          drawing: str | None = None, sheet: str | None = None) -> list:
+        """Chain (feature to feature) or baseline (all from one datum) dimensions through points, sheet mm."""
+        from ..drawing.practice import dimension_set
+        dr = self.drawing(drawing)
+        sh = dr.sheet(sheet)
+        try:
+            dims = dimension_set(kind, points, axis, at, step)
+        except ValueError as e:
+            raise FeatureError(str(e)) from None
+        self.checkpoint()
+        for dm in dims:
+            dm.setdefault("layer", "DIM")
+            sh.items.append(dm)
+        self.dirty = True
+        self._emit()
+        return dims
 
     def add_revision(self, description: str, drawing: str | None = None, sheet: str | None = None,
                      rev: str | None = None, date: str | None = None, approved: str = "", zone: str = "") -> dict:

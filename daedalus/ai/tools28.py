@@ -47,10 +47,51 @@ TOOLS28 = [
          "angle": N, "plane": {}}, "required": ["action"]}},
     {"name": "set_drawing_view",
      "description": ("Change a drawing view: breaks [{axis:'x'|'y', a, b}] in view mm (broken view, [] removes), "
-                     "label, scale, x, y, hidden."),
+                     "label, scale, x, y, hidden, broken_out {region [[x,y]…] view mm, depth mm towards you from "
+                     "the view centre} (broken-out section; {} removes)."),
      "input_schema": {"type": "object", "properties": {
          "drawing": S, "view": S, "breaks": {"type": "array"}, "label": S, "scale": N, "x": N, "y": N,
-         "hidden": {"type": "boolean"}}, "required": ["view"]}},
+         "hidden": {"type": "boolean"}, "broken_out": {"type": "object"}}, "required": ["view"]}},
+    {"name": "drawing_notes",
+     "description": ("Numbered notes, lower left of a drawing sheet. action add (text, or template: Dimensions, "
+                     "Units, Tolerances, Break edges, Heat treatment, Welding, Plating / coating, Surface preparation, "
+                     "Inspection, Threaded fasteners, Threaded inserts, Deburr, Packaging, Paint — replace <…>) | "
+                     "set (notes [..] replaces all) | list."),
+     "input_schema": {"type": "object", "properties": {"action": {"type": "string", "enum": ["add", "set", "list"]},
+                                                       "drawing": S, "sheet": S, "text": S, "template": S,
+                                                       "notes": {"type": "array", "items": S}},
+                      "required": ["action"]}},
+    {"name": "drawing_numbers",
+     "description": ("Working-drawing numbers for the model: main assembly XXXXX, subassemblies XXXXX.AA, parts "
+                     "XXXXX.AA.BB… (standard parts get none). options (customise, saved with the model): base, "
+                     "separator, digits (2 or '2,3' per level), start, step, fill (pad to full depth), "
+                     "subassemblies_first, standard_parts, prefix, suffix, order model|name, levels. apply=true writes "
+                     "them into the drawings' title blocks. Returns the numbered tree."),
+     "input_schema": {"type": "object", "properties": {"options": {"type": "object"}, "apply": {"type": "boolean"}}}},
+    {"name": "sheet_format",
+     "description": ("Drawing sheet format: list (built-in + saved formats) | set: name (e.g. 'ISO 5457 (filing "
+                     "margin)', 'ASME Y14.1', 'Compact', or one you saved) or custom {margins [left,bottom,right,top] "
+                     "mm, zones, zone_size, frame_weight, projection_symbol, labels {field: text}, title_block {width, "
+                     "rows [{h, cells [[field, width], …]}] bottom→top}} — fields: title company number material "
+                     "drawn checked approved issued scale size sheet revision projection units tolerance finish cad "
+                     "file source mass date logo treatment project customer blank; size or custom_size [w,h]; "
+                     "save_as keeps it as a template; all_sheets."),
+     "input_schema": {"type": "object", "properties": {
+         "action": {"type": "string", "enum": ["list", "set"]}, "drawing": S, "sheet": S, "name": S,
+         "custom": {"type": "object"}, "save_as": S, "size": S, "custom_size": {"type": "array"},
+         "all_sheets": {"type": "boolean"}}, "required": ["action"]}},
+    {"name": "dimension_standard",
+     "description": ("Dimension a drawing to a standard (sets text orientation aligned/unidirectional, decimal sign, "
+                     "leading/trailing zeros, units, projection angle, text and arrow sizes): 'ISO 129-1 (metric)', "
+                     "'ISO 129-1 (decimal point)', 'ASME Y14.5 (inch)', 'ASME Y14.5M (metric)', 'ASME Y14.5 dual (mm "
+                     "[in])', 'DIN 406 / ISO', 'JIS Z 8317', 'BS 8888'. Dimension items also take ref (reference, "
+                     "in brackets), nts (not to scale, underlined), dual, half (dimension not complete)."),
+     "input_schema": {"type": "object", "properties": {"drawing": S, "standard": S}, "required": ["standard"]}},
+    {"name": "add_dimension_set",
+     "description": "Chain (feature to feature) or baseline (all from the first point) dimensions, sheet mm.",
+     "input_schema": {"type": "object", "properties": {
+         "drawing": S, "kind": {"type": "string", "enum": ["chain", "baseline"]}, "points": {"type": "array"},
+         "axis": {"type": "string", "enum": ["x", "y"]}, "at": N, "step": N}, "required": ["kind", "points"]}},
     {"name": "add_revision", "description": "Add a revision-table row (letter auto-increments; title block follows).",
      "input_schema": {"type": "object", "properties": {"drawing": S, "description": S, "rev": S, "approved": S,
                                                        "zone": S}, "required": ["description"]}},
@@ -178,8 +219,40 @@ def run28(doc, name, args):
         return J({"ok": True})
     if name == "set_drawing_view":
         v = d.set_drawing_view(args["view"], args.get("drawing"), breaks=args.get("breaks"), label=args.get("label"),
-                               scale=args.get("scale"), x=args.get("x"), y=args.get("y"), hidden=args.get("hidden"))
+                               scale=args.get("scale"), x=args.get("x"), y=args.get("y"), hidden=args.get("hidden"),
+                               broken_out=args.get("broken_out"))
         return J({"ok": True, "id": v["id"], "bbox": v.get("_bbox"), "break_shift": v.get("_break_shift")})
+    if name == "drawing_notes":
+        a = args["action"]
+        if a == "add":
+            notes = d.add_drawing_note(args.get("text"), args.get("drawing"), args.get("sheet"), args.get("template"))
+        elif a == "set":
+            notes = d.set_drawing_notes(args.get("notes") or [], args.get("drawing"), args.get("sheet"))
+        else:
+            notes = d.drawing(args.get("drawing")).sheet(args.get("sheet")).notes
+        return J({"ok": True, "notes": notes})
+    if name == "drawing_numbers":
+        if args.get("options"):
+            d.set_numbering(**args["options"])
+        out = {"ok": True, "numbering": dict(getattr(d, "numbering", {}) or {}),
+               "drawings": [{k: r[k] for k in ("level", "kind", "name", "number")} for r in d.drawing_numbers()]}
+        if args.get("apply"):
+            out["applied"] = d.apply_drawing_numbers()
+        return J(out)
+    if name == "sheet_format":
+        from ..drawing import practice as P
+        if args["action"] == "list":
+            return J({"formats": list(P.list_formats()), "fields": list(P.FIELDS)})
+        f = d.set_sheet_format(args.get("drawing"), args.get("sheet"), name=args.get("name"), custom=args.get("custom"),
+                               save_as=args.get("save_as"), size=args.get("size"), custom_size=args.get("custom_size"),
+                               all_sheets=bool(args.get("all_sheets")))
+        return J({"ok": True, "format": f})
+    if name == "dimension_standard":
+        return J({"ok": True, "options": d.set_dimension_standard(args["standard"], args.get("drawing"))})
+    if name == "add_dimension_set":
+        dims = d.add_dimension_set(args["kind"], args["points"], args.get("axis", "x"), args.get("at"),
+                                   float(args.get("step", 8.0)), args.get("drawing"))
+        return J({"ok": True, "added": len(dims)})
     if name == "add_revision":
         r = d.add_revision(args["description"], args.get("drawing"), rev=args.get("rev"),
                            approved=args.get("approved", ""), zone=args.get("zone", ""))

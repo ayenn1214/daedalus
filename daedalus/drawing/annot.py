@@ -208,17 +208,18 @@ def ordinate_set(origin, points, axis="x", offset=10.0, unit=None) -> list[dict]
 REV_COLS = [("ZONE", 14), ("REV", 12), ("DESCRIPTION", 72), ("DATE", 24), ("APPROVED", 24)]
 
 
-def revision_table(sheet) -> list[dict]:
+def revision_table(sheet, frame=None) -> list[dict]:
+    """Revision table, top right of the frame."""
     revs = getattr(sheet, "revisions", []) or []
     if not revs:
         return []
     W, H = sheet.dims()
     if not W:
         return []
-    m = 10.0
+    R, T = (frame[2], frame[3]) if frame else (W - 10.0, H - 10.0)
     tw = sum(w for _, w in REV_COLS)
     rh = 6.0
-    x0, ytop = W - m - tw, H - m
+    x0, ytop = R - tw, T
     out = [_rect(x0, ytop - rh, x0 + tw, ytop, "REVISIONS"),
            _text([x0 + tw / 2, ytop - rh / 2], "REVISIONS", 3.0, layer="REVISIONS")]
     y = ytop - rh

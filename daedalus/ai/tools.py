@@ -424,8 +424,12 @@ NEW_TOOLS = [
          "landscape": {"type": "boolean"}, "flat": {"type": "string"}, "bom": {"type": "boolean"}}}},
     {"name": "add_drawing_view",
      "description": ("Add a view to a drawing. kind auxiliary (line along an inclined edge in the parent view: looks "
-                     "square onto it), breaks [{axis,a,b}] (broken view). kind projected|iso (dir), section (line [[x1,y1],[x2,y2]] across the "
-                     "parent view, in that view's model mm about its centre; flip reverses), detail (center [x,y] "
+                     "square onto it), breaks [{axis,a,b}] (broken view). kind projected|iso (dir: front…, iso, "
+                     "dimetric, trimetric, oblique), section (line [[x1,y1],[x2,y2]] across the "
+                     "parent view, in that view's model mm about its centre; flip reverses; section_type full | half "
+                     "| offset (path [[x,y]…] bent at 90°) | aligned (path [end, centre, end]) | removed (the "
+                     "cross-section alone, placed beside) | revolved (the cross-section drawn on the view)), "
+                     "detail (center [x,y] "
                      "+ radius in the parent view, scale default 2× parent), flat (feature). parent = view id, "
                      "label or dir. x,y sheet mm (default: free space)."),
      "input_schema": {"type": "object", "properties": {
@@ -433,11 +437,16 @@ NEW_TOOLS = [
          "parent": {"type": "string"}, "line": {"type": "array"}, "flip": {"type": "boolean"},
          "center": {"type": "array"}, "radius": {"type": "number"}, "scale": {"type": "number"},
          "x": {"type": "number"}, "y": {"type": "number"}, "label": {"type": "string"},
-         "exploded": {"type": "boolean"}, "feature": {"type": "string"}, "breaks": {"type": "array"}}}},
+         "exploded": {"type": "boolean"}, "feature": {"type": "string"}, "breaks": {"type": "array"},
+         "section_type": {"type": "string"}, "path": {"type": "array"}}}},
     {"name": "set_drawing",
      "description": ("Drawing options {standard, units, decimals, text_height, dim_text_height, arrow, hidden_lines, "
-                     "center_marks, auto_dims, hole_callouts, bom, balloons, hatch_spacing, font, dxf_version}, title "
-                     "block fields, sheet size, landscape, scale ('1:2'), rename."),
+                     "center_marks, auto_dims, hole_callouts, bom, balloons, hatch_spacing, font, dxf_version, "
+                     "dim_text aligned|unidirectional, leading_zero, decimal_sep, trailing_zeros, angle_format "
+                     "decimal|dms, dual_units, material_hatch, section_fasteners, explode_lines}, title block fields "
+                     "{title, company, number, material, drawn, drawn_date, checked, checked_date, approved, "
+                     "approved_date, issued, issued_date, revision, tolerance, finish, treatment, project, customer, "
+                     "logo (image path)}, sheet size, landscape, scale ('1:2'), rename."),
      "input_schema": {"type": "object", "properties": {
          "drawing": {"type": "string"}, "options": {"type": "object"}, "title": {"type": "object"},
          "size": {"type": "string"}, "landscape": {"type": "boolean"}, "scale": {"type": "string"},
@@ -445,7 +454,8 @@ NEW_TOOLS = [
     {"name": "add_drawing_item",
      "description": ("Add 2D geometry or annotation to a drawing sheet, coordinates in sheet mm (origin bottom-left): "
                      "{t:'line',a,b} {t:'poly',pts,closed} {t:'circle',c,r} {t:'arc',c,r,a0,a1} {t:'text',p,text,h} "
-                     "{t:'dim',kind:'h'|'v'|'aligned'|'dia'|'rad'|'angle'|'leader',p1,p2,at,c,r,text} "
+                     "{t:'dim',kind:'h'|'v'|'aligned'|'dia'|'rad'|'angle'|'leader',p1,p2,at,c,r,text, ref (reference, in "
+                     "brackets), nts (not to scale, underlined), dual, half (not complete), tol} "
                      "{t:'balloon',p,at,text}; optional layer, style visible|thin|hidden|center. GD&T: "
                      "{t:'gdt',p (frame lower-left),symbol (position, flatness, perpendicularity, parallelism, "
                      "profile_surface, circular_runout, …),tol,dia,mod 'M'|'L',datums ['A','B|M'],leader [x,y]} · "
@@ -889,7 +899,7 @@ class ToolExecutor:
                                 for v in sh.views]})
         if name == "add_drawing_view":
             kw = {k: args[k] for k in ("kind", "dir", "x", "y", "scale", "parent", "line", "flip", "center", "radius",
-                                       "label", "exploded", "feature", "breaks") if k in args}
+                                       "label", "exploded", "feature", "breaks", "section_type", "path") if k in args}
             v = d.add_drawing_view(args.get("drawing"), **kw)
             return J({"ok": True, "id": v["id"], "kind": v["kind"], "x": round(v["x"], 1), "y": round(v["y"], 1),
                       "scale": v["scale"], "error": v.get("_error")})

@@ -784,11 +784,54 @@ class OptionsDialog(QDialog):
         self.text_h, self.dim_h, self.arrow = dsb(o.text_height), dsb(o.dim_text_height), dsb(o.arrow)
         self.hatch = dsb(o.hatch_spacing, 0.5, 20)
         self.font = QLineEdit(o.font)
-        for lab, wd in (("Dimension units", self.units), ("Decimals", self.decimals), ("Text height", self.text_h),
-                        ("Dimension text height", self.dim_h), ("Arrow size", self.arrow),
+        from ..drawing.practice import DIM_STANDARDS
+        self.dstd = QComboBox()
+        self.dstd.addItems(["(custom)", *DIM_STANDARDS])
+        self.dstd.setCurrentText(o.dim_standard or "(custom)")
+        self.dstd.setToolTip("Sets text orientation, decimal sign, zeros, units, projection and sizes together")
+        self.dim_text = QComboBox()
+        self.dim_text.addItems(["aligned", "unidirectional"])
+        self.dim_text.setCurrentText(o.dim_text)
+        self.dim_text.setToolTip("aligned: along the dimension line, readable from the bottom or right (ISO) · "
+                                 "unidirectional: always horizontal (ASME)")
+        self.dec_sep = QComboBox()
+        self.dec_sep.addItems([".", ","])
+        self.dec_sep.setCurrentText(o.decimal_sep)
+        self.angle_fmt = QComboBox()
+        self.angle_fmt.addItems(["decimal", "dms"])
+        self.angle_fmt.setCurrentText(o.angle_format)
+        self.angle_fmt.setToolTip("decimal 27.5° · dms 27°30'")
+        self.lead0 = QCheckBox("Leading zero (0.5 — off for ASME inch: .500)")
+        self.lead0.setChecked(o.leading_zero)
+        self.trail0 = QCheckBox("Keep trailing zeros (2.50)")
+        self.trail0.setChecked(o.trailing_zeros)
+        self.dual = QCheckBox("Dual dimensions — the other unit in [ ]")
+        self.dual.setChecked(o.dual_units)
+
+        def preset(name):
+            p_ = DIM_STANDARDS.get(name)
+            if not p_:
+                return
+            self.standard.setCurrentText(p_["standard"])
+            self.units.setCurrentText(p_["units"])
+            self.decimals.setValue(p_["decimals"])
+            self.dim_text.setCurrentText(p_["dim_text"])
+            self.dec_sep.setCurrentText(p_["decimal_sep"])
+            self.angle_fmt.setCurrentText(p_["angle_format"])
+            self.lead0.setChecked(p_["leading_zero"])
+            self.trail0.setChecked(p_["trailing_zeros"])
+            self.dual.setChecked(p_["dual_units"])
+            self.text_h.setValue(p_["text_height"])
+            self.dim_h.setValue(p_["dim_text_height"])
+            self.arrow.setValue(p_["arrow"])
+        self.dstd.textActivated.connect(preset)
+        for lab, wd in (("Dimensioning standard", self.dstd), ("Dimension units", self.units),
+                        ("Decimals", self.decimals), ("Text", self.dim_text), ("Decimal sign", self.dec_sep),
+                        ("Angles", self.angle_fmt), ("", self.lead0), ("", self.trail0), ("", self.dual),
+                        ("Text height", self.text_h), ("Dimension text height", self.dim_h), ("Arrow size", self.arrow),
                         ("Hatch spacing", self.hatch), ("Font", self.font)):
             f2.addRow(lab, wd)
-        tabs.addTab(w2, "Dimensions & text")
+        tabs.addTab(w2, "Dimensions && text")
         # display
         w3 = QWidget()
         v3 = QVBoxLayout(w3)
@@ -796,7 +839,10 @@ class OptionsDialog(QDialog):
         for key, lab in (("hidden_lines", "Hidden lines in orthographic views"), ("center_marks", "Centre marks"),
                          ("auto_dims", "Automatic overall dimensions"), ("hole_callouts", "Hole / thread callouts"),
                          ("tangent_edges", "Tangent edges"), ("bom", "Bill of materials table"),
-                         ("balloons", "Item balloons"), ("snap", "Snap to geometry")):
+                         ("balloons", "Item balloons"), ("snap", "Snap to geometry"),
+                         ("material_hatch", "Section hatch by material (steel, aluminium, brass, plastic…)"),
+                         ("section_fasteners", "Cut bolts, nuts, pins, keys and shafts in assembly sections"),
+                         ("explode_lines", "Explode lines in exploded views")):
             c = QCheckBox(lab)
             c.setChecked(bool(getattr(o, key)))
             self.checks[key] = c
@@ -838,6 +884,10 @@ class OptionsDialog(QDialog):
                 "dim_text_height": self.dim_h.value(), "arrow": self.arrow.value(),
                 "hatch_spacing": self.hatch.value(), "font": self.font.text() or "Arial",
                 "dxf_version": self.dxfv.currentText(), "grid": self.grid.value(),
+                "dim_standard": "" if self.dstd.currentText() == "(custom)" else self.dstd.currentText(),
+                "dim_text": self.dim_text.currentText(), "decimal_sep": self.dec_sep.currentText(),
+                "angle_format": self.angle_fmt.currentText(), "leading_zero": self.lead0.isChecked(),
+                "trailing_zeros": self.trail0.isChecked(), "dual_units": self.dual.isChecked(),
                 **{k: c.isChecked() for k, c in self.checks.items()}}
         sc = self.scale.currentText().replace("/", ":")
         try:
@@ -853,10 +903,29 @@ class TitleDialog(QDialog):
         self.setWindowTitle("Title block")
         f = QFormLayout(self)
         self.edits = {}
+        f.addRow(QLabel("Blank fields are filled in by Daedalus where it can (scale, sheet, material, mass, number…)."))
         for k in render.TITLE_FIELDS:
-            e = QLineEdit(str(sheet.title.get(k, "")))
+            e = QLineEdit(str(sheet.title.get(k, "") or (sheet.title.get("author", "") if k == "drawn" else "")))
             self.edits[k] = e
-            f.addRow(k.capitalize(), e)
+            if k.endswith("_date"):
+                e.setPlaceholderText("YYYY-MM-DD")
+            if k == "logo":
+                row = QWidget()
+                rh = QHBoxLayout(row)
+                rh.setContentsMargins(0, 0, 0, 0)
+                rh.addWidget(e, 1)
+                b = QPushButton("Browse…")
+
+                def pick(_=False, e=e):
+                    from .drawing_practice_ui import choose_logo
+                    p_ = choose_logo(self)
+                    if p_:
+                        e.setText(p_)
+                b.clicked.connect(pick)
+                rh.addWidget(b)
+                f.addRow("Logo (a logo cell in the sheet format)", row)
+                continue
+            f.addRow(k.replace("_", " ").capitalize(), e)
         bb = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         bb.accepted.connect(self.accept)
         bb.rejected.connect(self.reject)
@@ -952,6 +1021,7 @@ class DrawingPage(QWidget):
         btn("View ▾", "Add a model view", None, self._view_menu())
         btn("Options…", "Drawing options: sheet, standard, units, text, display, export", self.options)
         btn("Title…", "Title block fields", self.title)
+        btn("Sheet ▾", "Sheet format, dimensioning standard, notes, drawing numbers", None, self._sheet_menu())
         btn("Export ▾", "Save the drawing as PDF / DXF / DWG / SVG / PNG", None, self._export_menu())
         btn("⟳", "Regenerate views from the model", lambda: self.refresh(regen=True))
         h.addSpacing(10)
@@ -1089,7 +1159,14 @@ class DrawingPage(QWidget):
         for name in VIEW_DIRS:
             m.addAction(name.capitalize(), lambda n=name: self.add_view(n))
         m.addSeparator()
-        m.addAction("Section view (draw cut line)…", self.add_section)
+        sm = m.addMenu("Section view")
+        for lab, typ, n in (("Full section (2 clicks across)", "full", 2), ("Half section (2 clicks)", "half", 2),
+                            ("Offset section (4 clicks, bent at 90°)", "offset", 4),
+                            ("Aligned section (end, centre, end)", "aligned", 3),
+                            ("Removed section — cross-section beside the view (2 clicks)", "removed", 2),
+                            ("Revolved section — cross-section on the view (2 clicks)", "revolved", 2)):
+            sm.addAction(lab, lambda t=typ, k=n: self.add_section(t, k))
+        m.addAction("Broken-out section (two corners)…", self.add_broken_out)
         m.addAction("Detail view (circle)…", self.add_detail)
         m.addAction("Exploded isometric with balloons", lambda: self.add_view("iso", exploded=True))
         m.addAction("Auxiliary view (click along an inclined edge)…", self.add_auxiliary)
@@ -1101,6 +1178,50 @@ class DrawingPage(QWidget):
         m.addAction("View properties…", lambda: self.edit_view(self.canvas.sel[1]) if self.canvas.sel and
                     self.canvas.sel[0] == "view" else self.status.emit("Select a view first"))
         return m
+
+    def _sheet_menu(self):
+        from ..drawing.practice import DIM_STANDARDS
+        m = QMenu(self)
+        m.addAction("Sheet format (frame, margins, zones, title block)…", self.sheet_format)
+        dm = m.addMenu("Dimensioning standard")
+        for n in DIM_STANDARDS:
+            dm.addAction(n, lambda n=n: self._dim_standard(n))
+        m.addAction("Notes…", self.notes)
+        if not self.lite:
+            m.addAction("Drawing numbers…", self.numbering)
+        return m
+
+    def sheet_format(self):
+        dr, sh = self.current_drawing(), self.current_sheet()
+        if dr is None:
+            return
+        from .drawing_practice_ui import SheetFormatDialog
+        if SheetFormatDialog(self.doc, dr, sh, self).exec():
+            self.refresh(regen=True, fit=True)
+
+    def _dim_standard(self, name):
+        dr = self.current_drawing()
+        if dr is None:
+            return
+        try:
+            self.doc.set_dimension_standard(name, dr.name)
+        except FeatureError as e:
+            return self._err("Dimensioning standard", e)
+        self.status.emit(f"Dimensions to {name}")
+        self.refresh(regen=True)
+
+    def notes(self):
+        dr, sh = self.current_drawing(), self.current_sheet()
+        if dr is None:
+            return
+        from .drawing_practice_ui import NotesDialog
+        if NotesDialog(self.doc, dr, sh, self).exec():
+            self.refresh()
+
+    def numbering(self):
+        from .drawing_practice_ui import NumberingDialog
+        if NumberingDialog(self.doc, self).exec():
+            self.refresh()
 
     def _export_menu(self):
         m = QMenu(self)
@@ -1233,7 +1354,7 @@ class DrawingPage(QWidget):
         if dr is None:
             return self.new_drawing()
         try:
-            v = self.doc.add_drawing_view(dr.name, kind="iso" if name in ("iso", "dimetric", "trimetric")
+            v = self.doc.add_drawing_view(dr.name, kind="iso" if name in ("iso", "dimetric", "trimetric", "oblique")
                                           else "projected", dir=name, sheet=self.current_sheet().name,
                                           exploded=exploded)
             if exploded:
@@ -1252,13 +1373,27 @@ class DrawingPage(QWidget):
                 return v
         return next((v for v in sh.views if v.get("kind") in ("base", "projected")), None)
 
-    def add_section(self):
+    def add_section(self, typ="full", clicks=2):
         par = self._parent_view()
         if par is None:
             return self._err("Section", "Add an orthographic view first.")
-        self.status.emit(f"Click two points across the {par.get('dir', '')} view for the cut line")
-        self._pending = ("section", par)
+        how = {"offset": "four points for the bent cutting line", "aligned": "an end, the centre, then the other end"
+               }.get(typ, "two points across the view for the cut line")
+        self.status.emit(f"{typ.capitalize()} section: click {how} on the {par.get('dir', '')} view")
+        self._pending = (f"section:{typ}", par)
+        self._need = clicks
         self.canvas.set_tool("_pick2")
+        self.canvas.tool = "_pick2"
+        self.canvas.pts = []
+        self._hook_pick()
+
+    def add_broken_out(self):
+        par = self._parent_view()
+        if par is None:
+            return self._err("Broken-out section", "Select an orthographic view first.")
+        self.status.emit("Broken-out section: click two corners of the region to break away")
+        self._pending = ("broken_out", par)
+        self._need = 2
         self.canvas.tool = "_pick2"
         self.canvas.pts = []
         self._hook_pick()
@@ -1314,21 +1449,42 @@ class DrawingPage(QWidget):
         canvas = self.canvas
         orig = canvas._click
 
+        need = getattr(self, "_need", 2)
+        self._need = 2
+
         def click(q, raw):
             canvas.pts.append(q)
-            if len(canvas.pts) < 2:
+            if len(canvas.pts) < need:
                 return
-            a, b = canvas.pts
+            allp = list(canvas.pts)
+            a, b = allp[0], allp[1]
             canvas._click = orig
             canvas.pts = []
             kind, par = self._pending
             s = par["scale"]
             la = [(a[0] - par["x"]) / s, (a[1] - par["y"]) / s]
             lb = [(b[0] - par["x"]) / s, (b[1] - par["y"]) / s]
+            loc = [[(p_[0] - par["x"]) / s, (p_[1] - par["y"]) / s] for p_ in allp]
             try:
-                if kind == "section":
+                if kind.startswith("section"):
+                    typ = kind.split(":")[1] if ":" in kind else "full"
+                    if typ == "offset":                 # square the bends: alternate horizontal / vertical runs
+                        sq = [loc[0]]
+                        for i, p_ in enumerate(loc[1:]):
+                            prev = sq[-1]
+                            first_h = abs(loc[1][0] - loc[0][0]) >= abs(loc[1][1] - loc[0][1])
+                            h_ = (i % 2 == 0) == first_h
+                            sq.append([p_[0], prev[1]] if h_ else [prev[0], p_[1]])
+                        loc = sq
                     self.doc.add_drawing_view(self.current_drawing().name, kind="section", parent=par["id"],
-                                              line=[la, lb], sheet=self.current_sheet().name)
+                                              line=[la, lb] if typ not in ("offset", "aligned") else None,
+                                              path=loc if typ in ("offset", "aligned") else None,
+                                              section_type=typ, sheet=self.current_sheet().name)
+                elif kind == "broken_out":
+                    reg = [[min(la[0], lb[0]), min(la[1], lb[1])], [max(la[0], lb[0]), min(la[1], lb[1])],
+                           [max(la[0], lb[0]), max(la[1], lb[1])], [min(la[0], lb[0]), max(la[1], lb[1])]]
+                    self.doc.set_drawing_view(par["id"], self.current_drawing().name, self.current_sheet().name,
+                                              broken_out={"region": reg, "depth": 0.0})
                 elif kind == "auxiliary":
                     self.doc.add_drawing_view(self.current_drawing().name, kind="auxiliary", parent=par["id"],
                                               line=[la, lb], sheet=self.current_sheet().name)

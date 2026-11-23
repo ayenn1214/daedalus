@@ -17,7 +17,8 @@ WRITE_2D = {".dxf": "DXF", ".dwg": "DWG (via ODA File Converter)", ".pdf": "PDF"
 DXF_VERSIONS = {"R12": "R12", "R2000": "R2000", "R2004": "R2004", "R2007": "R2007", "R2010": "R2010",
                 "R2013": "R2013", "R2018": "R2018"}
 
-LINETYPE_OF = {"hidden": "HIDDEN", "center": "CENTER_MM", "section": "PHANTOM_MM", "construction": "DASHED_MM"}
+LINETYPE_OF = {"hidden": "HIDDEN", "center": "CENTER_MM", "section": "PHANTOM_MM", "construction": "DASHED_MM",
+               "phantom": "PHANTOM_MM", "cutting": "PHANTOM_MM"}
 
 
 class DwgUnavailable(RuntimeError):
@@ -82,9 +83,12 @@ def write_dxf(doc, drawing: Drawing, path, sheet=None, version="R2010", native_d
     st.dxf.dimexo = 1.0
     st.dxf.dimgap = 0.8
     try:
-        st.dxf.dimtad = 1
-        st.dxf.dimtih = 0
-        st.dxf.dimtoh = 0
+        uni = opts.dim_text == "unidirectional"
+        st.dxf.dimtad = 0 if uni else 1
+        st.dxf.dimtih = 1 if uni else 0               # text horizontal (ASME unidirectional)
+        st.dxf.dimtoh = 1 if uni else 0
+        st.dxf.dimdsep = ord(opts.decimal_sep or ".")
+        st.dxf.dimzin = (0 if opts.trailing_zeros else 8) + (0 if opts.leading_zero else 4)
     except Exception:  # noqa: BLE001
         pass
     for style, name in LINETYPE_OF.items():          # ISO-ish patterns in mm, from the drawing styles
@@ -157,6 +161,8 @@ def _write_prim(msp, p, layer, opts, xoff, native_dims, dx):
         txt = str(p.get("text", ""))
         al = {"left": 1, "center": 2, "right": 3}.get(p.get("align", "left"), 1)
         va = {"top": 0, "middle": 1, "bottom": 2}.get(p.get("valign", "bottom"), 2)
+        if p.get("underline"):
+            txt = "\\L" + txt + "\\l"
         mt = msp.add_mtext(txt.replace("\n", "\\P"), dxfattribs={**attrs, "char_height": p.get("h", 3.5),
                                                                   "rotation": p.get("angle", 0.0)})
         mt.dxf.insert = X(p["p"])
@@ -166,7 +172,8 @@ def _write_prim(msp, p, layer, opts, xoff, native_dims, dx):
         if p.get("solid"):
             h.set_solid_fill()
         else:
-            h.set_pattern_fill(p.get("pattern", "ANSI31"), scale=p.get("spacing", opts.hatch_spacing) / 3.175)
+            h.set_pattern_fill(p.get("pattern", "ANSI31"), scale=p.get("spacing", opts.hatch_spacing) / 3.175,
+                               angle=p.get("angle", 45.0) - 45.0)
         for i, lp in enumerate(p["loops"]):
             if len(lp) > 2:
                 h.paths.add_polyline_path([X(q) for q in lp], is_closed=True, flags=1 if i == 0 else 0)
@@ -187,7 +194,11 @@ def _native_dim(msp, p, attrs, opts, X):
     da = {k: v for k, v in attrs.items() if k != "linetype"}
     k = p.get("_unit", 1.0)
     over = {"dimlfac": k} if abs(k - 1) > 1e-9 else {}
-    custom = p.get("text") or None
+    special = any(p.get(k) for k in ("ref", "nts", "dual", "half", "tol")) or opts.dual_units or \
+        opts.decimal_sep != "." or not opts.leading_zero or opts.angle_format == "dms"
+    if p.get("half"):
+        raise ValueError("half dimension")          # drawn as geometry
+    custom = p.get("text") or (txt if special else None)
     tx = custom and txt or "<>"
     if kind in ("h", "v", "aligned"):
         if kind == "aligned":

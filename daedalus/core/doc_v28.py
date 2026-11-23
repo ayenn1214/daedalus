@@ -226,6 +226,7 @@ class V28Mixin:
         self.comp_patterns: list = []         # [{"name", "kind", "seeds", ..., "instances"}]
         self.eq_values: dict = {}             # last evaluated equation values (target -> value)
         self.eq_errors: dict = {}
+        self.numbering: dict = {}             # drawing-number format (drawing/practice.py NUMBERING)
         from . import units as _U
         self.units: dict = dict(type(self).default_units or {"name": _U.DEFAULT})
         _U.set_active(self.units)
@@ -234,7 +235,8 @@ class V28Mixin:
         return {"variables": dict(self.variables), "equations": [dict(e) for e in self.equations],
                 "configurations": copy.deepcopy(self.configurations), "active_config": self.active_config,
                 "subassemblies": [dict(s) for s in self.subassemblies],
-                "comp_patterns": copy.deepcopy(self.comp_patterns), "units": dict(self.units)}
+                "comp_patterns": copy.deepcopy(self.comp_patterns), "units": dict(self.units),
+                "numbering": dict(self.numbering)}
 
     def _v28_load(self, d: dict):
         self._v28_init()
@@ -247,6 +249,7 @@ class V28Mixin:
             self.active_config = DEFAULT_CONFIG
         self.subassemblies = [dict(s) for s in d.get("subassemblies", [])]
         self.comp_patterns = copy.deepcopy(d.get("comp_patterns", []))
+        self.numbering = dict(d.get("numbering") or {})
         from . import units as _U
         self.units = dict(d.get("units") or {"name": _U.DEFAULT})
         _U.set_active(self.units)
