@@ -114,6 +114,59 @@ def latest(repo: str = DEFAULT_REPO, channel: str = "releases", token: str | Non
             "tag": tag, "zip": f"https://codeload.github.com/{repo}/zip/refs/tags/{tag}"}
 
 
+_ROW = re.compile(r"^\|\s*\**\s*(\d+(?:\.\d+)+)\s*\**\s*\|\s*(.+?)\s*\|\s*$")
+
+
+def readme_history(text: str) -> dict:
+    """{version: notes} from the README's version-history table ('| **3.0.36** | Icarus … · setup … |')."""
+    out = {}
+    for line in text.splitlines():
+        m = _ROW.match(line.strip())
+        if m and m.group(1) not in out:
+            out[m.group(1)] = m.group(2)
+    return out
+
+
+def _bullets(row: str) -> str:
+    parts = [p.strip() for p in row.split(" · ") if p.strip()]
+    return "\n".join("- " + p[:1].upper() + p[1:] for p in parts)
+
+
+def notes_between(info: dict, from_version: str, repo: str = DEFAULT_REPO, token: str | None = None) -> dict:
+    """Everything new between the installed version and the update — one section per version, newest first:
+    the GitHub release notes where a release was made, else that version's line in the README history.
+    Returns {"markdown", "versions": [...]}."""
+    lo, hi = vtuple(from_version), vtuple(info["version"])
+    bodies = {}
+    try:
+        for r in _get(f"{API}/repos/{repo}/releases?per_page=100", token):
+            if r.get("draft"):
+                continue
+            bodies.setdefault(str(r.get("tag_name", "")).lstrip("vV"), (r.get("body") or "").strip())
+    except (UpdateError, TypeError, KeyError):
+        pass
+    rows = {}
+    try:
+        ref = info.get("commit") or info.get("ref") or "main"
+        rows = readme_history(_get(f"https://raw.githubusercontent.com/{repo}/{ref}/README.md", token,
+                                   raw=True).decode("utf-8", "replace"))
+    except UpdateError:
+        pass
+    versions = sorted({v for v in (set(bodies) | set(rows)) if lo < vtuple(v) <= hi}, key=vtuple, reverse=True)
+    parts = []
+    for v in versions:
+        body = bodies.get(v)
+        if body:
+            if not re.match(r"^#{1,3}\s", body):
+                body = f"## Daedalus {v}\n\n" + body
+            parts.append(re.sub(r"^#\s", "## ", body))
+        else:
+            parts.append(f"## Daedalus {v}\n\n" + _bullets(rows[v]))
+    if not parts:
+        return {"markdown": info.get("notes") or "", "versions": [info["version"]]}
+    return {"markdown": "\n\n---\n\n".join(parts), "versions": versions}
+
+
 def is_newer(info: dict, cur: dict | None = None) -> bool:
     cur = cur or current()
     if vtuple(info["version"]) > vtuple(cur["version"]):

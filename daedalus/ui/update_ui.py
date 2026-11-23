@@ -132,13 +132,46 @@ def _rollback(window, folder):
     RS.hard_quit()
 
 
+class _NotesBridge(QObject):
+    done = Signal(object)
+
+
 class UpdateDialog(QDialog):
+    def _load_all_notes(self):
+        """Every version's notes between this one and the update (fetched in the background)."""
+        self._nb = _NotesBridge(self)
+        self._nb.done.connect(self._show_all_notes)
+        info, cur = dict(self.info), __version__
+        repo = self.s.value("update/repo") or U.DEFAULT_REPO
+        token = self.s.value("update/token") or None
+
+        def work():
+            try:
+                res = U.notes_between(info, cur, repo, token)
+            except Exception:  # noqa: BLE001
+                res = None
+            try:
+                self._nb.done.emit(res)
+            except RuntimeError:                     # dialog already closed
+                pass
+        threading.Thread(target=work, daemon=True).start()
+
+    def _show_all_notes(self, res):
+        if not res or not res.get("markdown"):
+            if not self.info.get("notes"):
+                self.notes.setMarkdown("_No release notes._")
+            return
+        n = len(res["versions"])
+        self.notes_head.setText(f"<b>What's new since {__version__}</b> — {n} update{'s' if n != 1 else ''}"
+                                + (f" ({res['versions'][-1]} → {res['versions'][0]})" if n > 1 else ""))
+        self.notes.setMarkdown(res["markdown"])
+
     def __init__(self, info: dict, parent=None):
         super().__init__(parent)
         self.info = info
         self.s = settings()
         self.setWindowTitle("Daedalus update")
-        self.resize(560, 460)
+        self.resize(640, 620)
         v = QVBoxLayout(self)
         cur = U.current()
         head = QLabel(f"<b>Daedalus {info['version']}</b> is available — you have {__version__}"
@@ -154,10 +187,14 @@ class UpdateDialog(QDialog):
         how.setWordWrap(True)
         how.setObjectName("muted")
         v.addWidget(how)
+        self.notes_head = QLabel(f"<b>What's new since {__version__}</b>")
+        v.addWidget(self.notes_head)
         notes = QTextBrowser()
         notes.setOpenExternalLinks(True)
-        notes.setMarkdown(info.get("notes") or "_No release notes._")
+        notes.setMarkdown(info.get("notes") or "_Loading what's new…_")
         v.addWidget(notes, 1)
+        self.notes = notes
+        self._load_all_notes()
         if info.get("url"):
             link = QLabel(f'<a href="{info["url"]}">See it on GitHub</a>')
             link.setOpenExternalLinks(True)

@@ -272,3 +272,49 @@ def test_recheck_timer_offers_the_update(monkeypatch):
     UU.recheck(w)
     assert "9.9.10" in w._update_btn.text() and "9.9.10" in w.statusBar().currentMessage()
     w.close()
+
+
+def test_notes_for_every_version_since_yours(monkeypatch):
+    """3.0.27 → 3.0.30: release notes where a release exists, the README history line where not; newest first."""
+    readme = ("# Daedalus\\n| Version | Changes |\\n|---|---|\\n"
+              "| **3.0.31** | not yet |\\n| **3.0.30** | Speed · Fix: tall rows |\\n| **3.0.29** | Project Profile |\\n"
+              "| **3.0.28** | Crash reports · PDF editing |\\n| **3.0.27** | already have it |\\n| 2.6 – 2.6.2 | old |\\n")
+
+    def get(url, token=None, raw=False, timeout=20):
+        if url.endswith("/releases?per_page=100"):
+            return [{"tag_name": "v3.0.30", "body": "## Daedalus 3.0.30\n\n### Speed\n- faster saves"},
+                    {"tag_name": "v3.0.28", "body": "- crash reports by email"},
+                    {"tag_name": "v3.0.29", "body": "", "draft": True}]
+        if url.endswith("/README.md"):
+            return readme.replace("\\n", "\n").encode()
+        raise U.UpdateError("unexpected " + url)
+    monkeypatch.setattr(U, "_get", get)
+    res = U.notes_between({"version": "3.0.30", "ref": "v3.0.30"}, "3.0.27", "x/y")
+    md = res["markdown"]
+    assert res["versions"] == ["3.0.30", "3.0.29", "3.0.28"]
+    assert md.index("Daedalus 3.0.30") < md.index("Daedalus 3.0.29") < md.index("Daedalus 3.0.28")
+    assert "faster saves" in md and "- Project Profile" in md and "crash reports by email" in md
+    assert "already have it" not in md and "not yet" not in md
+    assert U.readme_history("| 3.0.3 | a · b |")["3.0.3"] == "a · b"
+    # nothing reachable: falls back to the update's own notes
+    monkeypatch.setattr(U, "_get", lambda *a, **k: (_ for _ in ()).throw(U.UpdateError("offline")))
+    assert U.notes_between({"version": "3.0.30", "notes": "just this"}, "3.0.27")["markdown"] == "just this"
+
+
+def test_update_dialog_shows_all_notes(monkeypatch):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtWidgets import QApplication
+    app = QApplication.instance() or QApplication([])
+    from daedalus.ui import update_ui as UU
+    monkeypatch.setattr(U, "notes_between", lambda info, cur, repo=None, token=None:
+                        {"markdown": "## Daedalus 3.0.36\n\n- Icarus\n\n---\n\n## Daedalus 3.0.35\n\n- Projects",
+                         "versions": ["3.0.36", "3.0.35"]})
+    d = UU.UpdateDialog({"version": "3.0.36", "notes": "only the last", "url": ""})
+    for _ in range(100):
+        app.processEvents()
+        if "3.0.35" in d.notes.toPlainText():
+            break
+        time.sleep(0.01)
+    assert "Icarus" in d.notes.toPlainText() and "Projects" in d.notes.toPlainText()
+    assert "2 updates" in d.notes_head.text()
+    d.close()
