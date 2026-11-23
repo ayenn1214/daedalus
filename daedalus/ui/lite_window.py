@@ -54,6 +54,10 @@ class LiteWindow(QMainWindow):
         lab.setObjectName("muted")
         self.statusBar().addPermanentWidget(lab)
 
+    def show_settings(self, section=None):
+        from .settings_ui import open_settings
+        return open_settings(self, section)
+
     def _menus(self):
         mb = self.menuBar()
 
@@ -74,6 +78,8 @@ class LiteWindow(QMainWindow):
         act(f, "Combine PDFs…", lambda: __import__("daedalus.ui.pdf_ui", fromlist=["x"]).combine_dialog(self))
         f.addSeparator()
         act(f, "Open 3D workspace", self.open_full, "Ctrl+Shift+3")
+        f.addSeparator()
+        act(f, "Settings…", lambda: self.show_settings(), "Ctrl+,")
         f.addSeparator()
         act(f, "Quit", self.close, QKeySequence.Quit)
         if self.doc is not None:

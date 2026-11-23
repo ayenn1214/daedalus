@@ -1605,6 +1605,8 @@ class MainWindow(QMainWindow):
             for a in acts:
                 a.setVisible(key in self.mods)
         f.addSeparator()
+        act(f, "Settings…", lambda: self.show_settings(), "Ctrl+,")
+        f.addSeparator()
         act(f, "Quit", self.close, QKeySequence.Quit)
 
         e = mb.addMenu("&Edit")
@@ -3101,6 +3103,10 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage(f"{MOD.MODULES[key][0]} isn't loaded in this workspace — Help ▸ Startup "
                                      f"modules… to add it", 8000)
         return False
+
+    def show_settings(self, section=None):
+        from .settings_ui import open_settings
+        return open_settings(self, section)
 
     def startup_modules(self):
         from .modules_ui import StartupModulesDialog

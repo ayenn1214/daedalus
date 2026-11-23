@@ -152,6 +152,12 @@ class LinkWindow(QMainWindow):
         hb.toggled.connect(lambda on: self.hub.set_enabled(on) if hasattr(self, "hub") else None)
         self.hub_btn = hb
         head.addWidget(hb)
+        gear = QPushButton()
+        gear.setIcon(icons.icon("gear-six"))
+        gear.setFixedWidth(34)
+        gear.setToolTip("Settings (Ctrl+,)")
+        gear.clicked.connect(lambda: self.show_settings())
+        head.addWidget(gear)
         top = QCheckBox("On top")
         top.setChecked(self.settings.value("swlink/on_top", False, type=bool))
         top.toggled.connect(self._on_top)
@@ -178,11 +184,16 @@ class LinkWindow(QMainWindow):
         self.hub_btn.blockSignals(False)
         from PySide6.QtGui import QKeySequence, QShortcut
         QShortcut(QKeySequence("Ctrl+Shift+H"), self, activated=lambda: self.hub.set_enabled(not self.hub.enabled))
+        QShortcut(QKeySequence("Ctrl+,"), self, activated=lambda: self.show_settings())
         self._timer = QTimer(self, interval=4000)
         self._timer.timeout.connect(self._poll)
         self._timer.start()
         self._last_title = None
         self.refresh()
+
+    def show_settings(self, section=None):
+        from ..ui.settings_ui import open_settings
+        return open_settings(self, section or "cadlink")
 
     # ------------------------------------------------------------------ CAD sessions
     @staticmethod
