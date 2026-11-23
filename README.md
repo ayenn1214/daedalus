@@ -67,7 +67,7 @@ settings are migrated on first launch.
 ---
 
 ## Contents
-[Highlights](#highlights) · [Install](#install) · [Features](#features) · [Icarus copilot](#icarus-copilot) · [CAD Link](#cad-link) ·
+[Highlights](#highlights) · [Install](#install) · [Features](#features) · [Icarus copilot](#icarus-copilot) · [Claude Desktop](#claude-desktop) · [CAD Link](#cad-link) ·
 [Keys & mouse](#keys--mouse) · [Tips](#tips) · [Architecture](#architecture) · [Development](#development) ·
 [Version history](#version-history) · [Roadmap](#roadmap) · [License](#license)
 
@@ -324,6 +324,22 @@ anything you can build, it can build. Errors are fed back to it so it corrects i
   Icarus converts what you say ("6 ft 4 1/2 in", "50 psf") into model units.
 
 ---
+
+## Claude Desktop
+
+Claude Desktop can use Daedalus directly. It gets Icarus's tools (every 3D modelling tool and every DIMS tool) and
+works in your open Daedalus window. Parts build live there, and each request is one undo step. Inventory changes are
+saved under your account.
+
+1. In Daedalus, open **Help ▸ Connect to Claude Desktop…** and click **Connect**. This adds Daedalus to Claude
+   Desktop's settings and keeps everything else in them; the old file is saved as `.before-daedalus`.
+2. Quit and reopen Claude Desktop.
+3. Ask, e.g. *"In Daedalus, model a 200×100×12 plate with four M8 holes"* or *"What's short for the RFP 1308 build?"*.
+   If Daedalus is closed, Claude can open it.
+
+It runs on your Claude plan, so it needs no Ollama and no API key. While Daedalus is open, a small tool server runs
+on `127.0.0.1`, reachable only from this computer and protected by a random key. Claude Desktop starts
+`python -m daedalus.mcp`, which passes Claude's tool calls to that server.
 
 ## CAD Link
 

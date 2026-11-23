@@ -1,0 +1,226 @@
+"""Claude Desktop link, inside Daedalus: a tool server on 127.0.0.1 for `python -m daedalus.mcp`, and the
+Help ▸ Connect to Claude Desktop… window. Tool calls run on the GUI thread, exactly like Icarus's."""
+from __future__ import annotations
+
+import json
+import secrets
+import threading
+import time
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+from PySide6.QtCore import QObject, Qt, Signal, Slot
+from PySide6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
+
+from .. import __version__
+from .. import claude_link as L
+
+GROUP_S = 45.0          # calls this close together are one request: one undo step in Daedalus
+
+
+class ClaudeBridge(QObject):
+    request = Signal(str, object)
+    activity = Signal(str)                              # 'Claude Desktop: add_extrude' — for the status bar
+
+    def __init__(self, executor, tools: list[dict], guide: str, kind: str, doc=None, parent=None):
+        super().__init__(parent)
+        self.executor, self.tools, self.guide, self.kind, self.doc = executor, tools, guide, kind, doc
+        self.token = secrets.token_urlsafe(24)
+        self.result = ("", False)
+        self.calls = 0
+        self._last = 0.0
+        self._lock = threading.Lock()                   # one tool at a time, like Icarus
+        self.request.connect(self._run, Qt.BlockingQueuedConnection)
+        self.server = None
+
+    # ---------------------------------------------------------------- GUI thread
+    @Slot(str, object)
+    def _run(self, name, args):
+        try:
+            now = time.time()
+            if self.doc is not None and now - self._last > GROUP_S and not name.startswith(("get_", "list_", "dims_find",
+                                                                                          "dims_get", "dims_list")):
+                try:
+                    self.doc.checkpoint()               # a new request from Claude: its own undo step
+                except Exception:  # noqa: BLE001
+                    pass
+            self._last = now
+            self.result = self.executor.run(name, args)
+            self.calls += 1
+            self.activity.emit(f"Claude Desktop: {name}")
+        except Exception as e:  # noqa: BLE001
+            self.result = (f"{e.__class__.__name__}: {e}", True)
+
+    def info(self) -> dict:
+        d = {"tools": len(self.tools), "calls": self.calls}
+        if self.doc is not None:
+            try:
+                d["objects"] = [o.name for o in self.doc.objects]
+                d["features"] = len(self.doc.features)
+            except Exception:  # noqa: BLE001
+                pass
+        return d
+
+    # ---------------------------------------------------------------- server thread
+    def start(self) -> int:
+        bridge = self
+
+        class H(BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def _send(self, code, obj):
+                b = json.dumps(obj, default=str).encode()
+                self.send_response(code)
+                self.send_header("Content-Type", "application/json")
+                self.send_header("Content-Length", str(len(b)))
+                self.end_headers()
+                self.wfile.write(b)
+
+            def _ok(self):
+                if self.headers.get("X-Daedalus-Token") != bridge.token:
+                    self._send(403, {"error": "bad token"})
+                    return False
+                return True
+
+            def do_GET(self):  # noqa: N802
+                if not self._ok():
+                    return
+                if self.path == "/tools":
+                    return self._send(200, bridge.tools)
+                if self.path == "/guide":
+                    return self._send(200, bridge.guide)
+                if self.path == "/info":
+                    return self._send(200, bridge.info())
+                self._send(404, {"error": "not found"})
+
+            def do_POST(self):  # noqa: N802
+                if not self._ok():
+                    return
+                if self.path != "/call":
+                    return self._send(404, {"error": "not found"})
+                try:
+                    body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+                except ValueError:
+                    return self._send(400, {"error": "bad json"})
+                name = str(body.get("name") or "")
+                if name not in {t["name"] for t in bridge.tools}:
+                    return self._send(200, {"text": f"Unknown tool {name}", "isError": True})
+                with bridge._lock:
+                    bridge.request.emit(name, body.get("arguments") or {})   # runs on the GUI thread
+                    text, err = bridge.result
+                self._send(200, {"text": text, "isError": bool(err)})
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), H)
+        self.server.daemon_threads = True
+        threading.Thread(target=self.server.serve_forever, daemon=True, name="claude-link").start()
+        port = self.server.server_address[1]
+        L.write_link(port, self.token, self.kind, self.tools, self.guide, __version__)
+        return port
+
+    def stop(self):
+        if self.server is not None:
+            try:
+                self.server.shutdown()
+                self.server.server_close()
+            except Exception:  # noqa: BLE001
+                pass
+            self.server = None
+        L.clear_link()
+
+
+def start_bridge(window, executor, tools, guide, kind, doc=None):
+    """Start the link for a window (unless turned off in settings); stops when the app quits."""
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication
+    if not QSettings("Daedalus", "Daedalus").value("claude/link", True, type=bool):
+        return None
+    try:
+        b = ClaudeBridge(executor, tools, guide, kind, doc, parent=window)
+        b.start()
+    except OSError:
+        return None
+    app = QApplication.instance()
+    if app is not None:
+        app.aboutToQuit.connect(b.stop)
+    if hasattr(window, "statusBar"):
+        b.activity.connect(lambda t: window.statusBar().showMessage(t, 4000))
+    return b
+
+
+class ClaudeDesktopDialog(QDialog):
+    """Help ▸ Connect to Claude Desktop…"""
+
+    def __init__(self, bridge, parent=None):
+        super().__init__(parent)
+        self.bridge = bridge
+        self.setWindowTitle("Claude Desktop")
+        self.resize(560, 360)
+        v = QVBoxLayout(self)
+        intro = QLabel("<b>Use Daedalus from Claude Desktop.</b> Claude gets Icarus's tools — 3D modelling and DIMS "
+                       "inventory — and works in this window: parts build live here (each request is one undo "
+                       "step), inventory changes save under your account. It runs on your Claude plan, no Ollama "
+                       "needed.")
+        intro.setWordWrap(True)
+        v.addWidget(intro)
+        self.state = QLabel()
+        self.state.setWordWrap(True)
+        self.state.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        v.addWidget(self.state, 1)
+        how = QLabel("After connecting, <b>quit and reopen Claude Desktop</b> (File ▸ Exit, or right-click its tray "
+                     "icon ▸ Quit). Then ask it, e.g. <i>“In Daedalus, model a 200×100×12 plate with four M8 "
+                     "holes”</i> or <i>“What's short for the RFP 1308 build?”</i>. If Daedalus is closed, Claude can "
+                     "open it.")
+        how.setWordWrap(True)
+        how.setObjectName("muted")
+        v.addWidget(how)
+        row = QHBoxLayout()
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.setObjectName("primary")
+        self.connect_btn.clicked.connect(self.do_connect)
+        self.disconnect_btn = QPushButton("Disconnect")
+        self.disconnect_btn.clicked.connect(self.do_disconnect)
+        row.addWidget(self.connect_btn)
+        row.addWidget(self.disconnect_btn)
+        row.addStretch(1)
+        v.addLayout(row)
+        bb = QDialogButtonBox(QDialogButtonBox.Close)
+        bb.rejected.connect(self.reject)
+        bb.accepted.connect(self.accept)
+        v.addWidget(bb)
+        self.refresh()
+
+    def refresh(self):
+        st = L.status()
+        link = L.read_link()
+        lines = [("✓ " if link else "✗ ") + (f"Daedalus link is on (this window, {self.bridge.kind == '3d' and '3D + DIMS' or 'DIMS'} "
+                                              f"tools, {len(self.bridge.tools)} of them)" if self.bridge and link else
+                                              "Daedalus link is off (Help ▸ Connect to Claude Desktop turns it on at the "
+                                              "next start)")]
+        if not st["installed"]:
+            lines.append("✗ Claude Desktop isn't installed on this computer (claude.ai/download) — connecting writes "
+                         "its settings anyway, ready for when it is.")
+        lines.append(("✓ Connected — Claude Desktop starts Daedalus's tools" if st["connected"] else
+                      "✗ Not connected yet") + f"<br><span style='color:gray'>{'<br>'.join(st['paths'])}</span>")
+        if self.bridge and self.bridge.calls:
+            lines.append(f"Claude has run {self.bridge.calls} tool call(s) in this session.")
+        self.state.setText("<br><br>".join(lines))
+        self.connect_btn.setText("Connect again" if st["connected"] else "Connect")
+        self.disconnect_btn.setEnabled(st["connected"])
+
+    def do_connect(self):
+        try:
+            done = L.connect()
+        except (OSError, ValueError) as e:
+            return QMessageBox.warning(self, "Claude Desktop", f"Couldn't update Claude Desktop's settings:\n{e}")
+        from PySide6.QtCore import QSettings
+        QSettings("Daedalus", "Daedalus").setValue("claude/link", True)
+        self.refresh()
+        QMessageBox.information(self, "Claude Desktop", "Connected:\n" + "\n".join(done) +
+                                "\n\nQuit and reopen Claude Desktop to load Daedalus's tools.")
+
+    def do_disconnect(self):
+        try:
+            L.disconnect()
+        except (OSError, ValueError) as e:
+            QMessageBox.warning(self, "Claude Desktop", str(e))
+        self.refresh()

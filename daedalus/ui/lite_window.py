@@ -39,6 +39,16 @@ class LiteWindow(QMainWindow):
             self.inventory_page.insert_std_requested.connect(lambda _i: self._needs_3d("Insert in model"))
             self.tabs.addTab(self.inventory_page, "Inventory")
         self.setCentralWidget(self.tabs)
+        self.claude_bridge = None
+        if self.inventory_page is not None:            # Claude Desktop can use the DIMS tools here
+            try:
+                from ..ai.dims_tools import DIMS_SYSTEM, DIMS_TOOLS, DimsToolExecutor
+                from .claude_bridge import start_bridge
+                pg = self.inventory_page
+                ex = DimsToolExecutor(lambda: pg.store, lambda msg, undo=None: pg.commit(msg, undo))
+                self.claude_bridge = start_bridge(self, ex, DIMS_TOOLS, DIMS_SYSTEM, "dims")
+            except Exception:  # noqa: BLE001
+                self.claude_bridge = None
         self._menus()
         lab = QLabel(f"{MOD.describe(self.mods)} · v{__version__}")
         lab.setObjectName("muted")
@@ -86,6 +96,8 @@ class LiteWindow(QMainWindow):
         act(h, "Startup modules…", self.startup_modules)
         act(h, "Check for updates…", lambda: __import__("daedalus.ui.update_ui", fromlist=["x"]).check_now(self))
         act(h, "Report a bug…", self.report_bug)
+        act(h, "Connect to Claude Desktop…", lambda: __import__("daedalus.ui.claude_bridge", fromlist=["x"])
+            .ClaudeDesktopDialog(self.claude_bridge, self).exec())
         act(h, "Crash reports folder…", lambda: __import__("PySide6.QtGui", fromlist=["x"]).QDesktopServices.openUrl(
             __import__("PySide6.QtCore", fromlist=["x"]).QUrl.fromLocalFile(
                 str(__import__("daedalus.crash", fromlist=["x"]).crash_dir()))))

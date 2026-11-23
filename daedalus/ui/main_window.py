@@ -150,6 +150,7 @@ class MainWindow(QMainWindow):
         # right: copilot
         self.copilot = CopilotPanel(self.doc)
         self.copilot.executor.dims_page = self.inventory_page     # dims_* tools save + refresh through DIMS
+        self._start_claude_link()
         right = QDockWidget("Icarus", self)
         right.setObjectName("copilot")
         from .islands import scrolled
@@ -901,6 +902,33 @@ class MainWindow(QMainWindow):
             "Mouse: click selects, left-drag box-selects, middle-drag rotates (Ctrl pans, Shift zooms), "
             "right-drag pans" if key == "solidworks" else
             "Mouse: left-drag rotates, Ctrl+left-drag box-selects, middle pans, right zooms", 8000)
+
+    def _start_claude_link(self):
+        """Claude Desktop can use Icarus's tools on this window (Help ▸ Connect to Claude Desktop…)."""
+        try:
+            from ..ai.copilot import SYSTEM
+            from ..ai.tools import TOOLS
+            from .claude_bridge import start_bridge
+            self.claude_bridge = start_bridge(self, self.copilot.executor, TOOLS, SYSTEM, "3d", doc=self.doc)
+            if self.claude_bridge is not None:
+                self.claude_bridge.activity.connect(lambda _t: self._claude_refresh())
+        except Exception:  # noqa: BLE001
+            self.claude_bridge = None
+
+    def _claude_refresh(self):
+        """After Claude changes the model: the same refresh Icarus's turn ends with."""
+        for fn in ("_doc_changed", "refresh_all", "rebuild_view"):
+            f = getattr(self, fn, None)
+            if callable(f):
+                try:
+                    f()
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+
+    def claude_desktop(self):
+        from .claude_bridge import ClaudeDesktopDialog
+        ClaudeDesktopDialog(getattr(self, "claude_bridge", None), self).exec()
 
     def show_setup_check(self):
         from .setup_dialog import SetupDialog
@@ -1783,6 +1811,7 @@ class MainWindow(QMainWindow):
             __import__("PySide6.QtCore", fromlist=["x"]).QUrl.fromLocalFile(
                 str(__import__("daedalus.crash", fromlist=["x"]).crash_dir()))))
         act(h, "Setup check (Python + Icarus)…", self.show_setup_check)
+        act(h, "Connect to Claude Desktop…", self.claude_desktop)
         act(h, "Design data calculators…", lambda: self.design_data(0))
         act(h, "Reference library (your handbooks)…", lambda: self.design_data(1))
         act(h, "Splash screen…", lambda: __import__("daedalus.ui.splash", fromlist=["editor"]).editor(self).exec())
