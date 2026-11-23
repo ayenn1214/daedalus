@@ -223,3 +223,38 @@ def test_finds_claude_desktop_data_under_claude_data(tmp_path, monkeypatch):
     assert "daedalus" in json.loads((data / L.CONFIG).read_text())["mcpServers"]
     snip = json.loads(L.snippet())
     assert snip["mcpServers"]["daedalus"]["args"] == ["-m", "daedalus.mcp"]
+
+
+def test_dialog_edits_the_settings_file_by_hand(tmp_path, monkeypatch, home):
+    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+    from PySide6.QtCore import QSettings
+    from PySide6.QtWidgets import QApplication, QMessageBox
+    QApplication.instance() or QApplication([])
+    from daedalus.ui import claude_bridge as CB
+    monkeypatch.setattr(QMessageBox, "information", lambda *a, **k: None)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *a, **k: None)
+    QSettings("Daedalus", "Daedalus").remove("claude/config_path")
+    cfg = tmp_path / "somewhere" / "claude_desktop_config.json"
+    cfg.parent.mkdir()
+    cfg.write_text(json.dumps({"mcpServers": {"other": {"command": "x"}}}))
+    monkeypatch.setattr(L, "config_paths", lambda: [tmp_path / "nowhere" / "claude_desktop_config.json"])
+    d = CB.ClaudeDesktopDialog(None)
+    d.path.setText(str(cfg))                                            # typed by hand
+    d.load_file()
+    assert "other" in d.editor.toPlainText() and "no Daedalus entry" in d.json_ok.text()
+    d.editor.setPlainText("{ broken")
+    assert not d.save_btn.isEnabled() and "not valid JSON" in d.json_ok.text()
+    d.editor.setPlainText(cfg.read_text())
+    d.insert_entry()
+    assert "Daedalus entry present" in d.json_ok.text()
+    txt = json.loads(d.editor.toPlainText())
+    txt["mcpServers"]["daedalus"]["command"] = r"C:\my\python.exe"         # edited by hand
+    d.editor.setPlainText(json.dumps(txt))
+    d.save_file()
+    saved = json.loads(cfg.read_text())
+    assert saved["mcpServers"]["other"] == {"command": "x"}
+    assert saved["mcpServers"]["daedalus"]["command"] == r"C:\my\python.exe"
+    assert cfg.with_name(cfg.name + ".before-daedalus").exists()
+    assert QSettings("Daedalus", "Daedalus").value("claude/config_path") == str(cfg)   # remembered for Connect
+    QSettings("Daedalus", "Daedalus").remove("claude/config_path")
+    d.close()

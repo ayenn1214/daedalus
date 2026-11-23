@@ -9,7 +9,8 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from PySide6.QtCore import QObject, Qt, Signal, Slot
-from PySide6.QtWidgets import QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QVBoxLayout
+from PySide6.QtWidgets import (QDialog, QDialogButtonBox, QHBoxLayout, QLabel, QLineEdit, QMessageBox, QPlainTextEdit,
+                               QPushButton, QVBoxLayout)
 
 from .. import __version__
 from .. import claude_link as L
@@ -154,7 +155,7 @@ class ClaudeDesktopDialog(QDialog):
         super().__init__(parent)
         self.bridge = bridge
         self.setWindowTitle("Claude Desktop")
-        self.resize(560, 360)
+        self.resize(680, 720)
         v = QVBoxLayout(self)
         intro = QLabel("<b>Use Daedalus from Claude Desktop.</b> Claude gets Icarus's tools — 3D modelling and DIMS "
                        "inventory — and works in this window: parts build live here (each request is one undo "
@@ -192,11 +193,113 @@ class ClaudeDesktopDialog(QDialog):
         row.addWidget(pick)
         row.addWidget(copy)
         v.addLayout(row)
+        # ---- by hand: the settings file and what's in it, editable
+        cap = QLabel("<b>Edit by hand</b> — Claude Desktop's settings file and its contents. Claude Desktop ▸ Settings ▸ "
+                     "Developer ▸ Edit Config shows where its file really is.")
+        cap.setWordWrap(True)
+        v.addWidget(cap)
+        prow = QHBoxLayout()
+        self.path = QLineEdit()
+        self.path.setPlaceholderText("…\\claude_desktop_config.json")
+        self.path.editingFinished.connect(self.load_file)
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self.choose_file)
+        prow.addWidget(QLabel("Settings file"))
+        prow.addWidget(self.path, 1)
+        prow.addWidget(browse)
+        v.addLayout(prow)
+        self.editor = QPlainTextEdit()
+        f = self.editor.font()
+        f.setFamily("Consolas")
+        f.setStyleHint(f.StyleHint.Monospace)
+        self.editor.setFont(f)
+        self.editor.setMinimumHeight(220)
+        self.editor.textChanged.connect(self._check_json)
+        v.addWidget(self.editor, 2)
+        erow = QHBoxLayout()
+        ins = QPushButton("Insert Daedalus entry")
+        ins.setToolTip("Adds (or updates) \"daedalus\" under \"mcpServers\" in the text above — the rest is kept")
+        ins.clicked.connect(self.insert_entry)
+        self.json_ok = QLabel()
+        self.json_ok.setObjectName("muted")
+        self.save_btn = QPushButton("Save file")
+        self.save_btn.setObjectName("primary")
+        self.save_btn.clicked.connect(self.save_file)
+        erow.addWidget(ins)
+        erow.addWidget(self.json_ok, 1)
+        erow.addWidget(self.save_btn)
+        v.addLayout(erow)
         bb = QDialogButtonBox(QDialogButtonBox.Close)
         bb.rejected.connect(self.reject)
         bb.accepted.connect(self.accept)
         v.addWidget(bb)
         self.refresh()
+        paths = L.status()["paths"]
+        self.path.setText(paths[0] if paths else "")
+        self.load_file()
+
+    # ---------------------------------------------------------------- by hand
+    def load_file(self):
+        from pathlib import Path
+        p = Path(self.path.text().strip().strip('"'))
+        try:
+            text = p.read_text(encoding="utf-8") if p.is_file() else ""
+        except OSError as e:
+            text = ""
+            self.json_ok.setText(f"Can't read it: {e}")
+        self.editor.setPlainText(text or "{\n  \"mcpServers\": {}\n}\n")
+        self._check_json()
+
+    def _check_json(self):
+        import json as _j
+        try:
+            d = _j.loads(self.editor.toPlainText() or "{}")
+            ok = isinstance(d, dict)
+            has = ok and L.SERVER_NAME in (d.get("mcpServers") or {})
+            self.json_ok.setText(("✓ valid JSON" if ok else "✗ must be a { … } object") +
+                                 (" · Daedalus entry present" if has else " · no Daedalus entry yet"))
+            self.save_btn.setEnabled(ok)
+        except ValueError as e:
+            self.json_ok.setText(f"✗ not valid JSON: {e}")
+            self.save_btn.setEnabled(False)
+
+    def insert_entry(self):
+        import json as _j
+        try:
+            d = _j.loads(self.editor.toPlainText() or "{}")
+        except ValueError as e:
+            return QMessageBox.warning(self, "Claude Desktop", f"Fix the JSON first:\n{e}")
+        if not isinstance(d, dict):
+            d = {}
+        d.setdefault("mcpServers", {})[L.SERVER_NAME] = L.server_entry()
+        self.editor.setPlainText(_j.dumps(d, indent=2) + "\n")
+
+    def save_file(self):
+        import json as _j
+        import os as _os
+        import shutil as _sh
+        from pathlib import Path
+
+        from PySide6.QtCore import QSettings
+        p = Path(self.path.text().strip().strip('"'))
+        if not p.name:
+            return QMessageBox.warning(self, "Claude Desktop", "Enter the settings file's path")
+        try:
+            _j.loads(self.editor.toPlainText())
+        except ValueError as e:
+            return QMessageBox.warning(self, "Claude Desktop", f"Not saved — the JSON isn't valid:\n{e}")
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            if p.exists():
+                _sh.copy2(p, p.with_name(p.name + ".before-daedalus"))
+            tmp = p.with_suffix(".tmp")
+            tmp.write_text(self.editor.toPlainText(), encoding="utf-8")
+            _os.replace(tmp, p)
+        except OSError as e:
+            return QMessageBox.warning(self, "Claude Desktop", f"Couldn't save:\n{e}")
+        QSettings("Daedalus", "Daedalus").setValue("claude/config_path", str(p))   # Connect uses it from now on
+        self.refresh()
+        QMessageBox.information(self, "Claude Desktop", f"Saved {p}.\n\nQuit and reopen Claude Desktop to load it.")
 
     def refresh(self):
         st = L.status()
@@ -226,6 +329,9 @@ class ClaudeDesktopDialog(QDialog):
         if fn:
             QSettings("Daedalus", "Daedalus").setValue("claude/config_path", fn)
             self.refresh()
+            if hasattr(self, "path"):
+                self.path.setText(fn)
+                self.load_file()
 
     def copy_snippet(self):
         from PySide6.QtWidgets import QApplication
@@ -242,6 +348,9 @@ class ClaudeDesktopDialog(QDialog):
         from PySide6.QtCore import QSettings
         QSettings("Daedalus", "Daedalus").setValue("claude/link", True)
         self.refresh()
+        if hasattr(self, "path") and done:
+            self.path.setText(done[0])
+            self.load_file()
         QMessageBox.information(self, "Claude Desktop", "Connected:\n" + "\n".join(done) +
                                 "\n\nQuit and reopen Claude Desktop to load Daedalus's tools.")
 
