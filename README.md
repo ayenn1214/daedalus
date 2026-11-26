@@ -14,9 +14,10 @@ Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
 Daedalus covers the full path from sketch to shop floor: parts, assemblies, drawings, sheet metal, frames and HSS,
-simulation (FEA, CFD, physics), CAM with G-code, quoting, and inventory. **Icarus**, the built-in copilot, models
-through the same feature tools you use. It runs locally on Ollama by default, or on Claude. Daedalus also links to
-SolidWorks, Fusion, Rhino, Inventor and Solid Edge.
+simulation (FEA, CFD, physics), production drawings to ISO and ASME, CAM with G-code, quoting, purchase orders and
+inventory (DIMS, shared by the whole shop on a team server). **Icarus**, the built-in copilot, models through the
+same feature tools you use. It runs locally on Ollama by default, or on Claude. **Claude Desktop** can use the same
+tools in your open window. Daedalus also links to SolidWorks, Fusion, Rhino, Inventor and Solid Edge.
 
 Files save as `.daedalus` (JSON feature history). Formerly **Strata CAD**: `.strata` files open as before, and
 settings are migrated on first launch.
@@ -27,16 +28,18 @@ settings are migrated on first launch.
 
 | | |
 |---|---|
-| 🤖 **AI copilot (Icarus)** | Describe a part and Icarus builds it with the same feature tools you use, as editable history. Runs free on local Ollama, or on Claude. One prompt is one undo step. |
+| 🤖 **AI copilot (Icarus)** | Describe a part and Icarus builds it with the same feature tools you use, as editable history. Runs free on local Ollama, or on Claude. One prompt is one undo step. Reads photos, drawings, PDFs and spreadsheets. |
+| 💬 **Claude Desktop** | Claude gets all 168 Daedalus tools and works in your open window — and, with CAD Link open, in SolidWorks, Fusion, Inventor, Solid Edge or Rhino, moving parts and BOMs between them and DIMS. |
 | 📐 **Full parametric modelling** | Constrained sketches, 3D sketches, 40+ feature types, configurations and equations, surfaces, sheet metal with flat patterns. |
 | 🏗️ **Frames and HSS** | Frames along a 3D sketch; the HSS builder covers AISC, CSA and EN sizes or any custom size; section properties; cut lists with weights. |
 | ⚙️ **Assemblies that move** | Standard, advanced and mechanical mates (gear, rack, screw, cam, slot), subassemblies, and MuJoCo physics with motors, springs and contact. |
-| 🔬 **Simulation built in** | FEA (static, frequency, buckling, thermal, fatigue, harmonic), assembly FEA with bolts, drop tests, CFD, topology optimisation, design studies. |
-| 📄 **Production drawings** | Automatic views, sections, details, GD&T, revision tables. Export to PDF, DXF and DWG. |
+| 🔬 **Simulation built in** | FEA (static, frequency, buckling, thermal, fatigue, harmonic), assembly FEA with bolts, drop tests, CFD through the ports you choose, topology optimisation, design studies. |
+| 📄 **Production drawings** | Sheet formats (ISO 5457, ASME Y14.1 or your own), dimensioning standards (ISO 129, ASME Y14.5, DIN, JIS, BS), seven section types, GD&T, notes, drawing numbers, revision tables. Export to PDF, DXF and DWG. |
 | 🛠️ **Shop-floor ready** | Auto CAM builds the whole program and writes G-code (Fanuc, Haas, Siemens, LinuxCNC, GRBL). Also a backplot, quoting and a machine schedule. |
 | 📏 **Units for engineering and construction** | SI, US customary and ft-in fractions. Type any unit into any field (`3' 4-1/2"`, `25 mm`, `4/12`). The Measure panel works in your units. |
 | 🔗 **Works with your CAD** | Links with SolidWorks, Fusion, Rhino, Inventor and Solid Edge. Opens STEP assemblies of 1,600+ parts in seconds. |
-| 📦 **BOM and inventory** | Standard parts library with duplicate detection; DIMS (Daedalus Inventory Management System); Send BOM turns a design into a project with stock and shortfalls. |
+| 📦 **BOM and inventory** | Standard parts library with duplicate detection; DIMS (Daedalus Inventory Management System): projects, orders, production, reorder, purchase orders as PDF, team chat; Send BOM turns a design into a project with stock and shortfalls. |
+| 📑 **PDF tools** | Open, combine, split, reorder and mark up PDFs; read drawing PDFs (title block, BOM, revisions) straight into DIMS. |
 | 📘 **Design data** | 27 machine-design calculators (shafts, gears, keys, brakes, fatigue…) and search across your own handbooks. |
 
 <table>
@@ -79,7 +82,8 @@ settings are migrated on first launch.
 1. Finds or installs **Python 3.11 64-bit** for the current user. The sketch solver ships Windows wheels for 3.10/3.11 only.
 2. Builds `.venv`, installs the requirements and pre-compiles the code.
 3. Adds Desktop and Start-menu shortcuts.
-4. Sets up Icarus: installs and starts Ollama, then downloads a model sized to your RAM (24 GB+ → `qwen2.5:14b`, 12 GB+ → 7b, else 3b).
+4. Sets up Icarus: installs and starts Ollama, then downloads a model that fits your NVIDIA graphics card (12 GB+ →
+   `qwen2.5:14b`, 6 GB+ → 7b, else 3b) and your RAM. Without an NVIDIA card it picks at most the 7b.
 
 Installer options: `-NoAgent`, `-AgentOnly`, `-Model <name>`, `-NoShortcut`, `-Yes`, `-CheckOnly`.
 After installing, start Daedalus from the shortcut or with `run_windows.bat`.
@@ -113,7 +117,8 @@ python -m daedalus                  # or: python -m daedalus part.daedalus
 **Help ▸ Setup check**. It installs missing packages, starts Ollama and downloads models.
 
 **Updates:** each start checks GitHub (`ayenn1214/daedalus`) at most once a day; a status-bar button appears when a
-newer version is out. **Help ▸ Check for updates…** checks now.
+newer version is out (a running Daedalus checks again every 2 h). **Help ▸ Check for updates…** checks now. The update
+window lists what's new in every version between yours and the latest.
 - **Channels:** *Releases* (default, follows GitHub Releases / `v*` tags) or *Every commit on main* (testing).
 - **Git checkout:** updates with `git pull` (refused if you have local edits). **Zip / installer copy:** downloads,
   closes, swaps the files (settings, data and `.venv` untouched), runs `pip install` if requirements changed,
@@ -144,6 +149,25 @@ imports with one click; servers without the tables keep working in the old singl
 - **Time-Phased:** incoming orders by week and where they're going, projected stock with the date each part runs
   short, and the order log (ordered / received / binned / shipped).
 
+**DIMS projects, orders and production**
+- **Projects:** one table per project, grouped MFG / Purchased / Fasteners / Other; weldments nested with their parts
+  (or flat / hidden). Parts inside a project part's BOM — weldment pieces, sub-weldments, assembly parts, any depth —
+  belong to that project; a weldment used by several projects is the same part on all of them. **Unassigned** lists
+  parts on no project (right-click → Assign to project / + New project…).
+- **Project Profile:** 3D preview of the linked STEP / STL (drag to turn, View ▾ / Orient ▾), overall size, weight and
+  budget rolled up through the BOM, longest lead, options and what each adds, vendors with open POs, drawing revisions.
+- **Project customizer:** pick-one options and add-ons per project. **Orders ▸ + Add…** configures each line: qty per
+  unit of the project's top-level MFG parts plus custom options; confirmed orders create demand and production.
+- **Production:** production inbox (unread per person), PO checklist by vendor (fasteners, powder coat, zinc,
+  purchased), production Gantt and dates, finishing (zinc $/lb × weight, powder-coat quotes).
+- **Buy List ▸ Create PO…** (also the Dashboard's company profile card): purchase order PDFs per vendor with your
+  company details and logo, PO numbering, editable lines; the parts are marked as ordered. Generic, for any company.
+- **Team chat:** team room, direct messages and group chats (members only, enforced on the server); Shift-click
+  anything in DIMS to drop a live link to it into the chat; pop the chat out into its own window.
+- **Activity log ▸ Updates:** every part profile change (who, when, old → new); parts changed in the last 7 days are
+  highlighted.
+- **Speed:** team-server saves go up in the background, several records at once, so the window never waits.
+
 **DIMS extras**
 - **Analytics tab:** usage trends (months of stock left, run-out date, suggested reorder point), cost analysis
   (stock value by type / vendor / category / rack, project cost per unit), vendor price cross-reference (cheapest
@@ -163,8 +187,11 @@ imports with one click; servers without the tables keep working in the old singl
 - **Icarus in DIMS:** the ✦ Icarus button opens a chat that reads the inventory and, when asked, records stock,
   counts, orders, projects, production orders, revisions and discontinued parts (each change can be undone). The
   3D workspace's Icarus has the same inventory tools.
+- **Tables like a spreadsheet:** drag or double-click column edges, right-click to autofit, resize or hide columns,
+  click a header to sort; row height, spacing, grid lines and text size in Settings ▸ DIMS.
 - **Report bug** (also Help ▸ Report a bug…): a short form plus system details, sent as an email to the team
-  contact, a GitHub issue, or copied / saved with a screenshot.
+  contact, a GitHub issue, or copied / saved with a screenshot. Crashes are saved and offered as a report at the next
+  start (Help ▸ Crash reports folder).
 
 **Optional extras**
 - **DWG:** install the free ODA File Converter; Daedalus finds it automatically. DXF, PDF, SVG and STEP need nothing extra.
@@ -245,16 +272,43 @@ imports with one click; servers without the tables keep working in the old singl
   - Static, frequency, buckling, thermal (steady and transient), fatigue and harmonic studies.
   - Assembly static with bolt connectors; drop test; topology optimisation; design studies.
   - Checked against beam, column, torsion and conduction theory to within 1–6 %.
-- **CFD** (lattice-Boltzmann): external drag and lift or internal flow; moving slices; streamlines.
+- **CFD** (lattice-Boltzmann, Smagorinsky LES at high Reynolds numbers):
+  - External flow: drag, lift and drag coefficient.
+  - Internal flow end to end, or through the openings you choose: **Find openings** lists the part's ports and bores;
+    pick the inlet (e.g. a side port) and the outlets, or let every other opening be one. Walls thinner than a cell
+    stay sealed.
+  - Results: pressure drop, flow rate, mass flow, the split between outlets, peak velocity; moving slices and
+    streamlines from the inlet.
 - **Materials:** 60+ standard engineering materials with full properties, plus custom and per-object materials.
 - **Design data:**
   - 27 machine-design calculators: shafts, keys, gears, couplings, clutches, brakes, fatigue, columns, contact, cylinders.
   - A searchable reference library for your own handbooks (OCR for scans).
 
 ### Drawings
-- Sheets A4–A0 and Letter–ANSI E; first- or third-angle projection; automatic views with hidden lines.
-- View types: section, detail, auxiliary, broken and flat-pattern.
-- Annotation: dimensions (including ordinate), hole callouts, GD&T frames, datums, surface finish, balloons, parts list, revision table, title block.
+- **Sheets:** A4–A0, Letter–ANSI E or a custom size; first- or third-angle projection; automatic views with hidden lines.
+- **Sheet format** (Sheet ▾ ▸ Sheet format): ISO 5457 (20 mm filing margin), ASME Y14.1, Compact, or your own —
+  margins, zones, frame weight, and the title block's rows and cells with your own labels and a logo. Save a format
+  as a template for every drawing.
+- **Title block:** title, company, drawing number, material, mass; drawn / checked / approved / issued with dates;
+  scale, size, sheet *n* of *N*, revision, units, general tolerances, surface finish, the projection symbol, and the
+  Daedalus version, file and source. Blank fields are filled in where Daedalus can.
+- **Dimensioning standards** (Sheet ▾ ▸ Dimensioning standard): ISO 129-1, ASME Y14.5 (inch, metric, dual mm [in]),
+  DIN 406, JIS Z 8317, BS 8888 — decimal sign, leading zero (0.5 / .500), trailing zeros, aligned or unidirectional
+  text, decimal or DMS angles. Per dimension: reference (in brackets), not to scale (underlined), incomplete (double
+  arrowhead), tolerance, dual units. Chain and baseline dimension sets.
+- **Views:** projected, isometric, dimetric, trimetric, oblique, detail, auxiliary, broken, flat-pattern and exploded
+  (with explode lines).
+- **Sections:** full, half, offset, aligned, removed and revolved section views, and broken-out sections in any
+  view; cutting-plane lines with arrows and letters; no hidden lines in sections; hatch pattern by material, adjacent
+  parts hatched opposite ways; bolts, nuts, pins and shafts left uncut (optional).
+- **Notes:** numbered notes in the lower left, with templates (units, tolerances, heat treatment, welding, plating,
+  inspection, fastener torque, deburr, paint…).
+- **Drawing numbers** (Sheet ▾ ▸ Drawing numbers): XXXXX for the main assembly, XXXXX.AA for subassemblies,
+  XXXXX.AA.BB for their parts — base, prefix / suffix, separator, digits per level, start, step, zero padding,
+  ordering and depth are yours to set. Standard parts get none. Numbers go into the title blocks and a DWG NO.
+  column in the parts list.
+- **Annotation:** dimensions (including ordinate), hole callouts, GD&T frames, datums, surface finish, balloons,
+  parts list, revision table.
 - Export to vector PDF, DXF (R12–R2018), SVG, PNG and DWG.
 - Edit DXF, DWG, SVG and HPGL files directly.
 
@@ -307,7 +361,11 @@ imports with one click; servers without the tables keep working in the old singl
 - **Layout:** Home screen with recent-file cards, a ribbon that adapts to the window width, a draggable δ tool hub, and sidebar islands you can rearrange.
 - **Viewing:** six display modes; a view wheel (Space); section view; floor grid (G).
 - **Selection:** SolidWorks-style part/face/edge selection with box select and hover highlight.
-- **Themes and recovery:** Graphite or Black theme; autosave with crash recovery.
+- **Settings** (File ▸ Settings…, Ctrl+,): every setting in one window — General, 3D view, Sketch, Units, Icarus,
+  Claude Desktop, DIMS, Company profile, Folders, CAD Link, Updates, Advanced. Search finds any setting, changes
+  apply as you make them, reset per section, export / import all settings (keys and tokens are never exported).
+- **Themes:** Graphite, Black, Light, Rangate Blue, Rangate Blue Light, Midnight and Sith.
+- **Recovery:** autosave with crash recovery; crash reports.
 
 ---
 
@@ -317,9 +375,15 @@ Icarus edits the feature history through tools generated from the same feature r
 anything you can build, it can build. Errors are fed back to it so it corrects itself, and one prompt is one undo step.
 
 - **Ollama (local, default):** no key, no cost. Pull a tool-calling model (`qwen2.5:14b`, `qwen3:14b/32b`, `llama3.1:8b`), plus a vision model (`gemma3:12b`) for photos.
-  The *Core* tool set (32 tools) suits small models; *All* exposes all 125.
+  The *Core* tool set (32 tools) suits small models; *All* exposes all 168. Daedalus checks that Ollama is running and
+  the model is downloaded before sending, streams replies with progress, keeps the model loaded and tells you when it
+  runs on the CPU. Settings ▸ Icarus has *Test connection* and the model recommended for your graphics card.
 - **Claude:** select it in the panel and enter an API key.
-- **Inputs:** attach photos or drawings; an optional render check compares the result with your reference.
+- **Inputs:** attach photos or drawings (an optional render check compares the result with your reference), and
+  Excel / CSV or PDF files — long sheets are read on demand, and imports of vendors, prices, parts or counts show a
+  preview first.
+- **Inventory:** in the 3D workspace, in DIMS (✦ Icarus) and in CAD Link, Icarus reads the inventory and, when asked,
+  records stock, counts, orders, projects, production orders and revisions (each change can be undone).
 - **Engineering tools:** `design_calc`, `search_reference`, `hss_sizes`, `measure`, `convert_units`.
   Icarus converts what you say ("6 ft 4 1/2 in", "50 psf") into model units.
 
@@ -341,6 +405,16 @@ It runs on your Claude plan, so it needs no Ollama and no API key. While Daedalu
 on `127.0.0.1`, reachable only from this computer and protected by a random key. Claude Desktop starts
 `python -m daedalus.mcp`, which passes Claude's tool calls to that server.
 
+- **Where Claude Desktop keeps its settings:** Connect finds the usual place, the Microsoft Store version and newer
+  installs under `%LOCALAPPDATA%\Claude-Data\<id>`. If it can't, **Choose settings file…** points it at the file, and
+  the window lets you edit the file by hand (JSON check, *Insert Daedalus entry*, Save with a backup).
+- **With CAD Link open:** CAD Link runs its own tool server next to Daedalus's, and Claude gets both tool sets — the
+  `sw_*` / `cad_*` tools work in the CAD program. Claude can move work between them: export a SolidWorks part as STEP
+  and import it into Daedalus for FEA, CAM or drawings; export a Daedalus part and insert it into the open SolidWorks
+  assembly (`sw_insert_file`, mated to the selected hole, with custom properties); review a SolidWorks BOM and add it
+  to DIMS. `daedalus_status` says what is open; `daedalus_open(cad="solidworks")` opens CAD Link.
+- Turn the link off under Settings ▸ Claude Desktop.
+
 ## CAD Link
 
 Daedalus can act as an add-on to your main CAD program. Start it with **CAD Link ▸ …** or with a flag:
@@ -354,6 +428,9 @@ Daedalus can act as an add-on to your main CAD program. Start it with **CAD Link
 | Views, commands, macros | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 - **Link window:** a document tab, BOM and inventory, the library, a copilot, and a δ hotbar that floats over the CAD window.
+- **Review for DIMS:** every BOM level checked against the inventory, shop-structure part numbers for new parts,
+  profiles, BOMs and project allocation created in DIMS, and the part number written back into the CAD file.
+- **Claude Desktop:** while the Link window is open, Claude can work in the CAD program too (see [Claude Desktop](#claude-desktop)).
 - **Send between programs:** with two programs linked, Send to Fusion / Send to SolidWorks moves the document across with its properties.
 - **SolidWorks setup:** `pip install pywin32`.
 - **Fusion setup:**
@@ -415,15 +492,18 @@ daedalus/
                sketch2d.py / sketch3d.py (SolveSpace) · assembly.py (mates, LM/Gauss-Newton solver) ·
                document.py + doc_v28.py (history, rebuild cache, undo, configs, equations, units) ·
                units.py · hss.py · measure.py · materials.py · standards.py · physics.py (MuJoCo) · selectors.py
-  sim/         FEA (gmsh + scikit-fem), fatigue, CFD (LBM, numba), assembly FEA, drop test, topology, studies
-  drawing/     sheet model, HLR views, annotations (GD&T, ordinate, revisions), Qt render, DXF/DWG/SVG/HPGL
+  sim/         FEA (gmsh + scikit-fem), fatigue, CFD (LBM, numba; openings, inlet / outlets), assembly FEA, drop
+               test, topology, studies
+  drawing/     sheet model, HLR views and sections, annotations (GD&T, ordinate, revisions), practice.py (sheet
+               formats, dimensioning standards, notes, drawing numbers, hatch patterns), Qt render, DXF/DWG/SVG/HPGL
   manufacturing/  CAM toolpaths + posts, Auto CAM, quoting, printability
   design/      machine-design calculators, reference library (BM25 search)
   io/          importers/exporters, background STEP reader, SolidWorks bridge
   stdparts/    standard parts library, metadata, similarity, where-used
-  inventory/   DIMS model, store, CAD sync
+  inventory/   DIMS model, file / team-server stores, configurations, purchase orders, CAD sync
   sw/ fusion/ rhino/   CAD Link backends and add-ins
   ai/          tool schemas + executor, Claude and Ollama agent loops
+  mcp.py · claude_link.py   Claude Desktop: MCP server, tool-server links (Daedalus and CAD Link), settings file
   ui/          main window, viewport, sketchers, panels, dialogs
 ```
 
@@ -435,7 +515,7 @@ To add a feature, write one class in `core/`. It then shows up in the Inspector,
 
 ```bash
 pip install pytest
-QT_QPA_PLATFORM=offscreen pytest -q tests/     # 318 tests, ~1.5 min
+QT_QPA_PLATFORM=offscreen pytest -q tests/     # 545 tests, ~10 min
 ```
 GitHub Actions runs the suite on every push (`.github/workflows/tests.yml`).
 
@@ -528,6 +608,7 @@ Release notes and the user guide (PDF) are on the [Releases](../../releases) pag
 - 3D adaptive CAM.
 - Background rebuild thread with progress for heavy parts.
 - Selection-aware prompts ("fillet these"); 3D doodle for frame layouts.
+- DIMS Mobile: the inventory on a phone (parts, scanning, kits, buying, chat).
 
 ---
 
