@@ -9,7 +9,7 @@ Parametric desktop CAD with an AI modelling copilot.<br>
 Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 </p>
 
-<p align="center"><b>v3.0.42</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
+<p align="center"><b>v3.0.43</b> · Windows (also runs on Linux/macOS) · <a href="#version-history">Version history</a></p>
 
 <p align="center"><img src="docs/screenshot.png" width="860" alt="Daedalus main window"></p>
 
@@ -528,6 +528,7 @@ Daedalus's own. No SolidWorks code, icons, assets or trade dress are used — do
 
 | Version | Highlights |
 |---|---|
+| **3.0.43** | Fix: Create PO… on fresh installs (reportlab and Pillow added to the requirements; existing installs get them with this update) · GitHub test runs no longer fail on a crash at shutdown after every test passed |
 | **3.0.42** | README brought up to date with every feature through 3.0.41: Claude Desktop and the CAD Link bridge, DIMS projects / orders / production / purchase orders / team chat, CFD through chosen openings, working drawings (sheet formats, dimensioning standards, sections, notes, drawing numbers), Settings, themes, Icarus on Ollama, PDF tools |
 | **3.0.41** | Working drawings: sheet formats (ISO 5457, ASME Y14.1, Compact or your own — margins, zones, title block rows and cells, labels, logo; saved as templates; custom sheet sizes) with a full title block (drawn / checked / approved / issued with dates, projection symbol, tolerances, finish, units, mass, CAD and file names) · dimensioning standards (ISO 129, ASME Y14.5 inch / metric / dual, DIN 406, JIS, BS 8888): decimal sign, leading / trailing zeros, unidirectional text, DMS angles, dual, reference, not-to-scale and incomplete dimensions, chain / baseline sets · numbered notes with templates · customisable drawing numbers (XXXXX.AA.BB…) in the title block and parts list · half, offset, aligned, removed, revolved and broken-out sections, cutting-plane arrows, hatching by material, fasteners left uncut · oblique views · explode lines · Flow: streamlines start at the chosen inlet |
 | **3.0.40** | Flow: choose where the flow enters and leaves — Find openings lists the part's ports and bores, pick the inlet (e.g. a side port) and outlets (or all the others), results show the flow split per outlet · Claude Desktop ⇄ CAD Link: Claude works in SolidWorks / Fusion / Inventor / Solid Edge / Rhino alongside Daedalus and DIMS and moves parts and BOMs between them (sw_open_file, sw_insert_file, daedalus_open(cad=…)) · Material window shows property values again |
