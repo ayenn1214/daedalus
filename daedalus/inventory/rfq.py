@@ -217,6 +217,12 @@ def log(inv, mails: list[dict]) -> dict:
     save_settings(inv, st)
     if mails:
         used_number(inv, mails[0]["rfq"])
+        try:
+            from .. import m365
+            m365.notify("rfq", f"Quotes requested: {mails[0]['rfq']}", "", {
+                m["vendor"]: f"{len(m['lines'])} line(s)" for m in mails}, key=mails[0]["rfq"])
+        except Exception:  # noqa: BLE001
+            pass
     return st
 
 

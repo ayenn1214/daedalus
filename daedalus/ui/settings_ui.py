@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from . import theme
 
-SECRET = {"api_key", "update/token"}                      # never exported to a file
+SECRET = {"api_key", "update/token", "teams/webhook", "m365/refresh"}                      # never exported to a file
 NOT_EXPORTED = SECRET | {"ui/geometry", "ui/dock_state", "dims/chat_geometry", "update/last_check",
                          "update/available", "migrated/from_strata", "home/tip"}
 
@@ -276,6 +276,22 @@ def sections() -> list[dict]:
              Opt("update/repo", "Repository", "text", "", help="Blank = ayenn1214/daedalus."),
              Opt("update/token", "GitHub token", "password", "", help="Only for a private repository."),
          ], "extra": _updates_extra, "keys": ["update/skip"]},
+        {"key": "m365", "title": "Microsoft 365", "blurb": "Teams alerts, and a shared OneDrive / SharePoint workbook "
+                                                         "for DIMS.",
+         "opts": [Opt("teams/enabled", "Teams alerts", "bool", False),
+                  Opt("teams/webhook", "Teams channel webhook", "password", "",
+                      help="Teams ▸ the channel ▸ ⋯ ▸ Workflows ▸ “Post to a channel when a webhook request is "
+                           "received” ▸ copy the address it gives you."),
+                  Opt("m365/workbook", "Shared workbook link", "text", "",
+                      help="OneDrive / SharePoint ▸ the workbook ▸ Share ▸ Copy link. Pull / Push are on DIMS ▸ "
+                           "Import / Export."),
+                  Opt("m365/client_id", "App (client) ID", "text", "",
+                      help="Your organisation's Microsoft Entra app registration (public client, delegated "
+                           "Files.ReadWrite.All). Ask IT, or register one at entra.microsoft.com ▸ App registrations "
+                           "(allow public client flows)."),
+                  Opt("m365/tenant", "Tenant", "text", "organizations",
+                      help="organizations (any work account), or your tenant ID / domain.")],
+         "extra": _m365_extra},
         {"key": "compute", "title": "Compute", "blurb": "Where flow and structural simulations run: every CPU core "
                                                        "or an NVIDIA graphics card (CUDA).",
          "opts": [Opt("compute/device", "Run simulations on", "choice", "auto",
@@ -496,6 +512,68 @@ def _updates_extra(page, lay, window, sd):
         pass
     row.addStretch(1)
     lay.addLayout(row)
+
+
+def _m365_extra(page, lay, window, sd):
+    from .. import m365
+    from PySide6.QtWidgets import QCheckBox, QMessageBox
+    lay.addWidget(_note("<b>Alert on</b>"))
+    on = str(m365.setting("teams/events", ",".join(k for k, _ in m365.EVENTS)) or "").split(",")
+    boxes = {}
+    for k, label in m365.EVENTS:
+        cb = QCheckBox(label)
+        cb.setChecked(k in on)
+        cb.toggled.connect(lambda _c: m365.set_setting("teams/events", ",".join(x for x, b in boxes.items()
+                                                                                if b.isChecked())))
+        boxes[k] = cb
+        lay.addWidget(cb)
+    row = QHBoxLayout()
+
+    def test():
+        try:
+            m365.post_teams(m365.setting("teams/webhook", ""), "Daedalus test alert", "Alerts from Daedalus will "
+                            "appear here.", {"From": __import__("getpass").getuser()})
+            QMessageBox.information(page, "Teams", "Sent — check the channel.")
+        except m365.M365Error as e:
+            QMessageBox.warning(page, "Teams", str(e))
+    row.addWidget(_btn("Send test alert", test))
+    acct = _note("Signed in to Microsoft 365." if m365.signed_in() else "Not signed in to Microsoft 365.")
+
+    def sign_in():
+        try:
+            dc = m365.device_code_start()
+        except m365.M365Error as e:
+            return QMessageBox.warning(page, "Microsoft 365", str(e))
+        from PySide6.QtGui import QDesktopServices, QGuiApplication
+        from PySide6.QtCore import QUrl
+        QGuiApplication.clipboard().setText(dc["user_code"])
+        QDesktopServices.openUrl(QUrl(dc["verification_uri"]))
+        box = QMessageBox(QMessageBox.Information, "Microsoft 365",
+                          f"Enter this code on the Microsoft page that opened (it's copied):\n\n{dc['user_code']}\n\n"
+                          "Daedalus finishes the sign-in when you've done that.", QMessageBox.Cancel, page)
+        import threading
+        result = {}
+        def run():
+            try:
+                result["r"] = m365.device_code_poll(dc)
+            except Exception as e:  # noqa: BLE001
+                result["e"] = e
+        threading.Thread(target=run, daemon=True).start()
+        from PySide6.QtCore import QTimer
+        t = QTimer(box)
+        t.timeout.connect(lambda: box.accept() if result else None)
+        t.start(500)
+        box.exec()
+        if "e" in result:
+            QMessageBox.warning(page, "Microsoft 365", str(result["e"]))
+        acct.setText("Signed in to Microsoft 365." if m365.signed_in() else "Not signed in to Microsoft 365.")
+    row.addWidget(_btn("Sign in…", sign_in))
+    row.addWidget(_btn("Sign out", lambda: (m365.sign_out(), acct.setText("Not signed in to Microsoft 365."))))
+    row.addStretch(1)
+    lay.addLayout(row)
+    lay.addWidget(acct)
+    lay.addWidget(_note("If the OneDrive app already syncs the workbook's folder to this PC, DIMS Import / Export on "
+                        "that file works with no sign-in."))
 
 
 def _compute_apply():

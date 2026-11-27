@@ -348,6 +348,13 @@ def release(path, v: int, who: str | None = None, note: str = "", package: bool 
         nxt = next(x for x in idx["versions"] if x["v"] == v)
         nxt.update({k: e[k] for k in ("package", "package_error") if k in e})
         _save_index(path, idx)
+    try:
+        from .. import m365
+        m365.notify("released", f"Released: {Path(path).stem} Rev {letter}", note or e["message"], {
+            "Version": v, "By": who, "Mass": f"{e.get('mass_kg')} kg",
+            "Package": str(release_dir(path, letter)) if e.get("package") else "—"}, key=f"{path}:{letter}")
+    except Exception:  # noqa: BLE001
+        pass
     if doc is not None and doc.path and Path(doc.path) == Path(path) and not changed_since(doc):
         _stamp(doc, letter, note or e["message"], who)        # the open part's drawings get the revision row
         try:

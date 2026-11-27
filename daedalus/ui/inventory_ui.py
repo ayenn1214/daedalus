@@ -622,8 +622,19 @@ class InventoryPage(QWidget):
             _t.sleep(0.01)
         return self._saving is None
 
+    def _alerts(self):
+        """Teams alerts for parts that just went low and production orders just completed (Settings ▸ Microsoft 365)."""
+        try:
+            from .. import m365
+            if not hasattr(self, "_m365_watch"):
+                self._m365_watch = m365.InventoryWatcher()
+            self._m365_watch.check(self.inv)
+        except Exception:  # noqa: BLE001
+            pass
+
     def commit(self, msg=None, undo=None):
         from ..inventory.supabase import AuthError, SyncError
+        self._alerts()
         if self._background_saves():
             ok = self._save_in_background()
             self.refresh()
@@ -2789,8 +2800,29 @@ class InventoryPage(QWidget):
         row.addWidget(_btn("Export Master Copy (.xlsx)", lambda: self.export("xlsx"), primary=True))
         row.addWidget(_btn("Export CSV", lambda: self.export("csv")))
         v.addLayout(row)
+        v.addWidget(_section("OneDrive / SharePoint workbook"))
+        row = QHBoxLayout()
+        from .. import m365
+        link = m365.setting("m365/workbook", "")
+        row.addWidget(_muted(("Shared workbook set — pull it into DIMS, or push DIMS out to it." if link else
+                              "Set the shared workbook's link in Settings ▸ Microsoft 365.")), 1)
+        row.addWidget(_btn("Pull from OneDrive", lambda: self.cloud_sync("pull")))
+        row.addWidget(_btn("Push to OneDrive", lambda: self.cloud_sync("push")))
+        v.addLayout(row)
         v.addStretch(1)
         return w
+
+    def cloud_sync(self, way):
+        from .. import m365
+        try:
+            if way == "pull":
+                r = m365.pull(self.inv)
+                self.commit(f"Pulled {r['file']}: {r['added']} new, {r['updated']} updated")
+            else:
+                r = m365.push(self.inv)
+                self.commit(f"Pushed DIMS to {r['file']}")
+        except m365.M365Error as e:
+            QMessageBox.warning(self, "OneDrive", str(e))
 
     def choose_file(self):
         start = str(getattr(self.store, "path", "") or (self.settings.value("inventory/path") or ""))

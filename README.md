@@ -390,6 +390,24 @@ General ▸ *Your name* signs check-ins and approvals.
 
 ---
 
+## Microsoft 365
+
+**Settings ▸ Microsoft 365:**
+
+- **Teams alerts:** paste a channel's Workflows webhook (Teams ▸ channel ▸ ⋯ ▸ Workflows ▸ *Post to a channel when a
+  webhook request is received*) and tick what to announce — a part dropping below its reorder point, a production
+  order completed, quotes requested, a part released. Each alert is a card with the details; the same alert isn't
+  repeated within a day. *Send test alert* checks the channel.
+- **Shared workbook:** paste the OneDrive / SharePoint link of the inventory workbook, sign in with Microsoft
+  (a short code at microsoft.com/devicelogin, using your organisation's app registration), then DIMS ▸ Import /
+  Export ▸ **Pull from OneDrive** reads it into DIMS and **Push to OneDrive** writes DIMS back — only if nobody
+  changed it since the pull (otherwise it asks you to pull first). If the OneDrive app already syncs that folder to
+  your PC, Import / Export on the local file does the same with no sign-in.
+
+The webhook address and the sign-in are kept on this PC and never exported with the settings.
+
+---
+
 ## Compute: every CPU core or the graphics card
 
 Flow simulations run on every CPU core (numba) or, with an NVIDIA graphics card, on the card (CUDA kernels — the same
