@@ -196,7 +196,8 @@ def sections() -> list[dict]:
         {"key": "icarus", "title": "Icarus", "blurb": "The built-in copilot: which engine and model it uses.",
          "opts": [
              Opt("ai/provider", "Engine", "choice", "ollama",
-                 [("ollama", "Ollama (local, free)"), ("claude", "Claude (API key)")], apply=_apply_provider),
+                 [("ollama", "Ollama (local, free)"), ("claude", "Claude (API key)"),
+                  ("claude_code", "Claude (your plan, via Claude Code)")], apply=_apply_provider),
              Opt("ollama/model", "Ollama model", "text", ollama.DEFAULT_MODEL,
                  help="Installed with  ollama pull <name>. A model that doesn't fit on the graphics card is slow.",
                  apply=_apply_model),
@@ -210,6 +211,12 @@ def sections() -> list[dict]:
                  [(m, m) for m in ("claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5")]),
              Opt("api_key", "Claude API key", "password", "", help="Stored on this PC only. "
                  "ANTHROPIC_API_KEY, when set, wins."),
+             Opt("claude_code/model", "Claude (your plan) model", "choice", "",
+                 [("", "Default (your plan)"), ("sonnet", "Sonnet"), ("opus", "Opus"), ("haiku", "Haiku"),
+                  ("fable", "Fable")]),
+             Opt("claude_code/path", "Claude Code command", "text", "",
+                 help="Blank = find  claude  automatically. Sign in once by running  claude  in a terminal. "
+                      "Uses the Claude link (Claude Desktop section)."),
          ], "extra": _icarus_extra},
         {"key": "claude", "title": "Claude Desktop", "blurb": "Use Daedalus's tools from Claude Desktop.",
          "opts": [Opt("claude/link", "Let Claude Desktop use Daedalus while it's open", "bool", True, restart=True,

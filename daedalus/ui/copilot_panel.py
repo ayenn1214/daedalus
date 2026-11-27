@@ -23,7 +23,7 @@ from ..ai.copilot import DEFAULT_MODEL, Copilot
 from . import theme
 
 MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
-PROVIDERS = [("ollama", "Ollama (local)"), ("claude", "Claude (API)")]
+PROVIDERS = [("ollama", "Ollama (local)"), ("claude", "Claude (API)"), ("claude_code", "Claude (your plan)")]
 VISION_HINT = "gemma3, qwen2.5vl, llama3.2-vision or llava"
 EXAMPLES = [
     "200×100×12 mounting plate, 4× M8 clearance holes 15 mm from the edges, R5 corners",
@@ -140,7 +140,7 @@ class CopilotPanel(QWidget):
         self.provider = QComboBox()
         for key, label in PROVIDERS:
             self.provider.addItem(label, key)
-        self.provider.setCurrentIndex(0 if self.settings.value("ai/provider", "ollama") == "ollama" else 1)
+        self.provider.setCurrentIndex(max(0, self.provider.findData(self.settings.value("ai/provider", "ollama"))))
         self.provider.setToolTip("Which model runs Icarus")
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.model = QComboBox()
@@ -253,11 +253,15 @@ class CopilotPanel(QWidget):
         title, sub = self.welcome or ("What should we build?",
                                       "Icarus ({who}) edits the feature history directly — each prompt is one "
                                       "undo step. Try one:")
+        tail = (f'<p style="color:{theme.MUTED};margin:10px 0 0 0">Runs on your Claude subscription through Claude '
+                f'Code, with the same tools as Claude Desktop. First time: run  claude  in a terminal and sign '
+                f'in.</p>' if self.kind() == "claude_code" else
+                f'<p style="color:{theme.MUTED};margin:10px 0 0 0">No answer? <a href="setup:" '
+                f'style="color:{theme.ACCENT_TEXT}">Setup check</a> installs Ollama and the model.</p>')
         self.log.setHtml(
             f'<p style="font-size:11pt;font-weight:600;margin:4px 0 2px 0">{html.escape(title)}</p>'
             f'<p style="color:{theme.MUTED};margin:0 0 10px 0">{html.escape(sub.format(who=self.who()))}</p>{ex}'
-            f'<p style="color:{theme.MUTED};margin:10px 0 0 0">No answer? <a href="setup:" '
-            f'style="color:{theme.ACCENT_TEXT}">Setup check</a> installs Ollama and the model.</p>')
+            + tail)
 
     def _append(self, who, body, color=None):
         color = color or theme.TEXT
@@ -310,6 +314,8 @@ class CopilotPanel(QWidget):
 
     def who(self) -> str:
         m = self.model.currentText().strip()
+        if self.kind() == "claude_code":
+            return "Claude (your plan)"
         return (m or "Ollama") if self.kind() == "ollama" else "Claude"
 
     def _provider_changed(self, _i, first=False):
@@ -329,6 +335,19 @@ class CopilotPanel(QWidget):
             self.model.setToolTip("Installed Ollama models (ollama pull <name> to add more)")
             self.tag.setText("AI copilot · local")
             self._list_models_async(saved, warn=not first)      # never blocks the window on a slow server
+        elif kind == "claude_code":
+            from ..ai import claude_code as CC
+            from . import icons
+            self.cfg_btn.setIcon(icons.icon("gear-six"))
+            self.cfg_btn.setToolTip("Claude Code: where it is, sign-in check")
+            self.tag.setText("AI copilot · Claude (your plan)")
+            for key_, label in CC.MODELS:
+                self.model.addItem(label, key_)
+            self.model.setCurrentIndex(max(0, self.model.findData(self.settings.value("claude_code/model", ""))))
+            if self.model.lineEdit() is not None:
+                self.model.lineEdit().setCursorPosition(0)
+            self.model.setToolTip("Runs on your Claude subscription through Claude Code — no API key. "
+                                  "Same tools Claude Desktop uses.")
         else:
             from . import icons
             self.cfg_btn.setIcon(icons.icon("key"))
@@ -389,12 +408,17 @@ class CopilotPanel(QWidget):
         le = self.model.lineEdit()
         if le is not None and not le.hasFocus():
             le.setCursorPosition(0)                         # show the model's name from its start
+        if self.kind() == "claude_code":
+            self.settings.setValue("claude_code/model", self.model.currentData() or "")
+            return
         self.settings.setValue("ollama/model" if self.kind() == "ollama" else "model", m)
 
     def configure(self):
         if self.kind() == "ollama":
             OllamaSettings(self).exec()
             self._provider_changed(self.provider.currentIndex())
+        elif self.kind() == "claude_code":
+            ClaudeCodeSettings(self).exec()
         else:
             self.set_key()
 
@@ -470,6 +494,17 @@ class CopilotPanel(QWidget):
     # ------------------------------------------------------------- run
     def _ensure_copilot(self, key=None):
         m = self.model.currentText().strip()
+        if self.kind() == "claude_code":
+            m = self.model.currentData() or ""
+            cli = key
+            want = (self.kind(), m, cli)
+            if self.copilot is None or getattr(self, "_cp_sig", None) != want:
+                from ..ai.claude_code import ClaudeCodeCopilot
+                sid = getattr(self.copilot, "session_id", None)      # changing model keeps the conversation
+                self.copilot = ClaudeCodeCopilot(cli, model=m, system=self.custom_system)
+                self.copilot.session_id = sid
+                self._cp_sig = want
+            return
         want = (self.kind(), m)
         if self.copilot is None or getattr(self, "_cp_sig", None) != want:
             old = self.copilot.messages if self.copilot else []
@@ -534,6 +569,18 @@ class CopilotPanel(QWidget):
                 self._append("Icarus", "Set an Anthropic API key first (key button or "
                                        "ANTHROPIC_API_KEY env var), or switch to Ollama.", theme.ERROR)
                 return
+        elif self.kind() == "claude_code":
+            from ..ai import claude_code as CC
+            key = CC.find_cli(self.settings.value("claude_code/path") or None)
+            if not key:
+                self._append("Icarus", "Claude Code isn't installed on this PC. Install it (claude.com/claude-code), "
+                                       "run  claude  once and sign in with your Claude account — or set where it "
+                                       "is with the gear button.", theme.ERROR)
+                return
+            if self._link() is None:
+                self._append("Icarus", "The Claude link is off, so Claude can't use this window's tools. Turn it on "
+                                       "in Settings ▸ Claude Desktop, then restart Daedalus.", theme.ERROR)
+                return
         elif not self.model.currentText().strip():
             self._append("Icarus", "Pick an Ollama model (ollama pull qwen2.5:14b).", theme.ERROR)
             return
@@ -557,7 +604,7 @@ class CopilotPanel(QWidget):
                 att.update({d["name"]: d["path"] for d in docs})
             blocks = []
             for d in docs:
-                if d["kind"] == "pdf" and self.kind() == "claude" and d["data"] and len(d["data"]) < 30_000_000:
+                if d["kind"] == "pdf" and self.kind() in ("claude", "claude_code") and d["data"] and len(d["data"]) < 30_000_000:
                     pdfs.append(d["data"])                 # Claude reads the PDF itself (scans, drawings too)
                     d = {**d, "text": "(sent as a PDF document above)"}
                 blocks.append(prompt_block(d))
@@ -566,6 +613,9 @@ class CopilotPanel(QWidget):
                                                     f'{html.escape(", ".join(names))}</span>' if names else ""))
         if self.doc is not None:
             self.doc.checkpoint()             # whole turn (incl. render check) = one undo step
+        link = self._link() if self.kind() == "claude_code" else None
+        if link is not None:                  # Claude's calls arrive through the link: same undo step, Icarus label
+            link.via = "Icarus · Claude"
         self._verify_rounds = 1 if images and self.verify_cb.isChecked() and self.render_provider else 0
         self.status.setText("")
         self._start(prompt, images, documents=pdfs)
@@ -611,12 +661,26 @@ class CopilotPanel(QWidget):
         self.send_btn.setEnabled(True)
         self.stop_btn.setEnabled(False)
         self.kill_btn.setEnabled(False)
+        self._release_link()
         self.status.setText("Killed")
         self._append("Icarus", "Stopped. Anything already done stays (Ctrl+Z to undo a model change).", theme.MUTED)
+
+    def _link(self):
+        """The window's Claude link tool server (what Claude Desktop and 'Claude (your plan)' both use)."""
+        w = self.window()
+        b = getattr(w, "claude_bridge", None) if w is not None else None
+        return b if b is not None and getattr(b, "server", None) is not None else None
+
+    def _release_link(self):
+        b = self._link()
+        if b is not None and b.via != "Claude Desktop":
+            b.via = "Claude Desktop"
+            b._last = time.time()             # Claude Desktop's next request gets its own undo step
 
     def _done(self):
         if hasattr(self, "_tick"):
             self._tick.stop()
+        self._release_link()
         stopped = self.copilot is not None and self.copilot._stop
         if self._verify_rounds > 0 and not stopped and self.doc is not None and self.doc.result.body is not None:
             self._verify_rounds -= 1
@@ -639,6 +703,81 @@ class CopilotPanel(QWidget):
             return
         r = self.doc.result
         self.status.setText(f"{len(r.errors)} errors" if r.errors else "Done")
+
+
+class ClaudeCodeSettings(QDialog):
+    """Where the claude command is, and a check that it runs and is signed in."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        from ..ai import claude_code as CC
+        self.panel, self.CC = panel, CC
+        self.setWindowTitle("Claude (your plan)")
+        v = QVBoxLayout(self)
+        about = QLabel("Icarus sends your prompt to Claude through Claude Code, signed in with your Claude account "
+                       "(Pro / Max / Team plan, no API key). Claude uses the same Daedalus tools as Claude Desktop, "
+                       "and Claude Desktop keeps working as before.")
+        about.setWordWrap(True)
+        v.addWidget(about)
+        form = QFormLayout()
+        self.path = QLineEdit(panel.settings.value("claude_code/path") or "")
+        self.path.setPlaceholderText(CC.find_cli() or "claude (not found — install Claude Code)")
+        row = QHBoxLayout()
+        row.addWidget(self.path, 1)
+        browse = QPushButton("Browse…")
+        browse.clicked.connect(self.browse)
+        row.addWidget(browse)
+        form.addRow("Claude Code", row)
+        v.addLayout(form)
+        self.info = QLabel("")
+        self.info.setWordWrap(True)
+        self.info.setObjectName("muted")
+        v.addWidget(self.info)
+        tip = QLabel("First time: install Claude Code, open a terminal, run  claude  and sign in. "
+                     "Turn the Claude link on in Settings ▸ Claude Desktop.")
+        tip.setWordWrap(True)
+        tip.setObjectName("muted")
+        v.addWidget(tip)
+        btns = QHBoxLayout()
+        test = QPushButton("Test")
+        test.clicked.connect(self.test)
+        btns.addWidget(test)
+        btns.addStretch(1)
+        ok = QPushButton("Save")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self.save)
+        btns.addWidget(ok)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        v.addLayout(btns)
+        self.setMinimumWidth(560)
+        self.resize(560, 320)
+
+    def browse(self):
+        p, _ = QFileDialog.getOpenFileName(self, "Claude Code", "", "claude (claude claude.exe claude.cmd);;All (*)")
+        if p:
+            self.path.setText(p)
+
+    def test(self):
+        cli = self.CC.find_cli(self.path.text().strip() or None)
+        if not cli:
+            self.info.setText("Claude Code wasn't found. Install it from claude.com/claude-code or browse to it.")
+            return
+        try:
+            ver = self.CC.version(cli)
+        except Exception as e:  # noqa: BLE001
+            self.info.setText(f"{cli} didn't run: {e}")
+            return
+        link = "on" if self.panel._link() is not None else "OFF — turn it on in Settings ▸ Claude Desktop"
+        self.info.setText(f"Found {cli}\nVersion {ver}\nClaude link: {link}\n"
+                          "Sign-in is checked on your first prompt.")
+        self.adjustSize()
+
+    def save(self):
+        self.panel.settings.setValue("claude_code/path", self.path.text().strip())
+        self.panel.copilot = None if self.panel.kind() == "claude_code" else self.panel.copilot
+        self.accept()
 
 
 class OllamaSettings(QDialog):

@@ -16,8 +16,8 @@ Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 Daedalus covers the full path from sketch to shop floor: parts, assemblies, drawings, sheet metal, frames and HSS,
 simulation (FEA, CFD, physics), production drawings to ISO and ASME, CAM with G-code, quoting, purchase orders and
 inventory (DIMS, shared by the whole shop on a team server). **Icarus**, the built-in copilot, models through the
-same feature tools you use. It runs locally on Ollama by default, or on Claude. **Claude Desktop** can use the same
-tools in your open window. Daedalus also links to SolidWorks, Fusion, Rhino, Inventor and Solid Edge.
+same feature tools you use. It runs locally on Ollama by default, on Claude with an API key, or on your own Claude
+plan through Claude Code. **Claude Desktop** can use the same tools in your open window. Daedalus also links to SolidWorks, Fusion, Rhino, Inventor and Solid Edge.
 
 Files save as `.daedalus` (JSON feature history). Formerly **Strata CAD**: `.strata` files open as before, and
 settings are migrated on first launch.
@@ -414,6 +414,21 @@ on `127.0.0.1`, reachable only from this computer and protected by a random key.
   assembly (`sw_insert_file`, mated to the selected hole, with custom properties); review a SolidWorks BOM and add it
   to DIMS. `daedalus_status` says what is open; `daedalus_open(cad="solidworks")` opens CAD Link.
 - Turn the link off under Settings ▸ Claude Desktop.
+
+### Prompting Claude from Icarus
+
+You can also type the prompt in Icarus instead of Claude Desktop: pick **Claude (your plan)** as Icarus's engine.
+Icarus hands the prompt to [Claude Code](https://claude.com/claude-code) (`claude -p`), signed in with your Claude
+account, so it runs on your Pro / Max / Team plan with no API key. Claude Code starts the same `python -m daedalus.mcp`
+server, so Claude works through the same link and tools as Claude Desktop, and Claude Desktop keeps working alongside.
+
+- First time: install Claude Code, run `claude` once in a terminal and sign in. The gear button finds the command and
+  tests it; set its path there if it isn't on `PATH`.
+- Tool calls show in the Icarus log as they run; the whole prompt is one undo step; Stop and Kill work as usual.
+  Pictures and PDFs you attach are passed as files for Claude to read.
+- The conversation continues across prompts (one Claude Code session per chat); **New chat** starts a fresh one.
+  The model box picks Default, Sonnet, Opus, Haiku or Fable.
+- Claude Code gets only the Daedalus tools (no shell or file editing) and runs without permission prompts.
 
 ## CAD Link
 

@@ -32,6 +32,7 @@ class ClaudeBridge(QObject):
         self.result = ("", False)
         self.calls = 0
         self._last = 0.0
+        self.via = "Claude Desktop"                     # Icarus sets "Icarus · Claude" while its turn runs
         self._lock = threading.Lock()                   # one tool at a time, like Icarus
         self.request.connect(self._run, Qt.BlockingQueuedConnection)
         self.server = None
@@ -44,7 +45,7 @@ class ClaudeBridge(QObject):
             return
         try:
             now = time.time()
-            if self.doc is not None and now - self._last > GROUP_S and not name.startswith(("get_", "list_", "dims_find",
+            if self.doc is not None and self.via == "Claude Desktop" and now - self._last > GROUP_S and not name.startswith(("get_", "list_", "dims_find",
                                                                                           "dims_get", "dims_list")):
                 try:
                     self.doc.checkpoint()               # a new request from Claude: its own undo step
@@ -53,7 +54,7 @@ class ClaudeBridge(QObject):
             self._last = now
             self.result = self.executor.run(self.aliases.get(name, name), args)
             self.calls += 1
-            self.activity.emit(f"Claude Desktop: {name}")
+            self.activity.emit(f"{self.via}: {name}")
         except Exception as e:  # noqa: BLE001
             self.result = (f"{e.__class__.__name__}: {e}", True)
 
