@@ -38,6 +38,11 @@ def main():
 
     app = QApplication(sys.argv[:1])
     app.setApplicationName(APP_NAME)
+    try:
+        from . import compute
+        compute.apply_threads()                      # Settings ▸ Compute: how many CPU threads simulations use
+    except Exception:  # noqa: BLE001
+        pass
     _win = {}
     if "--pdf" in flags:                             # PDF window only (no CAD kernel): python -m daedalus --pdf [file]
         try:

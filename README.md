@@ -370,6 +370,19 @@ imports with one click; servers without the tables keep working in the old singl
 
 ---
 
+## Compute: every CPU core or the graphics card
+
+Flow simulations run on every CPU core (numba) or, with an NVIDIA graphics card, on the card (CUDA kernels — the same
+lattice-Boltzmann method, typically many times faster on large grids). Structural and thermal solves use the GPU
+sparse solver (CuPy) or Intel MKL PARDISO on all cores when installed, else SciPy. **Settings ▸ Compute** picks
+Automatic / CPU / graphics card and how many CPU threads to use, and shows what was found; each flow result notes
+where it ran and how fast (cell updates per second). If the grid doesn't fit in the card's memory, it runs on the CPU.
+
+Optional installs: `pip install numba-cuda[cu12]` (CUDA flow), `pip install cupy-cuda12x` (GPU solves),
+`pip install pypardiso` (faster CPU solves).
+
+---
+
 ## Icarus copilot
 
 Icarus edits the feature history through tools generated from the same feature registry the Inspector uses, so

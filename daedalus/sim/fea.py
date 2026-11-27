@@ -366,9 +366,11 @@ def _condense2(A, B, D):
 
 
 def _solve_linear(K, f, D):
-    from scipy.sparse.linalg import spsolve
+    from ..compute import spsolve
     from skfem import condense
-    if K.shape[0] > 450000:
+    from .. import compute
+    limit = 450000 if compute.solver_name(K.shape[0]).startswith("SciPy") else 2_000_000
+    if K.shape[0] > limit:
         raise SimError("Mesh too fine for the direct solver — use a larger element size")
     A, b, x, I = condense(K, f, D=D)
     try:
@@ -577,7 +579,7 @@ def buckling(body, material, study, sm=None) -> FieldResult:
 
 
 def thermal(body, material, study, sm=None) -> FieldResult:
-    from scipy.sparse.linalg import spsolve
+    from ..compute import spsolve
     from skfem import (Basis, BilinearForm, ElementTetP2, FacetBasis, LinearForm, MeshTet, asm, condense)
     t0 = time.perf_counter()
     sm = sm or mesh_solid(body, study.get("mesh_size"))

@@ -274,7 +274,7 @@ def assembly_static(doc, st, progress=None):
               np.tile(np.nonzero(c_ax)[0], len(np.nonzero(c_ax)[0])))), shape=K.shape)
         K = K + Kb
         bolts.append((b, cs, c_ax, ax, k_ax, k_sh, d))
-    from scipy.sparse.linalg import spsolve
+    from ..compute import spsolve
     Kc, fc, x, I = condense(K.tocsr(), f, D=D)
     try:
         xi = spsolve(Kc.tocsc(), fc)
@@ -539,7 +539,7 @@ def topology(body, material, study, opts, progress=None, cancel=None):
     """SIMP compliance minimisation for a volume fraction, density filter, optimality-criteria update.
     Faces with fixtures or loads stay solid."""
     from scipy.sparse import coo_matrix
-    from scipy.sparse.linalg import spsolve
+    from ..compute import spsolve
     from scipy.spatial import cKDTree
     from skfem import Basis, ElementTetP1, ElementVector, Functional, MeshTet, asm, condense
     from skfem.helpers import ddot, sym_grad, trace

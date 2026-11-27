@@ -681,30 +681,28 @@ def _run_ports(bodies, study, progress, cancel, t0):
     f = np.empty((19, nx, ny, nz), np.float32)
     for i in range(19):
         f[i] = W[i]
-    g = f.copy()
-    rho = np.ones((nx, ny, nz), np.float32)
-    u = np.zeros((3, nx, ny, nz), np.float32)
-    facc = np.zeros((nobj + 2, 3))
+    from . import lbm
+    d = lbm.make(f, solid_in, nobj + 2, study.get("device"))
+    d.set_ports(pin, pin_nb, pout, pout_nb)
+    notes.append(d.note)
     pscale = rho_p * ((dx / 1000.0) / dt) ** 2 / 3.0
     ramp = max(1, int(steps * 0.1))
     avg_from = int(steps * 0.6)
-    uavg = np.zeros((3, nx, ny, nz))
-    pavg = np.zeros((nx, ny, nz))
-    navg = 0
     sample_every = max(1, steps // 200)
     hist_t, hist_dp, hist_q = [], [], []
     pin_i = tuple(pin_nb.T)
     pout_i = tuple(pout_nb.T)
     area_in = src["area_mm2"] / 1e6
     it = 0
+    t_loop = time.perf_counter()
     for it in range(steps):
         s = U_lb * min(1.0, (it + 1) / ramp)
-        collide(f, solid_in, tau, smag)
-        stream(f, g, solid_in, False, facc, nobj + 1)
-        f, g = g, f
-        ports(f, pin, pin_nb, s * n_in[0], s * n_in[1], s * n_in[2], pout, pout_nb)
+        d.collide(tau, smag)
+        d.stream(False)
+        d.swap()
+        d.ports(s * n_in[0], s * n_in[1], s * n_in[2])
         if it % sample_every == 0 or it == steps - 1:
-            macro(f, solid_in, rho, u)
+            rho, u = d.macro()
             dp = float((rho[pin_i].mean() - rho[pout_i].mean()) * pscale)
             if not math.isfinite(dp):
                 raise FlowError("Flow solution diverged — lower the velocity or raise the resolution")
@@ -717,13 +715,11 @@ def _run_ports(bodies, study, progress, cancel, t0):
                 notes.append(f"Stopped at step {it + 1:,} of {steps:,}")
                 break
         if it >= avg_from and (it - avg_from) % max(1, (steps - avg_from) // 40) == 0:
-            macro(f, solid_in, rho, u)
-            uavg += u
-            pavg += rho
-            navg += 1
-    macro(f, solid_in, rho, u)
-    u_f = (uavg / navg).astype(np.float32) if navg else u
-    rho_f = (pavg / navg).astype(np.float32) if navg else rho
+            d.accumulate()
+    rho, u = d.macro()
+    u_f, rho_f = d.averages()
+    cells_s = nx * ny * nz * (it + 1) / max(time.perf_counter() - t_loop, 1e-9)
+    notes[notes.index(d.note)] = f"{d.note} · {cells_s / 1e6:.3g} M cell-updates/s"
     vel = u_f * (U / U_lb)
     p = (rho_f - 1.0) * pscale
     p -= float(np.mean(p[pout_i]))
@@ -873,13 +869,12 @@ def run(bodies: dict, study: dict, progress=None, cancel=None) -> FlowResult:
         f[i] = W[i] * (1 + cu + 0.5 * cu * cu - 1.5 * U_lb * U_lb)
     if mode == "internal":
         f[:, solid > 0] = W[:, None]
-    g = f.copy()
-    rho = np.ones((nx, ny, nz), np.float32)
-    u = np.zeros((3, nx, ny, nz), np.float32)
     blocked = solid == 255
     solid_in = solid.copy()
     solid_in[blocked] = nobj + 1
-    facc = np.zeros((nobj + 2, 3))
+    from . import lbm
+    d = lbm.make(f, solid_in, nobj + 2, study.get("device"))
+    notes.append(d.note)
     hist_t, hist_fx, hist_fy, hist_dp = [], [], [], []
     avg_from = int(steps * 0.6)
     fsum = np.zeros((nobj + 2, 3))
@@ -887,25 +882,25 @@ def run(bodies: dict, study: dict, progress=None, cancel=None) -> FlowResult:
     ramp = max(1, int(steps * 0.1))
     fscale = rho_p * (dx / 1000.0) ** 4 / dt ** 2               # lattice force → N
     pscale = rho_p * ((dx / 1000.0) / dt) ** 2 / 3.0             # lattice δρ → Pa (p = c_s² δρ)
-    uavg = np.zeros((3, nx, ny, nz), np.float64)
-    pavg = np.zeros((nx, ny, nz), np.float64)
-    navg = 0
     sample_every = max(1, steps // 200)
+    t_loop = time.perf_counter()
     for it in range(steps):
         uin = U_lb * min(1.0, (it + 1) / ramp)
-        collide(f, solid_in, tau, smag)
-        facc[:] = 0
+        d.collide(tau, smag)
+        d.zero_forces()
         record = it >= avg_from
-        stream(f, g, solid_in, record or it % sample_every == 0, facc, nobj + 1)
-        f, g = g, f
-        boundaries(f, solid_in, uin, mode == "external")
-        if it % sample_every == 0 or it == steps - 1:
+        sampled = it % sample_every == 0 or it == steps - 1
+        d.stream(record or sampled)
+        d.swap()
+        d.boundaries(uin, mode == "external")
+        facc = d.forces() if (record or sampled) else None
+        if sampled:
             hist_t.append(it * dt)
             Fn = facc[1:nobj + 1].sum(0) * fscale
             hist_fx.append(float(Fn[0]))
             hist_fy.append(float(np.hypot(Fn[1], Fn[2])))
             if mode == "internal":
-                macro(f, solid_in, rho, u)
+                rho, u = d.macro()
                 hist_dp.append(float((_plane_mean(rho, solid_in, 1) - _plane_mean(rho, solid_in, nx - 2)) * pscale))
             if progress and len(hist_t) % 10 == 0:
                 progress(f"Flow: step {it + 1:,} / {steps:,}")
@@ -918,16 +913,11 @@ def run(bodies: dict, study: dict, progress=None, cancel=None) -> FlowResult:
             fsum += facc
             nsum += 1
             if (it - avg_from) % max(1, (steps - avg_from) // 40) == 0:
-                macro(f, solid_in, rho, u)
-                uavg += u
-                pavg += rho
-                navg += 1
-    macro(f, solid_in, rho, u)
-    if navg:
-        u_lb_field = (uavg / navg).astype(np.float32)
-        rho_field = (pavg / navg).astype(np.float32)
-    else:
-        u_lb_field, rho_field = u, rho
+                d.accumulate()
+    rho, u = d.macro()
+    u_lb_field, rho_field = d.averages()
+    cells_s = nx * ny * nz * (it + 1) / max(time.perf_counter() - t_loop, 1e-9)
+    notes[notes.index(d.note)] = f"{d.note} · {cells_s / 1e6:.3g} M cell-updates/s"
     vel = u_lb_field * (U / U_lb)
     p = (rho_field - 1.0) * pscale
     if mode == "external":

@@ -274,6 +274,14 @@ def sections() -> list[dict]:
              Opt("update/repo", "Repository", "text", "", help="Blank = ayenn1214/daedalus."),
              Opt("update/token", "GitHub token", "password", "", help="Only for a private repository."),
          ], "extra": _updates_extra, "keys": ["update/skip"]},
+        {"key": "compute", "title": "Compute", "blurb": "Where flow and structural simulations run: every CPU core "
+                                                       "or an NVIDIA graphics card (CUDA).",
+         "opts": [Opt("compute/device", "Run simulations on", "choice", "auto",
+                      [("auto", "Automatic (graphics card when available)"), ("cpu", "CPU only"),
+                       ("gpu", "Graphics card (CUDA)")], apply=lambda v: _compute_apply()),
+                  Opt("compute/threads", "CPU threads", "int", 0, lo=0, hi=256, help="0 = all cores. Fewer leaves the computer "
+                      "responsive while a simulation runs.", apply=lambda v: _compute_apply())],
+         "extra": _compute_extra},
         {"key": "advanced", "title": "Advanced", "blurb": "Reports, checks and all settings at once.",
          "opts": [Opt("bugreport/email", "Your email on bug reports", "text", "")],
          "extra": _advanced_extra},
@@ -486,6 +494,26 @@ def _updates_extra(page, lay, window, sd):
         pass
     row.addStretch(1)
     lay.addLayout(row)
+
+
+def _compute_apply():
+    from .. import compute
+    compute.apply_threads()
+    compute.info(refresh=True)
+
+
+def _compute_extra(page, lay, window, sd):
+    from .. import compute
+    lab = _note(compute.summary().replace("\n", "<br>"))
+    lay.addWidget(lab)
+    row = QHBoxLayout()
+    row.addWidget(_btn("Check again", lambda: lab.setText(compute.summary().replace("\n", "<br>")) if
+                       compute.info(refresh=True) else None))
+    row.addStretch(1)
+    lay.addLayout(row)
+    lay.addWidget(_note("Graphics card (NVIDIA, CUDA): <code>pip install numba-cuda[cu12]</code> for flow, "
+                        "<code>pip install cupy-cuda12x</code> for structural solves. Faster CPU solves: "
+                        "<code>pip install pypardiso</code>. Flow already uses every CPU core."))
 
 
 def _advanced_extra(page, lay, window, sd):
