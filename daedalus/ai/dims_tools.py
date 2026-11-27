@@ -53,6 +53,16 @@ DIMS_TOOLS = [
      "description": "Parts at/below their reorder point with suggested order quantity, cheapest supplier, price and "
                     "estimated cost; optional project / vendor filter. Also open orders already placed.",
      "input_schema": {"type": "object", "properties": {"project": _S, "vendor": _S}}},
+    {"name": "dims_rfq",
+     "description": "Request-for-quote emails, one per vendor (generated, not sent — the person sends them): for the "
+                    "reorder list (optional project / vendor / why = all|short|low) or the given parts [{part, qty}]. "
+                    "every_supplier (default true) asks each vendor that sells a part. log=true records the request "
+                    "so the prices that come back can be entered. Returns to / subject / body per vendor.",
+     "input_schema": {"type": "object", "properties": {
+         "project": _S, "vendor": _S, "why": {"type": "string", "enum": ["all", "short", "low"]},
+         "parts": {"type": "array", "items": {"type": "object", "properties": {"part": _S, "qty": _N},
+                                              "required": ["part"]}},
+         "every_supplier": {"type": "boolean"}, "log": {"type": "boolean"}}}},
     {"name": "dims_shortages",
      "description": "Cross-project shortages: total demand of every project a part is on vs stock.",
      "input_schema": {"type": "object", "properties": {}}},
@@ -545,6 +555,28 @@ class DimsToolExecutor:
             r["On Order"] = on_order.get(p["id"], 0)
         return _j({"count": len(rows), "estimated_total_cad": round(sum(r["Est. Cost"] for r in rows), 2),
                    "rows": rows})
+
+    def _dims_rfq(self, a):
+        from ..inventory import rfq as R
+        inv = self.inv
+        if a.get("parts"):
+            items = [(self.find_part(x["part"]), M.num(x.get("qty") or 1)) for x in a["parts"]]
+        else:
+            proj = self.find_project(a["project"])["id"] if a.get("project") else "all"
+            items = R.from_reorder(inv, proj, a.get("vendor") or "all", a.get("why") or "all")
+        if not items:
+            return _j({"count": 0, "note": "Nothing to quote — no parts below reorder point or short."})
+        groups = R.group(inv, items, a.get("every_supplier", True))
+        if a.get("vendor"):
+            groups = {k: v for k, v in groups.items() if k.lower() == a["vendor"].lower()} or groups
+        st = R.settings(inv)
+        rfq = R.next_number(st)
+        mails = [R.compose(inv, n, it, rfq, st=st) for n, it in groups.items()]
+        if a.get("log"):
+            R.log(inv, [m for m in mails if m["vendor"] != R.NO_VENDOR])
+            self._commit(f"{rfq}: quotes requested")
+        return _j({"rfq": rfq, "count": len(mails), "logged": bool(a.get("log")),
+                   "emails": [{k: m[k] for k in ("vendor", "to", "subject", "body")} for m in mails]})
 
     def _dims_shortages(self, a):
         inv = self.inv

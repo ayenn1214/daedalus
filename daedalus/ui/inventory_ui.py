@@ -2299,6 +2299,10 @@ class InventoryPage(QWidget):
             row.addWidget(ws)
             row.addWidget(ts)
             row.addWidget(_muted(f"{len(lst)} of {len(all_low)} parts", False), 1)
+            row.addWidget(_btn("Request quotes…", self.request_quotes,
+                               "One email per vendor asking for price and lead time — for the selected parts, or "
+                               "everything showing"))
+            row.addWidget(_btn("Quotes…", self.enter_quotes, "Enter the prices vendors sent back"))
             row.addWidget(_btn("Export All (per project)", self.export_reorder_by_project))
             row.addWidget(_btn("Export List (.xlsx)", self.export_reorder))
             v.addLayout(row)
@@ -2409,6 +2413,26 @@ class InventoryPage(QWidget):
         if QMessageBox.question(self, "Cancel order", "Cancel this part order?") == QMessageBox.Yes:
             o["status"] = "Cancelled"
             self.commit("Order cancelled")
+
+    def request_quotes(self, items=None):
+        from ..inventory import rfq as R
+        from .rfq_ui import RFQDialog
+        inv, f = self.inv, self.reorder_filter
+        if items is None:
+            need = (lambda p: inv.needed_for_project(p, f["project"])) if f["project"] != "all" else inv.total_needed
+            parts = [inv.part(i) for i in self.sel_reorder if inv.part(i)] or self.reorder_filtered()
+            items = [(p, inv.suggested_qty(p, need(p))) for p in parts]
+        if not items:
+            return self.toast.show_msg("Nothing to quote with the current filters")
+        d = RFQDialog(self, items)
+        d.exec()
+        return d
+
+    def enter_quotes(self):
+        from .rfq_ui import QuotesDialog
+        d = QuotesDialog(self)
+        d.exec()
+        return d
 
     def batch(self, mode):
         parts = [self.inv.part(i) for i in self.sel_reorder if self.inv.part(i)]
