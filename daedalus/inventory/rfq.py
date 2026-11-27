@@ -246,7 +246,11 @@ def enter_quote(inv, entry_id: str, prices: dict, lead_days=None, currency: str 
         s = next((s for s in sups if (s.get("name") or "").lower() == vendor.lower()), None)
         if s is None:
             s = {"name": vendor, "price": None, "currency": currency or "CAD", "partNumber": "", "website": ""}
-            sups.append(s)
+            slot = next((i for i, x in enumerate(sups) if not (x or {}).get("name")), None)  # empty A–C slot
+            if slot is None:
+                sups.append(s)
+            else:
+                sups[slot] = s
         s["price"] = M.num(price)
         if currency:
             s["currency"] = currency

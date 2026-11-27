@@ -390,6 +390,24 @@ General ▸ *Your name* signs check-ins and approvals.
 
 ---
 
+## Supplier catalogs and quotes
+
+- **Request quotes** (DIMS ▸ Reorder): one email per vendor for the selected parts or everything showing — their part
+  numbers and ours, quantities, a reply-by date — generated, not sent. *Open as draft* opens it in Outlook / Mail /
+  Thunderbird ready to send with the line list attached (CSV or Excel); *Open in mail* uses a mailto link; *Copy*
+  puts it on the clipboard. The template, your signature and RFQ numbering are set once. **Quotes…** enters the
+  prices that come back (typed, or read from the vendor's filled-in sheet) into each part's supplier prices and the
+  vendor's lead time. Icarus: `dims_rfq`.
+- **Catalog lookup** (DIMS ▸ Vendors): a McMaster-Carr part number → description, specifications, price tiers,
+  discontinued → suggested replacement and the 3-D model; add it as a DIMS part, put its prices on an existing part,
+  or add the STEP to the standard parts library. **Refresh prices** updates every part that buys from McMaster-Carr
+  (the reorder quantity picks the price tier) and flags discontinued ones. Uses McMaster-Carr's Product Information
+  API, which needs an approved account (client certificate + sign-in, Settings ▸ Suppliers; ask
+  eCommerce@mcmaster.com); without it — and for Misumi, Fastenal, Grainger, Digi-Key, Mouser and Uline — Look up
+  opens the vendor's page. Icarus: `dims_catalog`.
+
+---
+
 ## Microsoft 365
 
 **Settings ▸ Microsoft 365:**

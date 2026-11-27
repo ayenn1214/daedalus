@@ -63,6 +63,14 @@ DIMS_TOOLS = [
          "parts": {"type": "array", "items": {"type": "object", "properties": {"part": _S, "qty": _N},
                                               "required": ["part"]}},
          "every_supplier": {"type": "boolean"}, "log": {"type": "boolean"}}}},
+    {"name": "dims_catalog",
+     "description": "Supplier catalog (McMaster-Carr API when set up): look up a vendor part number (description, "
+                    "specs, price tiers, discontinued → replacement, 3-D model); action add = new DIMS part from it; "
+                    "update = put its price tiers on an existing part; refresh = fresh prices on every part using "
+                    "that vendor.",
+     "input_schema": {"type": "object", "properties": {
+         "vendor_part_number": _S, "action": {"type": "string", "enum": ["lookup", "add", "update", "refresh"]},
+         "part": _S}}},
     {"name": "dims_shortages",
      "description": "Cross-project shortages: total demand of every project a part is on vs stock.",
      "input_schema": {"type": "object", "properties": {}}},
@@ -577,6 +585,29 @@ class DimsToolExecutor:
             self._commit(f"{rfq}: quotes requested")
         return _j({"rfq": rfq, "count": len(mails), "logged": bool(a.get("log")),
                    "emails": [{k: m[k] for k in ("vendor", "to", "subject", "body")} for m in mails]})
+
+    def _dims_catalog(self, a):
+        from ..inventory import catalog as CAT
+        if not CAT.configured() and not getattr(self, "catalog_provider", None):
+            return _j({"ok": False, "note": "McMaster-Carr's API isn't set up (Settings ▸ Suppliers). Website: " +
+                       CAT.search_url("McMaster-Carr", a.get("vendor_part_number") or "")})
+        prov = getattr(self, "catalog_provider", None) or CAT.McMaster()
+        act = a.get("action") or "lookup"
+        if act == "refresh":
+            r = CAT.refresh_prices(self.inv, prov)
+            self._commit(f"{r['updated']} McMaster-Carr price(s) refreshed")
+            return _j(r)
+        info = prov.product(a["vendor_part_number"])
+        if act == "add":
+            p = CAT.new_part(self.inv, info)
+            self._commit(f"Added {p['name']} from {info['vendor']}")
+            return _j({"ok": True, "added": p["name"], "info": info})
+        if act == "update":
+            p = self.find_part(a["part"])
+            s_ = CAT.apply_to_part(p, info)
+            self._commit(f"{p['name']}: {info['vendor']} price updated")
+            return _j({"ok": True, "part": p["name"], "supplier": s_})
+        return _j(info)
 
     def _dims_shortages(self, a):
         inv = self.inv

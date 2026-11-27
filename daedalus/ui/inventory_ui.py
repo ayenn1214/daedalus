@@ -2121,6 +2121,11 @@ class InventoryPage(QWidget):
                                                                             "address, contact, phone, email, terms …"))
         row.addWidget(_btn("Import prices…", lambda: import_prices_ui(self), "Vendor prices by part number (e.g. the "
                                                                           "pricing Google Sheet downloaded as .xlsx)"))
+        row.addWidget(_btn("Catalog lookup…", lambda: __import__("daedalus.ui.catalog_ui", fromlist=["x"])
+                           .CatalogDialog(self).exec(), "A vendor part number → description, specs, price tiers and "
+                                                        "3-D model (McMaster-Carr API, or the vendor's website)"))
+        row.addWidget(_btn("Refresh prices", lambda: __import__("daedalus.ui.catalog_ui", fromlist=["x"])
+                           .refresh_prices_ui(self), "Fresh McMaster-Carr prices on every part that uses them"))
         row.addWidget(_btn("+ Add Vendor", lambda: self.edit_vendor(None), primary=True))
         v.addLayout(row)
         cats = list(M.VENDOR_CATEGORIES)

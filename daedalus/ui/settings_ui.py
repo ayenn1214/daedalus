@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
 
 from . import theme
 
-SECRET = {"api_key", "update/token", "teams/webhook", "m365/refresh"}                      # never exported to a file
+SECRET = {"api_key", "update/token", "teams/webhook", "m365/refresh", "mcmaster/password", "mcmaster/cert_password"}                      # never exported to a file
 NOT_EXPORTED = SECRET | {"ui/geometry", "ui/dock_state", "dims/chat_geometry", "update/last_check",
                          "update/available", "migrated/from_strata", "home/tip"}
 
@@ -292,6 +292,14 @@ def sections() -> list[dict]:
                   Opt("m365/tenant", "Tenant", "text", "organizations",
                       help="organizations (any work account), or your tenant ID / domain.")],
          "extra": _m365_extra},
+        {"key": "suppliers", "title": "Suppliers", "blurb": "Supplier catalogs for DIMS: look up part numbers, prices "
+                                                            "and 3-D models (DIMS ▸ Vendors ▸ Catalog lookup).",
+         "opts": [Opt("mcmaster/cert", "McMaster-Carr client certificate", "text", "",
+                      help="The .pfx file McMaster-Carr sends approved API customers (eCommerce@mcmaster.com)."),
+                  Opt("mcmaster/cert_password", "Certificate password", "password", ""),
+                  Opt("mcmaster/user", "McMaster-Carr sign-in (email)", "text", ""),
+                  Opt("mcmaster/password", "McMaster-Carr password", "password", "",
+                      help="Kept on this PC only, never exported.")]},
         {"key": "compute", "title": "Compute", "blurb": "Where flow and structural simulations run: every CPU core "
                                                        "or an NVIDIA graphics card (CUDA).",
          "opts": [Opt("compute/device", "Run simulations on", "choice", "auto",
