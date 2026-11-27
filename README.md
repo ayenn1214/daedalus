@@ -426,6 +426,20 @@ The webhook address and the sign-in are kept on this PC and never exported with 
 
 ---
 
+## Accounting (QuickBooks Online / Xero)
+
+Off unless turned on in **Settings ▸ Accounting**. Connect signs in through the browser with your organisation's app
+(QuickBooks: client ID + secret from developer.intuit.com; Xero: an *Auth code with PKCE* app from developer.xero.com;
+redirect URI `http://localhost:8765/callback`). Then:
+
+- **Purchase orders:** saving a PO in DIMS can also create it there — the vendor is matched by name (or created),
+  lines go to the item with the part's *QuickBooks part number* (Xero item code), others to the expense account you
+  set. Xero POs arrive as drafts.
+- **Pull vendors** fills in vendor emails, phones and addresses; **Pull item costs** sets unit costs on parts whose
+  QuickBooks part number / Xero item code matches.
+
+---
+
 ## Compute: every CPU core or the graphics card
 
 Flow simulations run on every CPU core (numba) or, with an NVIDIA graphics card, on the card (CUDA kernels — the same

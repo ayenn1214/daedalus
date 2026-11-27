@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
 
 from . import theme
 
-SECRET = {"api_key", "update/token", "teams/webhook", "m365/refresh", "mcmaster/password", "mcmaster/cert_password"}                      # never exported to a file
+SECRET = {"api_key", "update/token", "teams/webhook", "m365/refresh", "mcmaster/password", "mcmaster/cert_password",
+          "qbo/client_secret", "qbo/refresh", "xero/refresh"}                      # never exported to a file
 NOT_EXPORTED = SECRET | {"ui/geometry", "ui/dock_state", "dims/chat_geometry", "update/last_check",
                          "update/available", "migrated/from_strata", "home/tip"}
 
@@ -300,6 +301,27 @@ def sections() -> list[dict]:
                   Opt("mcmaster/user", "McMaster-Carr sign-in (email)", "text", ""),
                   Opt("mcmaster/password", "McMaster-Carr password", "password", "",
                       help="Kept on this PC only, never exported.")]},
+        {"key": "accounting", "title": "Accounting", "blurb": "QuickBooks Online or Xero: purchase orders from DIMS, "
+                                                              "vendors and item costs back. Off unless turned on.",
+         "opts": [Opt("accounting/enabled", "Accounting link", "bool", False),
+                  Opt("accounting/provider", "System", "choice", "qbo", [("qbo", "QuickBooks Online"),
+                                                                       ("xero", "Xero")]),
+                  Opt("accounting/auto_po", "Create purchase orders there too (ticked by default)", "bool", True),
+                  Opt("qbo/client_id", "QuickBooks client ID", "text", "",
+                      help="developer.intuit.com ▸ your app ▸ Keys & credentials. Redirect URI: "
+                           "http://localhost:8765/callback"),
+                  Opt("qbo/client_secret", "QuickBooks client secret", "password", ""),
+                  Opt("qbo/sandbox", "QuickBooks sandbox company", "bool", False),
+                  Opt("qbo/expense_account", "QuickBooks expense account ID", "text", "",
+                      help="For PO lines whose part has no QuickBooks part number (an Account Id, e.g. Cost of "
+                           "Goods Sold)."),
+                  Opt("xero/client_id", "Xero client ID", "text", "",
+                      help="developer.xero.com ▸ My apps ▸ New app ▸ Auth code with PKCE. Redirect URI: "
+                           "http://localhost:8765/callback"),
+                  Opt("xero/account_code", "Xero account code", "text", "", help="e.g. 300 (Purchases)"),
+                  Opt("accounting/port", "Sign-in port", "int", 8765, lo=1024, hi=65000,
+                      help="The redirect URI registered with the app: http://localhost:<port>/callback")],
+         "extra": _accounting_extra},
         {"key": "compute", "title": "Compute", "blurb": "Where flow and structural simulations run: every CPU core "
                                                        "or an NVIDIA graphics card (CUDA).",
          "opts": [Opt("compute/device", "Run simulations on", "choice", "auto",
@@ -582,6 +604,73 @@ def _m365_extra(page, lay, window, sd):
     lay.addWidget(acct)
     lay.addWidget(_note("If the OneDrive app already syncs the workbook's folder to this PC, DIMS Import / Export on "
                         "that file works with no sign-in."))
+
+
+def _accounting_extra(page, lay, window, sd):
+    from ..inventory import accounting as ACC
+    from PySide6.QtWidgets import QMessageBox
+    st = _note("")
+
+    def show():
+        p = ACC.provider()
+        org = ACC.setting("xero/org", "") if p.key == "xero" else ACC.setting("qbo/realm", "")
+        st.setText(f"{p.name}: " + (f"connected{f' ({org})' if org else ''}" if p.connected() else "not connected"))
+    show()
+
+    def connect():
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from PySide6.QtWidgets import QApplication
+        p = ACC.provider()
+        if not p.client_id:
+            return QMessageBox.warning(page, "Accounting", f"Set the {p.name} client ID first.")
+        box = QMessageBox(QMessageBox.Information, "Accounting", f"Sign in to {p.name} in the browser and allow "
+                          "Daedalus — this window closes when it's done.", QMessageBox.Cancel, page)
+        import threading
+        res = {}
+
+        def run():
+            try:
+                res["ok"] = ACC.sign_in(p, lambda u: res.setdefault("url", u), timeout=300)
+            except Exception as e:  # noqa: BLE001
+                res["e"] = e
+        threading.Thread(target=run, daemon=True).start()
+        from PySide6.QtCore import QTimer
+        t = QTimer(box)
+        opened = []
+
+        def tick():
+            if "url" in res and not opened:
+                opened.append(1)
+                QDesktopServices.openUrl(QUrl(res["url"]))
+            if "ok" in res or "e" in res:
+                box.accept()
+        t.timeout.connect(tick)
+        t.start(300)
+        box.exec()
+        QApplication.processEvents()
+        if "e" in res:
+            QMessageBox.warning(page, "Accounting", str(res["e"]))
+        show()
+
+    def pull(what):
+        try:
+            from ..inventory.store import get_store
+            store = get_store()
+            r = (ACC.pull_vendors if what == "vendors" else ACC.pull_costs)(store.inv)
+            store.save()
+            QMessageBox.information(page, "Accounting", ", ".join(f"{k}: {v}" for k, v in r.items()))
+        except Exception as e:  # noqa: BLE001
+            QMessageBox.warning(page, "Accounting", str(e))
+    row = QHBoxLayout()
+    row.addWidget(_btn("Connect…", connect, True))
+    row.addWidget(_btn("Disconnect", lambda: (ACC.provider().disconnect(), show())))
+    row.addWidget(_btn("Pull vendors", lambda: pull("vendors")))
+    row.addWidget(_btn("Pull item costs", lambda: pull("costs"),
+                       tip="Unit costs for parts whose QuickBooks part number / Xero item code matches"))
+    row.addStretch(1)
+    lay.addLayout(row)
+    lay.addWidget(st)
 
 
 def _compute_apply():

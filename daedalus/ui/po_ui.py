@@ -243,6 +243,18 @@ class PurchaseOrderDialog(QDialog):
         self.log = QCheckBox("Mark as ordered — add open part orders with this PO number")
         self.log.setChecked(True)
         v.addWidget(self.log)
+        from ..inventory import accounting as ACC
+        self.acc = QCheckBox("")
+        self.acc.setVisible(False)
+        if ACC.enabled():
+            prov = ACC.provider()
+            self.acc.setText(f"Also create it in {prov.name}" + ("" if prov.connected() else
+                                                                 " (connect first: Settings ▸ Accounting)"))
+            self.acc.setEnabled(prov.connected())
+            self.acc.setChecked(prov.connected() and str(ACC.setting("accounting/auto_po", True)).lower()
+                                in ("true", "1"))
+            self.acc.setVisible(True)
+        v.addWidget(self.acc)
         bb = QDialogButtonBox(QDialogButtonBox.Cancel)
         self.save_btn = bb.addButton("Save PDF…", QDialogButtonBox.AcceptRole)
         self.save_btn.setObjectName("primary")
@@ -404,5 +416,15 @@ class PurchaseOrderDialog(QDialog):
             P.log_orders(self.inv, po, vend, self.project_id)
         P.used_number(self.inv, po["number"])
         self.saved_path = path
-        self.page.commit(f"PO {po['number']} saved" + (" — parts marked as ordered" if self.log.isChecked() else ""))
+        extra = ""
+        if not self.acc.isHidden() and self.acc.isChecked() and vend != "No vendor set":
+            from ..inventory import accounting as ACC
+            try:
+                r = ACC.push_po(self.inv, {**po, "job": self.job.text()}, vend)
+                extra = f" — created in {r['system']} ({r.get('number') or r['id']})"
+            except ACC.AccountingError as e:
+                QMessageBox.warning(self, "Purchase order", f"The PDF is saved, but the accounting system didn't "
+                                                            f"take the PO:\n{e}")
+        self.page.commit(f"PO {po['number']} saved" + (" — parts marked as ordered" if self.log.isChecked() else "")
+                         + extra)
         self.accept()
