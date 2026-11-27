@@ -197,7 +197,9 @@ class MainWindow(QMainWindow):
         self.load_bar.hide()
         self.statusBar().addPermanentWidget(self.load_bar)
         self.view.loading.connect(self._on_loading)
-        for w in (self.status_sel, self.status_asm, self.status_mat, self.status_rebuild):
+        self.status_vault = QLabel()
+        self.status_vault.setToolTip("Version / release of this file — File ▸ Versions…")
+        for w in (self.status_vault, self.status_sel, self.status_asm, self.status_mat, self.status_rebuild):
             self.statusBar().addPermanentWidget(w)
         from .units_ui import SystemCombo
         self.units_combo = SystemCombo()
@@ -1593,6 +1595,8 @@ class MainWindow(QMainWindow):
         act(f, "Close part", self.close_doc, "Ctrl+W")
         act(f, "Save", self.save_doc, QKeySequence.Save)
         act(f, "Save As…", lambda: self.save_doc(as_=True), QKeySequence.SaveAs)
+        act(f, "Check in…", self.check_in, "Ctrl+Alt+S")
+        act(f, "Versions…", self.show_versions, "Ctrl+Alt+H")
         f.addSeparator()
         act(f, "Import part (projects, library, inventory)…", self.import_part, "Ctrl+Shift+M")
         act(f, "Import geometry into this part…", self.import_dialog, "Ctrl+I")
@@ -1910,7 +1914,41 @@ class MainWindow(QMainWindow):
         except FeatureError as e:
             QMessageBox.warning(self, "Layers", str(e))
 
+    def check_in(self):
+        from .vault_ui import VersionsDialog
+        d = VersionsDialog(self)
+        d.check_in()
+        self._update_title()
+
+    def show_versions(self):
+        from .vault_ui import VersionsDialog
+        VersionsDialog(self).exec()
+        self._update_title()
+
+    def open_document_copy(self, doc, title):
+        w = MainWindow(self.mods)
+        w._swap_doc(doc)
+        w.setWindowTitle(title)
+        w.show()
+        self._copies = getattr(self, "_copies", []) + [w]
+
+    def _vault_status(self):
+        lab = getattr(self, "status_vault", None)
+        if lab is None:
+            return
+        try:
+            from ..core import vault as V
+            st = V.status(self.doc, True if self.doc.dirty else None)     # unsaved edits: changed, no hashing
+        except Exception:  # noqa: BLE001
+            st = {"tracked": False}
+        if not st.get("tracked"):
+            lab.setText("")
+            return
+        rel = f"Rev {st['released']}" if st.get("released") else "not released"
+        lab.setText(f"v{st['latest']} · {rel}" + (" · modified" if st.get("modified") else ""))
+
     def _update_title(self):
+        self._vault_status()
         name = self.doc.path.name if self.doc.path else "Untitled"
         from .. import modules as MOD
         part = "" if self.mods >= MOD.ALL else f" · {MOD.describe(self.mods)}"

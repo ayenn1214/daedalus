@@ -370,6 +370,26 @@ imports with one click; servers without the tables keep working in the old singl
 
 ---
 
+## Versions and release
+
+**File ▸ Check in…** (Ctrl+Alt+S) saves the part and records it as the next version with your message; the history
+sits beside the file in `Name.history/`, so it works on a shared drive with no server. **File ▸ Versions…**
+(Ctrl+Alt+H) lists every version (who, when, why, mass) and:
+
+- **Compare** two versions, or one with the working file: features added / removed / changed (which parameters),
+  objects, materials, variables, drawings, mass and volume.
+- **Restore** a version into the working file (undoable), or **Open copy** read-only in a new window.
+- **Review and release:** WIP → In review (approve / reject with a note; optionally required before release) →
+  Released → Obsolete. Release gives the next revision letter (A, B, C … skipping I O Q S X Z), writes the release
+  package to `Name Rev X/` (STEP, a PDF of each drawing, BOM, release note), adds the row to each drawing's revision
+  table, makes the previous release obsolete and updates the matching DIMS part's revision. Released versions never
+  change.
+
+The status bar shows the version and released revision, and *modified* once you've changed it since. Settings ▸
+General ▸ *Your name* signs check-ins and approvals.
+
+---
+
 ## Compute: every CPU core or the graphics card
 
 Flow simulations run on every CPU core (numba) or, with an NVIDIA graphics card, on the card (CUDA kernels — the same

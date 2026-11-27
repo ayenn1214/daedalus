@@ -156,6 +156,8 @@ def sections() -> list[dict]:
                  apply=lambda w, v: _call(w, "set_toolbar_size", v), where="3D workspace"),
              Opt("home/show", "Show the Home page at start", "bool", True, help="Recent files, examples and tips."),
              Opt("home/reopen_last", "Reopen the last file at start", "bool", False),
+             Opt("user/name", "Your name", "text", "", help="Signs check-ins, approvals and releases (File ▸ "
+                 "Versions). Blank = your computer login."),
              Opt("autosave/seconds", "Autosave every", "int", 120, lo=15, hi=3600, suffix=" s",
                  help="A recovery copy of the open model (in ~/.daedalus/autosave).", apply=_apply_autosave,
                  where="3D workspace"),
