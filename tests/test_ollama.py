@@ -71,7 +71,7 @@ def test_core_tools_exist_and_unreachable_server():
 
 
 # ------------------------------------------------------------------ a fake Ollama server (streamed replies)
-def fake_ollama(models=("qwen2.5:14b",), replies=(), vram_share=1.0, delay=0.0):
+def fake_ollama(models=("qwen2.5:14b",), replies=(), vram_share=1.0, delay=0.0, caps=("completion", "tools")):
     import threading
     import time
     from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -101,6 +101,9 @@ def fake_ollama(models=("qwen2.5:14b",), replies=(), vram_share=1.0, delay=0.0):
 
         def do_POST(self):  # noqa: N802
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
+            if self.path == "/api/show":
+                return self._json({"capabilities": list(caps), "details": {"parameter_size": "14B"},
+                                   "model_info": {"qwen2.context_length": 32768}})
             state["chats"].append(body)
             time.sleep(delay)
             msg = state["replies"].pop(0) if state["replies"] else {"content": "ok"}

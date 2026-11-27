@@ -183,6 +183,8 @@ def chat_stream(host: str, payload: dict, on_progress: Callable[[str], None] | N
                 if msg.get("error"):
                     raise OllamaError(f"Ollama: {msg['error']}")
                 m = msg.get("message") or {}
+                if m.get("thinking") and on_progress and first:
+                    on_progress("Thinking…")
                 if m.get("content"):
                     content.append(m["content"])
                 if m.get("tool_calls"):
@@ -212,13 +214,65 @@ def chat_stream(host: str, payload: dict, on_progress: Callable[[str], None] | N
     return out
 
 
+def show(host: str, model: str, timeout: float = 6.0) -> dict:
+    try:
+        return _http("POST", host.rstrip("/") + "/api/show", {"model": model}, timeout=timeout)
+    except OllamaError:
+        return {}
+
+
 def capabilities(host: str, model: str, timeout: float = 6.0) -> set[str]:
     """{'completion', 'tools', 'vision', 'thinking', …} as reported by /api/show (empty if unknown)."""
+    return set(show(host, model, timeout).get("capabilities") or [])
+
+
+def model_info(host: str, model: str, timeout: float = 6.0) -> dict:
+    """{'caps', 'context' (tokens the model was trained for), 'params', 'quant', 'family'} from /api/show."""
+    got = show(host, model, timeout)
+    mi, det = got.get("model_info") or {}, got.get("details") or {}
+    ctx = next((int(v) for k, v in mi.items() if k.endswith(".context_length") and isinstance(v, (int, float))), 0)
+    return {"caps": set(got.get("capabilities") or []), "context": ctx, "params": det.get("parameter_size", ""),
+            "quant": det.get("quantization_level", ""), "family": det.get("family", "")}
+
+
+def installed(host: str, timeout: float = 4.0) -> list[dict]:
+    """[{'name', 'size' (bytes), 'params', 'quant', 'family', 'modified'}] — empty if the server isn't reachable."""
     try:
-        got = _http("POST", host.rstrip("/") + "/api/show", {"model": model}, timeout=timeout)
+        got = _http("GET", host.rstrip("/") + "/api/tags", timeout=timeout)
     except OllamaError:
-        return set()
-    return set(got.get("capabilities") or [])
+        return []
+    out = []
+    for m in got.get("models") or []:
+        d = m.get("details") or {}
+        out.append({"name": m.get("name", ""), "size": int(m.get("size") or 0), "params": d.get("parameter_size", ""),
+                    "quant": d.get("quantization_level", ""), "family": d.get("family", ""),
+                    "modified": m.get("modified_at", ""), "remote": bool(m.get("remote_host"))})
+    return sorted(out, key=lambda m: m["name"])
+
+
+def delete(host: str, model: str, timeout: float = 30.0) -> None:
+    _http("DELETE", host.rstrip("/") + "/api/delete", {"model": model}, timeout=timeout)
+
+
+# Models worth trying in Icarus: name, what it's good at, download size (GB), how it calls tools
+RECOMMENDED = [
+    ("qwen3:8b", "Fast all-rounder, native tools, thinking (8 GB graphics card)", 5.2, "tools"),
+    ("qwen3:14b", "Best balance for modelling, native tools, thinking (12 GB+)", 9.3, "tools"),
+    ("qwen3:32b", "Strongest local tool use (24 GB)", 20.0, "tools"),
+    ("qwen2.5:14b", "Reliable tool calling, no thinking (12 GB+)", 9.0, "tools"),
+    ("qwen2.5:7b", "Small and quick (6 GB+)", 4.7, "tools"),
+    ("gpt-oss:20b", "OpenAI's open model, native tools, reasoning levels (16 GB)", 14.0, "tools"),
+    ("llama3.1:8b", "Meta Llama, native tools (8 GB)", 4.9, "tools"),
+    ("mistral-small3.2", "Mistral 24B, tools + vision (24 GB)", 15.0, "tools, vision"),
+    ("qwen2.5vl:7b", "Reads drawings and photos (vision)", 6.0, "vision, prompted tools"),
+    ("gemma3:12b", "Google Gemma, vision (prompted tools)", 8.1, "vision, prompted tools"),
+    ("deepseek-r1:14b", "Reasoning model (prompted tools)", 9.0, "prompted tools"),
+    ("phi4-mini", "Microsoft Phi-4 mini, tiny and fast", 2.5, "tools"),
+    ("granite3.3:8b", "IBM Granite, native tools", 4.9, "tools"),
+    ("gpt-oss:120b-cloud", "Runs on Ollama's cloud (ollama signin) — big model, no graphics card needed", 0.0,
+     "tools"),
+    ("qwen3-coder:480b-cloud", "Ollama cloud, very large (ollama signin)", 0.0, "tools"),
+]
 
 
 def tool_schemas(names: list[str] | None = None, tools: list[dict] | None = None) -> list[dict]:
@@ -267,7 +321,7 @@ class OllamaCopilot:
     def __init__(self, call_tool: Callable[[str, dict], tuple[str, bool]], host: str = DEFAULT_HOST,
                  model: str | None = None, num_ctx: int = DEFAULT_CTX, tool_set: str = "core",
                  max_steps: int = 40, temperature: float = 0.2, post=None, tools: list[dict] | None = None,
-                 system: str | None = None):
+                 system: str | None = None, tool_mode: str = "auto", think: str = ""):
         self.host = host.rstrip("/")
         self.model = model or DEFAULT_MODEL
         self.num_ctx = int(num_ctx)
@@ -285,6 +339,10 @@ class OllamaCopilot:
         self._resp = None
         self._warned = False
         self.supports_status = True
+        self.tool_mode = tool_mode                         # auto | native | prompted
+        self.think = think                                 # '' (model default) | off | on | low | medium | high
+        self.prompted = tool_mode == "prompted"
+        self._caps: set[str] | None = None
 
     def stop(self):
         self._stop = True
@@ -308,10 +366,18 @@ class OllamaCopilot:
     def reset(self):
         self.messages.clear()
 
+    def _defs(self):
+        from . import toolsets as TS
+        return TS.select(self.tool_set, self.custom_tools)
+
     def _tools(self):
-        if self.custom_tools is not None:
-            return tool_schemas(tools=self.custom_tools)
-        return tool_schemas(None if self.tool_set == "all" else CORE_TOOLS)
+        from . import toolsets as TS
+        return TS.openai_schemas(self._defs())
+
+    def _think_value(self):
+        if not self.think or "thinking" not in (self._caps or set()):
+            return None
+        return {"off": False, "on": True}.get(self.think, self.think)
 
     def ask(self, prompt: str, model_state: dict | None = None,
             on_text: Callable[[str], None] = print,
@@ -326,6 +392,12 @@ class OllamaCopilot:
         if not self._custom_post:
             status(f"Connecting to Ollama…")
             preflight(self.host, self.model)
+            if self._caps is None:
+                self._caps = capabilities(self.host, self.model)
+                if self.tool_mode == "auto" and self._caps and "tools" not in self._caps:
+                    self.prompted = True
+                    status(f"!{self.model} can't call tools natively — Icarus describes the tools in the prompt and "
+                           "reads the calls from its answer (works, but less reliably than a tool model like qwen3).")
         content = prompt
         if model_state is not None:
             content = f"<current_model>\n{json.dumps(model_state)}\n</current_model>\n\n{prompt}"
@@ -333,19 +405,37 @@ class OllamaCopilot:
         if images:
             msg["images"] = [base64.b64encode(b).decode() for b in images]
         self.messages.append(msg)
-        tools = self._tools()
-        known = {t["function"]["name"] for t in tools}
+        from . import toolsets as TS
+        defs = self._defs()
+        tools = TS.openai_schemas(defs)
+        known = {t["name"] for t in defs}
         final = ""
         for _ in range(self.max_steps):
             if self._stop:
                 break
             status(f"Waiting for {self.model} — loading it and reading the request (the first reply takes longest)…")
-            resp = self._step({
-                "model": self.model, "stream": False, "tools": tools, "keep_alive": KEEP_ALIVE,
-                "messages": [{"role": "system", "content": (self.system or SYSTEM) + LOCAL_NOTE}] + self.messages,
-                "options": {"num_ctx": self.num_ctx, "temperature": self.temperature},
-            }, status)
-            self._resp = None
+            sysmsg = (self.system or SYSTEM) + (TS.catalogue(defs) if self.prompted else LOCAL_NOTE)
+            payload = {"model": self.model, "stream": False, "keep_alive": KEEP_ALIVE,
+                       "messages": [{"role": "system", "content": sysmsg}] + self.messages,
+                       "options": {"num_ctx": self.num_ctx, "temperature": self.temperature}}
+            if not self.prompted:
+                payload["tools"] = tools
+            if self._think_value() is not None:
+                payload["think"] = self._think_value()
+            try:
+                resp = self._step(payload, status)
+            except OllamaError as e:
+                if not self.prompted and self.tool_mode == "auto" and "does not support tools" in str(e):
+                    self.prompted = True
+                    status(f"!{self.model} can't call tools natively — Icarus describes the tools in the prompt "
+                           "instead.")
+                    continue
+                if "does not support thinking" in str(e):
+                    self.think = ""
+                    continue
+                raise
+            finally:
+                self._resp = None
             if getattr(self, "_killed", False):
                 break
             if not self._custom_post and not self._warned:
@@ -358,12 +448,14 @@ class OllamaCopilot:
             m = resp.get("message") or {}
             text = _THINK.sub("", m.get("content") or "").strip()
             calls = m.get("tool_calls") or []
+            native = bool(calls)
             if not calls and text:
-                calls = _text_tool_calls(text, known)
+                calls = [{"function": {"name": n, "arguments": a}} for n, a in TS.parse_calls(text, known)]
                 if calls:
                     text = ""
             self.messages.append({"role": "assistant", "content": m.get("content") or "",
-                                  **({"tool_calls": calls} if calls else {})})
+                                  **({"tool_calls": calls} if native else {})})
+            results = []
             if text:
                 final = text
                 on_text(text)
@@ -385,8 +477,13 @@ class OllamaCopilot:
                     out, err = self.call_tool(name, args)
                 if on_tool:
                     on_tool(name, args, out, err)
-                self.messages.append({"role": "tool", "tool_name": name,
-                                      "content": ("ERROR: " if err else "") + out})
+                if native:
+                    self.messages.append({"role": "tool", "tool_name": name,
+                                          "content": ("ERROR: " if err else "") + out})
+                else:                                     # a call written in text: the result goes back as text
+                    results.append(f"TOOL RESULT {name}:\n" + ("ERROR: " if err else "") + out)
                 if self._stop:
                     break
+            if results:
+                self.messages.append({"role": "user", "content": "\n\n".join(results)})
         return final

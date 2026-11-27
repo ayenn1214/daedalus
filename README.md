@@ -16,8 +16,9 @@ Python · Qt (PySide6) · OpenCASCADE (build123d / OCP) · VTK
 Daedalus covers the full path from sketch to shop floor: parts, assemblies, drawings, sheet metal, frames and HSS,
 simulation (FEA, CFD, physics), production drawings to ISO and ASME, CAM with G-code, quoting, purchase orders and
 inventory (DIMS, shared by the whole shop on a team server). **Icarus**, the built-in copilot, models through the
-same feature tools you use. It runs locally on Ollama by default, on Claude with an API key, or on your own Claude
-plan through Claude Code. **Claude Desktop** can use the same tools in your open window. Daedalus also links to SolidWorks, Fusion, Rhino, Inventor and Solid Edge.
+same feature tools you use. It runs locally on Ollama (any model) by default, on any OpenAI-compatible server (GPT, LM
+Studio, Jan, OpenRouter…), on Claude with an API key, or on your own Claude, ChatGPT or Gemini plan. **Claude Desktop**,
+**ChatGPT desktop** and other AI apps can use the same tools in your open window. Daedalus also links to SolidWorks, Fusion, Rhino, Inventor and Solid Edge.
 
 Files save as `.daedalus` (JSON feature history). Formerly **Strata CAD**: `.strata` files open as before, and
 settings are migrated on first launch.
@@ -28,8 +29,8 @@ settings are migrated on first launch.
 
 | | |
 |---|---|
-| 🤖 **AI copilot (Icarus)** | Describe a part and Icarus builds it with the same feature tools you use, as editable history. Runs free on local Ollama, or on Claude. One prompt is one undo step. Reads photos, drawings, PDFs and spreadsheets. |
-| 💬 **Claude Desktop** | Claude gets all 168 Daedalus tools and works in your open window — and, with CAD Link open, in SolidWorks, Fusion, Inventor, Solid Edge or Rhino, moving parts and BOMs between them and DIMS. |
+| 🤖 **AI copilot (Icarus)** | Describe a part and Icarus builds it with the same feature tools you use, as editable history. Runs free on local Ollama (any model), on GPT, LM Studio and other OpenAI-compatible servers, on Claude, or on your own Claude, ChatGPT or Gemini plan. One prompt is one undo step. Reads photos, drawings, PDFs and spreadsheets. |
+| 💬 **Claude Desktop, ChatGPT & more** | Claude Desktop, ChatGPT desktop / Codex, Gemini CLI, LM Studio, Cursor and VS Code get all 168 Daedalus tools and work in your open window — and, with CAD Link open, in SolidWorks, Fusion, Inventor, Solid Edge or Rhino, moving parts and BOMs between them and DIMS. |
 | 📐 **Full parametric modelling** | Constrained sketches, 3D sketches, 40+ feature types, configurations and equations, surfaces, sheet metal with flat patterns. |
 | 🏗️ **Frames and HSS** | Frames along a 3D sketch; the HSS builder covers AISC, CSA and EN sizes or any custom size; section properties; cut lists with weights. |
 | ⚙️ **Assemblies that move** | Standard, advanced and mechanical mates (gear, rack, screw, cam, slot), subassemblies, and MuJoCo physics with motors, springs and contact. |
@@ -374,11 +375,30 @@ imports with one click; servers without the tables keep working in the old singl
 Icarus edits the feature history through tools generated from the same feature registry the Inspector uses, so
 anything you can build, it can build. Errors are fed back to it so it corrects itself, and one prompt is one undo step.
 
-- **Ollama (local, default):** no key, no cost. Pull a tool-calling model (`qwen2.5:14b`, `qwen3:14b/32b`, `llama3.1:8b`), plus a vision model (`gemma3:12b`) for photos.
-  The *Core* tool set (32 tools) suits small models; *All* exposes all 168. Daedalus checks that Ollama is running and
-  the model is downloaded before sending, streams replies with progress, keeps the model loaded and tells you when it
-  runs on the CPU. Settings ▸ Icarus has *Test connection* and the model recommended for your graphics card.
-- **Claude:** select it in the panel and enter an API key.
+- **Engines** (the box at the top of the panel):
+
+  | Engine | Runs on | Needs |
+  |---|---|---|
+  | Ollama (local, default) | your graphics card, or Ollama's cloud models | Ollama |
+  | OpenAI-compatible | OpenAI (GPT), LM Studio, Jan, llama.cpp, vLLM, LocalAI, GPT4All, KoboldCpp, OpenRouter, Groq, Mistral, Google Gemini API, xAI, DeepSeek, Together, any URL | the server, or an API key |
+  | Claude (API) | Anthropic's API | an API key |
+  | Claude (your plan) | your Claude subscription, through Claude Code | `claude`, signed in |
+  | ChatGPT (your plan) | your ChatGPT subscription, through Codex | `codex`, signed in |
+  | Gemini (Google account) | your Google account, through Gemini CLI | `gemini`, signed in |
+
+- **Ollama, any model:** models that call tools natively (`qwen3`, `qwen2.5`, `gpt-oss`, `llama3.1`,
+  `mistral-small3.2`) use them directly; any other model (`gemma3`, `deepseek-r1`, `phi4`, `llava`…) gets *prompted
+  tools* — Icarus lists the tools in the prompt and runs the JSON calls the model writes. *Thinking* sets reasoning
+  on/off (or low / medium / high for gpt-oss). **Models…** lists what's installed (size, tools / vision / thinking,
+  context), downloads recommended models with progress (including `…-cloud` models that need no graphics card) and
+  deletes ones you don't use. Tool sets: *Core* (32), *Modelling* (127: everything but inventory), *Inventory* or
+  *All* (168). Daedalus checks that Ollama is running and the model is downloaded before sending, streams replies,
+  keeps the model loaded and tells you when it runs on the CPU.
+- **OpenAI-compatible:** the gear button picks the server (presets for each of the above, or a custom URL), the API
+  key (kept on this PC; `OPENAI_API_KEY` etc. also work), tools and tool-call mode. The model box lists the server's
+  models. Cloud servers get the *Modelling* set (APIs allow 128 tools); models without function calling fall back to
+  prompted tools automatically.
+- **Your plan (Claude / ChatGPT / Gemini):** see [Prompting from Icarus](#prompting-claude-from-icarus).
 - **Inputs:** attach photos or drawings (an optional render check compares the result with your reference), and
   Excel / CSV or PDF files — long sheets are read on demand, and imports of vendors, prices, parts or counts show a
   preview first.
@@ -417,18 +437,30 @@ on `127.0.0.1`, reachable only from this computer and protected by a random key.
 
 ### Prompting Claude from Icarus
 
-You can also type the prompt in Icarus instead of Claude Desktop: pick **Claude (your plan)** as Icarus's engine.
-Icarus hands the prompt to [Claude Code](https://claude.com/claude-code) (`claude -p`), signed in with your Claude
-account, so it runs on your Pro / Max / Team plan with no API key. Claude Code starts the same `python -m daedalus.mcp`
-server, so Claude works through the same link and tools as Claude Desktop, and Claude Desktop keeps working alongside.
+You can also type the prompt in Icarus instead of a desktop app: pick **Claude (your plan)**, **ChatGPT (your plan)**
+or **Gemini (Google account)** as Icarus's engine. Icarus hands the prompt to that company's own agent —
+[Claude Code](https://claude.com/claude-code) (`claude -p`), [Codex](https://github.com/openai/codex) (`codex exec`)
+or [Gemini CLI](https://github.com/google-gemini/gemini-cli) — signed in with your account, so it runs on your plan
+with no API key. The agent starts the same `python -m daedalus.mcp` server, so it works through the same link and
+tools as Claude Desktop, and the desktop apps keep working alongside.
 
-- First time: install Claude Code, run `claude` once in a terminal and sign in. The gear button finds the command and
-  tests it; set its path there if it isn't on `PATH`.
+- First time: install the agent and sign in once (`claude`, `codex login`, or `gemini`). The gear button finds the
+  command, shows its version and checks the link; set its path there if it isn't on `PATH`.
 - Tool calls show in the Icarus log as they run; the whole prompt is one undo step; Stop and Kill work as usual.
-  Pictures and PDFs you attach are passed as files for Claude to read.
-- The conversation continues across prompts (one Claude Code session per chat); **New chat** starts a fresh one.
-  The model box picks Default, Sonnet, Opus, Haiku or Fable.
-- Claude Code gets only the Daedalus tools (no shell or file editing) and runs without permission prompts.
+  Pictures and PDFs you attach are passed as files for the agent to read.
+- The conversation continues across prompts (one agent session per chat); **New chat** starts a fresh one. The model
+  box picks the agent's model (or type any name it knows).
+- The agent gets only the Daedalus tools (plus reading attachments) — no shell, no file editing — and runs without
+  permission prompts. Its MCP settings live in its own work folder under `~/.daedalus`, so your own settings for
+  Claude Code, Codex or Gemini CLI don't change.
+
+### Other AI apps
+
+**Help ▸ Connect AI apps…** (also Settings ▸ AI apps) gives other desktop AI apps the Daedalus tools, the same way as
+Claude Desktop: **ChatGPT desktop** together with the **Codex** CLI and IDE extension (they share
+`~/.codex/config.toml`), **Gemini CLI**, **Claude Code**, **LM Studio**, **Cursor**, **Windsurf** and **VS Code**
+(Copilot agent mode). Connect adds Daedalus to the app's settings, keeps everything else and saves the old file as
+`.before-daedalus`; Disconnect takes it out again. ChatGPT on the web can't reach programs on your computer.
 
 ## CAD Link
 

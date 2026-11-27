@@ -196,8 +196,10 @@ def sections() -> list[dict]:
         {"key": "icarus", "title": "Icarus", "blurb": "The built-in copilot: which engine and model it uses.",
          "opts": [
              Opt("ai/provider", "Engine", "choice", "ollama",
-                 [("ollama", "Ollama (local, free)"), ("claude", "Claude (API key)"),
-                  ("claude_code", "Claude (your plan, via Claude Code)")], apply=_apply_provider),
+                 [("ollama", "Ollama (local, free)"), ("openai", "OpenAI-compatible (GPT, LM Studio, Jan, OpenRouter…)"),
+                  ("claude", "Claude (API key)"), ("claude_code", "Claude (your plan, via Claude Code)"),
+                  ("codex", "ChatGPT (your plan, via Codex)"), ("gemini_cli", "Gemini (Google account, via Gemini CLI)")],
+                 apply=_apply_provider),
              Opt("ollama/model", "Ollama model", "text", ollama.DEFAULT_MODEL,
                  help="Installed with  ollama pull <name>. A model that doesn't fit on the graphics card is slow.",
                  apply=_apply_model),
@@ -217,11 +219,31 @@ def sections() -> list[dict]:
              Opt("claude_code/path", "Claude Code command", "text", "",
                  help="Blank = find  claude  automatically. Sign in once by running  claude  in a terminal. "
                       "Uses the Claude link (Claude Desktop section)."),
+             Opt("ollama/tool_mode", "Ollama tool calls", "choice", "auto",
+                 [("auto", "Automatic"), ("native", "Native"), ("prompted", "Described in the prompt (any model)")],
+                 help="Models without tool support still work: the tools are listed in the prompt."),
+             Opt("ollama/think", "Ollama thinking", "choice", "",
+                 [("", "Model default"), ("off", "Off"), ("on", "On"), ("low", "Low"), ("medium", "Medium"),
+                  ("high", "High")]),
+             Opt("openai/preset", "OpenAI-compatible server", "choice", "openai",
+                 [(p[0], p[1]) for p in __import__("daedalus.ai.openai_compat", fromlist=["x"]).PRESETS],
+                 help="Address, key and model: Icarus's gear button."),
+             Opt("openai/tools", "OpenAI-compatible tools", "choice", "",
+                 [("", "Automatic"), ("core", "Core"), ("model", "Modelling"), ("dims", "Inventory"), ("all", "All")]),
+             Opt("codex/model", "ChatGPT (your plan) model", "text", "", help="Blank = Codex's default."),
+             Opt("codex/path", "Codex command", "text", "",
+                 help="Blank = find  codex  automatically. Sign in once:  codex login ."),
+             Opt("gemini_cli/model", "Gemini model", "text", "", help="Blank = Gemini CLI's default."),
+             Opt("gemini_cli/path", "Gemini CLI command", "text", "",
+                 help="Blank = find  gemini  automatically. Sign in once by running  gemini ."),
          ], "extra": _icarus_extra},
         {"key": "claude", "title": "Claude Desktop", "blurb": "Use Daedalus's tools from Claude Desktop.",
          "opts": [Opt("claude/link", "Let Claude Desktop use Daedalus while it's open", "bool", True, restart=True,
                       help="A local tool server on 127.0.0.1, protected by a random key.")],
          "extra": _claude_extra, "keys": ["claude/config_path"]},
+        {"key": "ai_apps", "title": "AI apps", "blurb": "ChatGPT desktop / Codex, Gemini CLI, Claude Code, LM Studio, "
+                                                        "Cursor, Windsurf and VS Code can use Daedalus's tools too.",
+         "opts": [], "extra": _ai_apps_extra},
         {"key": "dims", "title": "DIMS", "blurb": "Inventory: who you are, where the data is, how it saves.",
          "opts": [
              Opt("inventory/user", "Your name", "text", "", help="On the activity log and orders.",
@@ -394,6 +416,11 @@ def _icarus_extra(page, lay, window, sd):
 def _claude_extra(page, lay, window, sd):
     from .claude_bridge import ClaudeDesktopDialog
     _embed(ClaudeDesktopDialog(getattr(window, "claude_bridge", None), page), lay)
+
+
+def _ai_apps_extra(page, lay, window, sd):
+    from .ai_apps_ui import AIAppsDialog
+    _embed(AIAppsDialog(getattr(window, "claude_bridge", None), page), lay)
 
 
 def _dims_extra(page, lay, window, sd):

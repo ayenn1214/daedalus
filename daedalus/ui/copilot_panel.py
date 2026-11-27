@@ -23,7 +23,23 @@ from ..ai.copilot import DEFAULT_MODEL, Copilot
 from . import theme
 
 MODELS = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"]
-PROVIDERS = [("ollama", "Ollama (local)"), ("claude", "Claude (API)"), ("claude_code", "Claude (your plan)")]
+PROVIDERS = [("ollama", "Ollama (local)"), ("openai", "OpenAI-compatible (GPT, LM Studio…)"),
+             ("claude", "Claude (API)"), ("claude_code", "Claude (your plan)"), ("codex", "ChatGPT (your plan)"),
+             ("gemini_cli", "Gemini (Google account)")]
+# agent engines: module, class, install hint, sign-in hint
+AGENTS = {
+    "claude_code": ("claude_code", "ClaudeCodeCopilot", "Install Claude Code (claude.com/claude-code)",
+                    "run  claude  once and sign in with your Claude account"),
+    "codex": ("codex_cli", "CodexCopilot", "Install Codex (npm i -g @openai/codex, or from the ChatGPT desktop app)",
+              "run  codex login  and sign in with your ChatGPT account"),
+    "gemini_cli": ("gemini_cli", "GeminiCopilot", "Install Gemini CLI (npm i -g @google/gemini-cli)",
+                   "run  gemini  once and choose Sign in with Google"),
+}
+
+
+def agent_module(kind):
+    import importlib
+    return importlib.import_module(f"daedalus.ai.{AGENTS[kind][0]}")
 VISION_HINT = "gemma3, qwen2.5vl, llama3.2-vision or llava"
 EXAMPLES = [
     "200×100×12 mounting plate, 4× M8 clearance holes 15 mm from the edges, R5 corners",
@@ -142,6 +158,8 @@ class CopilotPanel(QWidget):
             self.provider.addItem(label, key)
         self.provider.setCurrentIndex(max(0, self.provider.findData(self.settings.value("ai/provider", "ollama"))))
         self.provider.setToolTip("Which model runs Icarus")
+        self.provider.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
+        self.provider.setMinimumContentsLength(13)
         self.provider.currentIndexChanged.connect(self._provider_changed)
         self.model = QComboBox()
         self.model.setEditable(True)
@@ -253,9 +271,13 @@ class CopilotPanel(QWidget):
         title, sub = self.welcome or ("What should we build?",
                                       "Icarus ({who}) edits the feature history directly — each prompt is one "
                                       "undo step. Try one:")
-        tail = (f'<p style="color:{theme.MUTED};margin:10px 0 0 0">Runs on your Claude subscription through Claude '
-                f'Code, with the same tools as Claude Desktop. First time: run  claude  in a terminal and sign '
-                f'in.</p>' if self.kind() == "claude_code" else
+        tail = (f'<p style="color:{theme.MUTED};margin:10px 0 0 0">Runs on your own account through '
+                f'{html.escape(getattr(agent_module(self.kind()), AGENTS[self.kind()][1]).NAME)}, with the same '
+                f'tools as Claude Desktop. First time: {html.escape(AGENTS[self.kind()][3])}.</p>'
+                if self.kind() in AGENTS else
+                f'<p style="color:{theme.MUTED};margin:10px 0 0 0">Runs on {html.escape(self._oa()[1])} '
+                f'({html.escape(self._oa_url())}). The gear button sets the server, key and tools.</p>'
+                if self.kind() == "openai" else
                 f'<p style="color:{theme.MUTED};margin:10px 0 0 0">No answer? <a href="setup:" '
                 f'style="color:{theme.ACCENT_TEXT}">Setup check</a> installs Ollama and the model.</p>')
         self.log.setHtml(
@@ -314,9 +336,28 @@ class CopilotPanel(QWidget):
 
     def who(self) -> str:
         m = self.model.currentText().strip()
-        if self.kind() == "claude_code":
-            return "Claude (your plan)"
-        return (m or "Ollama") if self.kind() == "ollama" else "Claude"
+        k = self.kind()
+        if k in AGENTS:
+            return dict(PROVIDERS)[k]
+        if k == "openai":
+            return m or self._oa()[1]
+        return (m or "Ollama") if k == "ollama" else "Claude"
+
+    # OpenAI-compatible: the chosen server
+    def _oa(self):
+        from ..ai import openai_compat as OA
+        return OA.PRESET.get(self.settings.value("openai/preset", "openai"), OA.PRESET["openai"])
+
+    def _oa_url(self) -> str:
+        p = self._oa()
+        return (self.settings.value(f"openai/{p[0]}/url") or p[2]).rstrip("/")
+
+    def _oa_key(self) -> str | None:
+        p = self._oa()
+        env = {"openai": "OPENAI_API_KEY", "openrouter": "OPENROUTER_API_KEY", "groq": "GROQ_API_KEY",
+               "mistral": "MISTRAL_API_KEY", "gemini": "GEMINI_API_KEY", "xai": "XAI_API_KEY",
+               "deepseek": "DEEPSEEK_API_KEY", "together": "TOGETHER_API_KEY"}.get(p[0])
+        return self.settings.value(f"openai/{p[0]}/key") or (os.environ.get(env) if env else None) or None
 
     def _provider_changed(self, _i, first=False):
         kind = self.kind()
@@ -335,19 +376,37 @@ class CopilotPanel(QWidget):
             self.model.setToolTip("Installed Ollama models (ollama pull <name> to add more)")
             self.tag.setText("AI copilot · local")
             self._list_models_async(saved, warn=not first)      # never blocks the window on a slow server
-        elif kind == "claude_code":
-            from ..ai import claude_code as CC
+        elif kind in AGENTS:
+            M = agent_module(kind)
+            cls = getattr(M, AGENTS[kind][1])
             from . import icons
             self.cfg_btn.setIcon(icons.icon("gear-six"))
-            self.cfg_btn.setToolTip("Claude Code: where it is, sign-in check")
-            self.tag.setText("AI copilot · Claude (your plan)")
-            for key_, label in CC.MODELS:
+            self.cfg_btn.setToolTip(f"{cls.NAME}: where it is, version, sign-in")
+            self.tag.setText(f"AI copilot · {cls.LABEL}")
+            for key_, label in M.MODELS:
                 self.model.addItem(label, key_)
-            self.model.setCurrentIndex(max(0, self.model.findData(self.settings.value("claude_code/model", ""))))
+            saved = self.settings.value(f"{kind}/model", "")
+            i = self.model.findData(saved)
+            if i < 0 and saved:
+                self.model.addItem(saved, saved)
+                i = self.model.count() - 1
+            self.model.setCurrentIndex(max(0, i))
             if self.model.lineEdit() is not None:
                 self.model.lineEdit().setCursorPosition(0)
-            self.model.setToolTip("Runs on your Claude subscription through Claude Code — no API key. "
-                                  "Same tools Claude Desktop uses.")
+            self.model.setToolTip(f"Runs on {cls.LABEL.split('(')[-1].rstrip(')')} through {cls.NAME} — no API "
+                                  "key. Same tools Claude Desktop uses. Type any model name the agent knows.")
+        elif kind == "openai":
+            from . import icons
+            p = self._oa()
+            self.cfg_btn.setIcon(icons.icon("gear-six"))
+            self.cfg_btn.setToolTip("Server (OpenAI, LM Studio, Jan, OpenRouter…), API key, tools")
+            self.tag.setText(f"AI copilot · {p[1]}")
+            saved = self.settings.value(f"openai/{p[0]}/model") or p[4]
+            if saved:
+                self.model.addItem(saved)
+                self.model.setCurrentText(saved)
+            self.model.setToolTip(f"Models on {self._oa_url() or 'the server'} (type any name)")
+            self._list_models_async(saved, warn=False, kind="openai")
         else:
             from . import icons
             self.cfg_btn.setIcon(icons.icon("key"))
@@ -362,9 +421,16 @@ class CopilotPanel(QWidget):
         if not first:
             self._welcome()
 
-    def _list_models_async(self, saved, warn=False):
+    def _list_models_async(self, saved, warn=False, kind="ollama"):
         import threading
         host = self.host()
+        if kind == "openai":
+            from ..ai import openai_compat as OA
+            url, key = self._oa_url(), self._oa_key()
+            fetch = lambda: OA.list_models(url, key, timeout=6)  # noqa: E731
+        else:
+            fetch = lambda: ollama.list_models(host, timeout=3)  # noqa: E731
+        self._models_kind = kind
         if not hasattr(self, "_models_sig"):
             self._models_sig = _ModelsSignal(self)
             self._models_sig.ready.connect(self._models_listed)
@@ -373,7 +439,7 @@ class CopilotPanel(QWidget):
 
         def run():
             try:
-                got = ollama.list_models(host, timeout=3)
+                got = fetch()
             except Exception:  # noqa: BLE001
                 got = []
             try:
@@ -383,7 +449,17 @@ class CopilotPanel(QWidget):
         threading.Thread(target=run, daemon=True).start()
 
     def _models_listed(self, req, got, saved, warn):
-        if req != getattr(self, "_models_req", 0) or self.kind() != "ollama":
+        if req != getattr(self, "_models_req", 0) or self.kind() != getattr(self, "_models_kind", "ollama"):
+            return
+        if got and self.kind() == "openai":
+            pick = saved if saved and (saved in got or not got) else (saved or got[0])
+            self.model.blockSignals(True)
+            self.model.clear()
+            self.model.addItems(([pick] if pick not in got else []) + got)
+            self.model.setCurrentText(pick)
+            self.model.blockSignals(False)
+            if pick != saved:
+                self._model_changed(pick)
             return
         if got:
             pick = saved if saved in got else (ollama.DEFAULT_MODEL if ollama.DEFAULT_MODEL in got else got[0])
@@ -408,8 +484,12 @@ class CopilotPanel(QWidget):
         le = self.model.lineEdit()
         if le is not None and not le.hasFocus():
             le.setCursorPosition(0)                         # show the model's name from its start
-        if self.kind() == "claude_code":
-            self.settings.setValue("claude_code/model", self.model.currentData() or "")
+        if self.kind() in AGENTS:
+            i = self.model.findText(m)
+            self.settings.setValue(f"{self.kind()}/model", (self.model.itemData(i) if i >= 0 else m.strip()) or "")
+            return
+        if self.kind() == "openai":
+            self.settings.setValue(f"openai/{self._oa()[0]}/model", m.strip())
             return
         self.settings.setValue("ollama/model" if self.kind() == "ollama" else "model", m)
 
@@ -417,8 +497,11 @@ class CopilotPanel(QWidget):
         if self.kind() == "ollama":
             OllamaSettings(self).exec()
             self._provider_changed(self.provider.currentIndex())
-        elif self.kind() == "claude_code":
-            ClaudeCodeSettings(self).exec()
+        elif self.kind() in AGENTS:
+            AgentSettings(self, self.kind()).exec()
+        elif self.kind() == "openai":
+            if OpenAISettings(self).exec():
+                self._provider_changed(self.provider.currentIndex())
         else:
             self.set_key()
 
@@ -494,15 +577,34 @@ class CopilotPanel(QWidget):
     # ------------------------------------------------------------- run
     def _ensure_copilot(self, key=None):
         m = self.model.currentText().strip()
-        if self.kind() == "claude_code":
-            m = self.model.currentData() or ""
+        if self.kind() in AGENTS:
+            m = self.settings.value(f"{self.kind()}/model", "") or ""
             cli = key
             want = (self.kind(), m, cli)
             if self.copilot is None or getattr(self, "_cp_sig", None) != want:
-                from ..ai.claude_code import ClaudeCodeCopilot
-                sid = getattr(self.copilot, "session_id", None)      # changing model keeps the conversation
-                self.copilot = ClaudeCodeCopilot(cli, model=m, system=self.custom_system)
+                cls = getattr(agent_module(self.kind()), AGENTS[self.kind()][1])
+                same = getattr(self, "_cp_sig", (None,))[0] == self.kind()
+                sid = getattr(self.copilot, "session_id", None) if same else None   # a model change keeps the chat
+                self.copilot = cls(cli, model=m, system=self.custom_system)
                 self.copilot.session_id = sid
+                self._cp_sig = want
+            return
+        if self.kind() == "openai":
+            from ..ai import openai_compat as OA
+            p = self._oa()
+            want = (self.kind(), p[0], self._oa_url(), m, self.settings.value("openai/tools", ""),
+                    self.settings.value("openai/tool_mode", "auto"), bool(key))
+            if self.copilot is None or getattr(self, "_cp_sig", None) != want:
+                old = self.copilot.messages if (self.copilot is not None and
+                                                getattr(self, "_cp_sig", (None,))[0] == "openai") else []
+                temp = self.settings.value("openai/temperature", "")
+                self.copilot = OA.OpenAICopilot(
+                    lambda *_: ("", True), self._oa_url(), key, m,
+                    tool_set=self.settings.value("openai/tools", "") or ("core" if p[5] else "model"),
+                    tool_mode=self.settings.value("openai/tool_mode", "auto"), tools=self.custom_tools,
+                    system=self.custom_system, label=p[1],
+                    temperature=float(temp) if temp not in ("", None) else (0.2 if p[5] else None))
+                self.copilot.messages = old
                 self._cp_sig = want
             return
         want = (self.kind(), m)
@@ -513,7 +615,9 @@ class CopilotPanel(QWidget):
                     call_tool=lambda *_: ("", True), host=self.host(), model=m,
                     num_ctx=int(self.settings.value("ollama/num_ctx", ollama.DEFAULT_CTX)),
                     tool_set=self.settings.value("ollama/tools", "core"),
-                    tools=self.custom_tools, system=self.custom_system)
+                    tools=self.custom_tools, system=self.custom_system,
+                    tool_mode=self.settings.value("ollama/tool_mode", "auto"),
+                    think=self.settings.value("ollama/think", ""))
                 old = old if old and isinstance(old[0].get("content"), str) else []
             else:
                 self.copilot = Copilot(call_tool=lambda *_: ("", True), api_key=key, model=m,
@@ -569,17 +673,31 @@ class CopilotPanel(QWidget):
                 self._append("Icarus", "Set an Anthropic API key first (key button or "
                                        "ANTHROPIC_API_KEY env var), or switch to Ollama.", theme.ERROR)
                 return
-        elif self.kind() == "claude_code":
-            from ..ai import claude_code as CC
-            key = CC.find_cli(self.settings.value("claude_code/path") or None)
+        elif self.kind() in AGENTS:
+            M = agent_module(self.kind())
+            cls = getattr(M, AGENTS[self.kind()][1])
+            key = M.find_cli(self.settings.value(f"{self.kind()}/path") or None)
             if not key:
-                self._append("Icarus", "Claude Code isn't installed on this PC. Install it (claude.com/claude-code), "
-                                       "run  claude  once and sign in with your Claude account — or set where it "
-                                       "is with the gear button.", theme.ERROR)
+                self._append("Icarus", f"{cls.NAME} isn't installed on this PC. {AGENTS[self.kind()][2]}, then "
+                                       f"{AGENTS[self.kind()][3]} — or set where it is with the gear button.",
+                             theme.ERROR)
                 return
             if self._link() is None:
-                self._append("Icarus", "The Claude link is off, so Claude can't use this window's tools. Turn it on "
-                                       "in Settings ▸ Claude Desktop, then restart Daedalus.", theme.ERROR)
+                self._append("Icarus", f"The Claude link is off, so {cls.NAME} can't use this window's tools. Turn it "
+                                       "on in Settings ▸ Claude Desktop, then restart Daedalus.", theme.ERROR)
+                return
+        elif self.kind() == "openai":
+            p = self._oa()
+            key = self._oa_key()
+            if not self._oa_url():
+                self._append("Icarus", "Set the server address with the gear button.", theme.ERROR)
+                return
+            if p[3] and not key:
+                self._append("Icarus", f"{p[1]} needs an API key — set it with the gear button.", theme.ERROR)
+                return
+            if not self.model.currentText().strip():
+                self._append("Icarus", f"Pick a model for {p[1]} (model box) — for a local server, load one in "
+                                       "the app first.", theme.ERROR)
                 return
         elif not self.model.currentText().strip():
             self._append("Icarus", "Pick an Ollama model (ollama pull qwen2.5:14b).", theme.ERROR)
@@ -604,7 +722,7 @@ class CopilotPanel(QWidget):
                 att.update({d["name"]: d["path"] for d in docs})
             blocks = []
             for d in docs:
-                if d["kind"] == "pdf" and self.kind() in ("claude", "claude_code") and d["data"] and len(d["data"]) < 30_000_000:
+                if d["kind"] == "pdf" and self.kind() in ("claude", *AGENTS) and d["data"] and len(d["data"]) < 30_000_000:
                     pdfs.append(d["data"])                 # Claude reads the PDF itself (scans, drawings too)
                     d = {**d, "text": "(sent as a PDF document above)"}
                 blocks.append(prompt_block(d))
@@ -613,9 +731,9 @@ class CopilotPanel(QWidget):
                                                     f'{html.escape(", ".join(names))}</span>' if names else ""))
         if self.doc is not None:
             self.doc.checkpoint()             # whole turn (incl. render check) = one undo step
-        link = self._link() if self.kind() == "claude_code" else None
+        link = self._link() if self.kind() in AGENTS else None
         if link is not None:                  # Claude's calls arrive through the link: same undo step, Icarus label
-            link.via = "Icarus · Claude"
+            link.via = f"Icarus · {self.who()}"
         self._verify_rounds = 1 if images and self.verify_cb.isChecked() and self.render_provider else 0
         self.status.setText("")
         self._start(prompt, images, documents=pdfs)
@@ -705,36 +823,38 @@ class CopilotPanel(QWidget):
         self.status.setText(f"{len(r.errors)} errors" if r.errors else "Done")
 
 
-class ClaudeCodeSettings(QDialog):
-    """Where the claude command is, and a check that it runs and is signed in."""
+class AgentSettings(QDialog):
+    """Where the agent's command is (claude / codex / gemini), and a check that it runs."""
 
-    def __init__(self, panel):
+    def __init__(self, panel, kind):
         super().__init__(panel)
-        from ..ai import claude_code as CC
-        self.panel, self.CC = panel, CC
-        self.setWindowTitle("Claude (your plan)")
+        self.panel, self.kind = panel, kind
+        self.M = agent_module(kind)
+        cls = getattr(self.M, AGENTS[kind][1])
+        self.cls = cls
+        self.setWindowTitle(cls.LABEL)
         v = QVBoxLayout(self)
-        about = QLabel("Icarus sends your prompt to Claude through Claude Code, signed in with your Claude account "
-                       "(Pro / Max / Team plan, no API key). Claude uses the same Daedalus tools as Claude Desktop, "
-                       "and Claude Desktop keeps working as before.")
+        about = QLabel(f"Icarus sends your prompt to {cls.NAME}, signed in with your own account — no API key. It "
+                       "uses the same Daedalus tools as Claude Desktop, through the Claude link, and the desktop apps "
+                       "keep working alongside.")
         about.setWordWrap(True)
         v.addWidget(about)
         form = QFormLayout()
-        self.path = QLineEdit(panel.settings.value("claude_code/path") or "")
-        self.path.setPlaceholderText(CC.find_cli() or "claude (not found — install Claude Code)")
+        self.path = QLineEdit(panel.settings.value(f"{kind}/path") or "")
+        self.path.setPlaceholderText(self.M.find_cli() or f"{cls.NAME} not found — install it")
         row = QHBoxLayout()
         row.addWidget(self.path, 1)
         browse = QPushButton("Browse…")
         browse.clicked.connect(self.browse)
         row.addWidget(browse)
-        form.addRow("Claude Code", row)
+        form.addRow(cls.NAME, row)
         v.addLayout(form)
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setObjectName("muted")
         v.addWidget(self.info)
-        tip = QLabel("First time: install Claude Code, open a terminal, run  claude  and sign in. "
-                     "Turn the Claude link on in Settings ▸ Claude Desktop.")
+        tip = QLabel(f"First time: {AGENTS[kind][2]}, then {AGENTS[kind][3]}. Keep the Claude link on "
+                     "(Settings ▸ Claude Desktop).")
         tip.setWordWrap(True)
         tip.setObjectName("muted")
         v.addWidget(tip)
@@ -755,17 +875,17 @@ class ClaudeCodeSettings(QDialog):
         self.resize(560, 320)
 
     def browse(self):
-        p, _ = QFileDialog.getOpenFileName(self, "Claude Code", "", "claude (claude claude.exe claude.cmd);;All (*)")
+        p, _ = QFileDialog.getOpenFileName(self, self.cls.NAME, "", "Programs (*);;All (*)")
         if p:
             self.path.setText(p)
 
     def test(self):
-        cli = self.CC.find_cli(self.path.text().strip() or None)
+        cli = self.M.find_cli(self.path.text().strip() or None)
         if not cli:
-            self.info.setText("Claude Code wasn't found. Install it from claude.com/claude-code or browse to it.")
+            self.info.setText(f"{self.cls.NAME} wasn't found. {AGENTS[self.kind][2]}, or browse to it.")
             return
         try:
-            ver = self.CC.version(cli)
+            ver = self.M.version(cli)
         except Exception as e:  # noqa: BLE001
             self.info.setText(f"{cli} didn't run: {e}")
             return
@@ -775,9 +895,276 @@ class ClaudeCodeSettings(QDialog):
         self.adjustSize()
 
     def save(self):
-        self.panel.settings.setValue("claude_code/path", self.path.text().strip())
-        self.panel.copilot = None if self.panel.kind() == "claude_code" else self.panel.copilot
+        self.panel.settings.setValue(f"{self.kind}/path", self.path.text().strip())
+        if self.panel.kind() == self.kind:
+            self.panel.copilot = None
         self.accept()
+
+
+ClaudeCodeSettings = lambda panel: AgentSettings(panel, "claude_code")  # noqa: E731
+
+
+class OpenAISettings(QDialog):
+    """Which OpenAI-compatible server (OpenAI, LM Studio, Jan, OpenRouter…), its address and key, and the tools."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        from ..ai import openai_compat as OA
+        from ..ai import toolsets as TS
+        self.panel, self.OA = panel, OA
+        st = panel.settings
+        self.setWindowTitle("OpenAI-compatible server")
+        v = QVBoxLayout(self)
+        form = QFormLayout()
+        self.preset = QComboBox()
+        for p in OA.PRESETS:
+            self.preset.addItem(p[1] + ("  · this PC" if p[5] else ""), p[0])
+        self.preset.setCurrentIndex(max(0, self.preset.findData(st.value("openai/preset", "openai"))))
+        self.preset.currentIndexChanged.connect(self._preset)
+        form.addRow("Server", self.preset)
+        self.url = QLineEdit()
+        form.addRow("Address", self.url)
+        self.key = QLineEdit()
+        self.key.setEchoMode(QLineEdit.Password)
+        form.addRow("API key", self.key)
+        self.tools = QComboBox()
+        self.tools.addItem("Automatic (core on this PC, modelling on the cloud)", "")
+        for k, label in TS.SETS:
+            self.tools.addItem(label, k)
+        self.tools.setCurrentIndex(max(0, self.tools.findData(st.value("openai/tools", ""))))
+        form.addRow("Tools", self.tools)
+        self.mode = QComboBox()
+        for k, label in (("auto", "Automatic (native, or described in the prompt if the model can't)"),
+                         ("native", "Native function calling"), ("prompted", "Described in the prompt (any model)")):
+            self.mode.addItem(label, k)
+        self.mode.setCurrentIndex(max(0, self.mode.findData(st.value("openai/tool_mode", "auto"))))
+        form.addRow("Tool calls", self.mode)
+        self.temp = QLineEdit(str(st.value("openai/temperature", "") or ""))
+        self.temp.setPlaceholderText("model default (0.2 on this PC)")
+        form.addRow("Temperature", self.temp)
+        v.addLayout(form)
+        self.info = QLabel("")
+        self.info.setWordWrap(True)
+        self.info.setObjectName("muted")
+        v.addWidget(self.info)
+        tip = QLabel("LM Studio: Developer tab ▸ Start server. Jan: Settings ▸ Local API Server. llama.cpp: "
+                     "llama-server --jinja. OpenAI / OpenRouter / Groq / Mistral / Gemini / xAI / DeepSeek: paste the "
+                     "key from their website. Keys stay on this PC.")
+        tip.setWordWrap(True)
+        tip.setObjectName("muted")
+        v.addWidget(tip)
+        btns = QHBoxLayout()
+        test = QPushButton("Test connection")
+        test.clicked.connect(self.test)
+        btns.addWidget(test)
+        btns.addStretch(1)
+        ok = QPushButton("Save")
+        ok.setObjectName("primary")
+        ok.clicked.connect(self.save)
+        btns.addWidget(ok)
+        cancel = QPushButton("Cancel")
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+        v.addLayout(btns)
+        self._preset()
+        self.setMinimumWidth(600)
+
+    def _p(self):
+        return self.OA.PRESET[self.preset.currentData()]
+
+    def _preset(self, *_):
+        p, st = self._p(), self.panel.settings
+        self.url.setText(st.value(f"openai/{p[0]}/url") or p[2])
+        self.url.setPlaceholderText(p[2] or "http://host:port/v1")
+        self.key.setText(st.value(f"openai/{p[0]}/key") or "")
+        self.key.setPlaceholderText("needed" if p[3] else "not needed for a server on this PC")
+        self.info.setText("")
+
+    def test(self):
+        url = self.url.text().strip().rstrip("/")
+        got = self.OA.list_models(url, self.key.text().strip() or None, timeout=8)
+        if got:
+            self.info.setText(f"Connected · {len(got)} models: " + ", ".join(got[:15]) + ("…" if len(got) > 15 else ""))
+        else:
+            self.info.setText(f"No model list from {url}. Is the server running and the key right? (Some servers "
+                              "don't list models — type the model name in Icarus's model box.)")
+
+    def save(self):
+        st, p = self.panel.settings, self._p()
+        st.setValue("openai/preset", p[0])
+        url = self.url.text().strip().rstrip("/")
+        st.setValue(f"openai/{p[0]}/url", "" if url == p[2] else url)
+        st.setValue(f"openai/{p[0]}/key", self.key.text().strip())
+        st.setValue("openai/tools", self.tools.currentData())
+        st.setValue("openai/tool_mode", self.mode.currentData())
+        t = self.temp.text().strip()
+        try:
+            st.setValue("openai/temperature", str(float(t)) if t else "")
+        except ValueError:
+            st.setValue("openai/temperature", "")
+        self.panel.copilot = None
+        self.accept()
+
+
+class _PullSignal(QObject):
+    progress = Signal(str, int, int)
+    done = Signal(str, str)
+
+
+class OllamaModels(QDialog):
+    """Installed models (size, what they can do), recommended ones to download, delete."""
+
+    def __init__(self, panel):
+        super().__init__(panel)
+        from PySide6.QtWidgets import QProgressBar, QTableWidget
+        self.panel = panel
+        self.host = panel.host()
+        self.setWindowTitle("Ollama models")
+        v = QVBoxLayout(self)
+        v.addWidget(QLabel(f"<b>On this computer</b> · {html.escape(self.host)}"))
+        self.have = QTableWidget(0, 4)
+        self.have.setHorizontalHeaderLabels(["Model", "Size", "Can", "Context"])
+        self.have.verticalHeader().setVisible(False)
+        self.have.setSelectionBehavior(QTableWidget.SelectRows)
+        self.have.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.have.horizontalHeader().setStretchLastSection(True)
+        v.addWidget(self.have, 1)
+        row = QHBoxLayout()
+        use = QPushButton("Use in Icarus")
+        use.setObjectName("primary")
+        use.clicked.connect(self.use)
+        row.addWidget(use)
+        rm = QPushButton("Delete…")
+        rm.clicked.connect(self.remove)
+        row.addWidget(rm)
+        row.addStretch(1)
+        v.addLayout(row)
+        v.addWidget(QLabel("<b>Download</b> — good for Icarus (models without native tools get prompted tools)"))
+        self.rec = QTableWidget(0, 3)
+        self.rec.setHorizontalHeaderLabels(["Model", "Download", "Good for"])
+        self.rec.verticalHeader().setVisible(False)
+        self.rec.setSelectionBehavior(QTableWidget.SelectRows)
+        self.rec.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.rec.horizontalHeader().setStretchLastSection(True)
+        for name, why, gb, how in ollama.RECOMMENDED:
+            r = self.rec.rowCount()
+            self.rec.insertRow(r)
+            from PySide6.QtWidgets import QTableWidgetItem
+            self.rec.setItem(r, 0, QTableWidgetItem(name))
+            self.rec.setItem(r, 1, QTableWidgetItem(f"{gb:.1f} GB" if gb else "cloud"))
+            self.rec.setItem(r, 2, QTableWidgetItem(f"{why} · {how}"))
+        self.rec.resizeColumnsToContents()
+        v.addWidget(self.rec, 1)
+        row = QHBoxLayout()
+        self.name = QLineEdit()
+        self.name.setPlaceholderText("or any model from ollama.com/library, e.g. qwen3:14b")
+        self.rec.itemSelectionChanged.connect(
+            lambda: self.name.setText(self.rec.item(self.rec.currentRow(), 0).text()) if self.rec.currentRow() >= 0
+            else None)
+        row.addWidget(self.name, 1)
+        self.pull_btn = QPushButton("Download")
+        self.pull_btn.clicked.connect(self.pull)
+        row.addWidget(self.pull_btn)
+        v.addLayout(row)
+        self.bar = QProgressBar()
+        self.bar.setVisible(False)
+        v.addWidget(self.bar)
+        self.info = QLabel("")
+        self.info.setObjectName("muted")
+        self.info.setWordWrap(True)
+        v.addWidget(self.info)
+        close = QPushButton("Close")
+        close.clicked.connect(self.accept)
+        r2 = QHBoxLayout()
+        r2.addStretch(1)
+        r2.addWidget(close)
+        v.addLayout(r2)
+        self.sig = _PullSignal(self)
+        self.sig.progress.connect(self._progress)
+        self.sig.done.connect(self._pulled)
+        self._cancel = False
+        self.refresh()
+        self.resize(760, 640)
+
+    def refresh(self):
+        from PySide6.QtWidgets import QTableWidgetItem
+        self.have.setRowCount(0)
+        got = ollama.installed(self.host)
+        if not got:
+            self.info.setText(f"Ollama isn't answering at {self.host}, or has no models yet.")
+        for m in got:
+            info = ollama.model_info(self.host, m["name"], timeout=4)
+            r = self.have.rowCount()
+            self.have.insertRow(r)
+            caps = info["caps"]
+            can = ", ".join(c for c in ("tools", "vision", "thinking") if c in caps) or "chat (prompted tools)"
+            if "tools" not in caps and caps:
+                can += " · prompted tools"
+            size = "cloud" if m.get("remote") else f"{m['size'] / 1e9:.1f} GB"
+            for c, t in enumerate((m["name"], f"{size} · {m['params'] or info['params']}", can,
+                                   f"{info['context'] // 1024}k" if info["context"] else "")):
+                self.have.setItem(r, c, QTableWidgetItem(t))
+        self.have.resizeColumnsToContents()
+
+    def _sel(self):
+        r = self.have.currentRow()
+        return self.have.item(r, 0).text() if r >= 0 else None
+
+    def use(self):
+        m = self._sel()
+        if m:
+            self.panel.settings.setValue("ollama/model", m)
+            self.panel._provider_changed(self.panel.provider.currentIndex())
+            self.accept()
+
+    def remove(self):
+        from PySide6.QtWidgets import QMessageBox
+        m = self._sel()
+        if not m or QMessageBox.question(self, "Delete model", f"Delete {m} from this computer? You can download it "
+                                         "again later.") != QMessageBox.Yes:
+            return
+        try:
+            ollama.delete(self.host, m)
+        except Exception as e:  # noqa: BLE001
+            self.info.setText(str(e))
+        self.refresh()
+
+    def pull(self):
+        import threading
+        name = self.name.text().strip()
+        if not name:
+            return
+        if self.pull_btn.text() == "Cancel":
+            self._cancel = True
+            return
+        self._cancel = False
+        self.pull_btn.setText("Cancel")
+        self.bar.setVisible(True)
+        self.bar.setRange(0, 0)
+        sig, host = self.sig, self.host
+
+        def run():
+            try:
+                ollama.pull(host, name, progress=lambda s, d, t: sig.progress.emit(s, d, t), stop=lambda: self._cancel)
+                sig.done.emit(name, "")
+            except Exception as e:  # noqa: BLE001
+                sig.done.emit(name, str(e))
+        threading.Thread(target=run, daemon=True).start()
+
+    def _progress(self, status, done, total):
+        if total:
+            self.bar.setRange(0, 1000)
+            self.bar.setValue(int(1000 * done / total))
+            self.info.setText(f"{status} · {done / 1e9:.2f} of {total / 1e9:.2f} GB")
+        else:
+            self.info.setText(status)
+
+    def _pulled(self, name, err):
+        self.pull_btn.setText("Download")
+        self.bar.setVisible(False)
+        self.info.setText(f"Couldn't download {name}: {err}" if err else f"{name} is ready — select it and click "
+                                                                         "Use in Icarus.")
+        self.refresh()
 
 
 class OllamaSettings(QDialog):
@@ -803,16 +1190,38 @@ class OllamaSettings(QDialog):
         form.addRow("Context", self.ctx)
         self.tools = QComboBox()
         self.tools.addItem(f"Core ({len(ollama.CORE_TOOLS)} tools: model, assemble, import, BOM)", "core")
+        self.tools.addItem("Modelling + simulation + drawings + CAM (~127 tools, needs 32k+)", "model")
+        self.tools.addItem("Inventory (DIMS)", "dims")
         self.tools.addItem("All tools (simulation, drawings, CAM, inventory…)", "all")
-        self.tools.setCurrentIndex(0 if st.value("ollama/tools", "core") == "core" else 1)
+        self.tools.setCurrentIndex(max(0, self.tools.findData(st.value("ollama/tools", "core"))))
         form.addRow("Tools", self.tools)
+        self.mode = QComboBox()
+        for k, label in (("auto", "Automatic — native if the model supports tools, else described in the prompt"),
+                         ("native", "Native tool calling"), ("prompted", "Described in the prompt (any model)")):
+            self.mode.addItem(label, k)
+        self.mode.setCurrentIndex(max(0, self.mode.findData(st.value("ollama/tool_mode", "auto"))))
+        self.mode.setToolTip("Models without tool support (gemma3, deepseek-r1, llava, phi…) still work: Icarus lists "
+                             "the tools in the prompt and runs the JSON calls the model writes")
+        form.addRow("Tool calls", self.mode)
+        self.think = QComboBox()
+        for k, label in (("", "Model default"), ("off", "Off (fastest)"), ("on", "On"), ("low", "Low (gpt-oss)"),
+                         ("medium", "Medium (gpt-oss)"), ("high", "High (gpt-oss)")):
+            self.think.addItem(label, k)
+        self.think.setCurrentIndex(max(0, self.think.findData(st.value("ollama/think", ""))))
+        self.think.setToolTip("For thinking models (qwen3, deepseek-r1, gpt-oss…): thinking is slower but plans "
+                              "multi-step parts better")
+        form.addRow("Thinking", self.think)
         v.addLayout(form)
+        models = QPushButton("Models… (download, delete, what each can do)")
+        models.clicked.connect(lambda: OllamaModels(self.panel).exec())
+        v.addWidget(models)
         self.info = QLabel("")
         self.info.setWordWrap(True)
         self.info.setObjectName("muted")
         v.addWidget(self.info)
-        tip = QLabel("Good local models for tool use: qwen2.5 (14b+), qwen3 (14b/32b), llama3.1/3.3, mistral-small. "
-                     f"For drawings/photos use a vision model: {VISION_HINT}. Install with  ollama pull <name>.")
+        tip = QLabel("Best for tool use: qwen3 (8b/14b/32b), qwen2.5 (14b+), gpt-oss:20b, llama3.1, mistral-small. "
+                     f"Drawings/photos: a vision model ({VISION_HINT}). Any other model works with prompted tools. "
+                     "No graphics card? Ollama's cloud models (…-cloud, after  ollama signin).")
         tip.setWordWrap(True)
         tip.setObjectName("muted")
         v.addWidget(tip)
@@ -849,5 +1258,7 @@ class OllamaSettings(QDialog):
         st.setValue("ollama/host", ollama.normalize_host(self.host.text()))
         st.setValue("ollama/num_ctx", int(self.ctx.currentData()))
         st.setValue("ollama/tools", self.tools.currentData())
+        st.setValue("ollama/tool_mode", self.mode.currentData())
+        st.setValue("ollama/think", self.think.currentData())
         self.panel.copilot = None
         self.accept()

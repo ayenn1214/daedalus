@@ -937,6 +937,10 @@ class MainWindow(QMainWindow):
         from .claude_bridge import ClaudeDesktopDialog
         ClaudeDesktopDialog(getattr(self, "claude_bridge", None), self).exec()
 
+    def ai_apps(self):
+        from .ai_apps_ui import AIAppsDialog
+        AIAppsDialog(getattr(self, "claude_bridge", None), self).exec()
+
     def show_setup_check(self):
         from .setup_dialog import SetupDialog
         SetupDialog(self).exec()
@@ -1821,6 +1825,7 @@ class MainWindow(QMainWindow):
                 str(__import__("daedalus.crash", fromlist=["x"]).crash_dir()))))
         act(h, "Setup check (Python + Icarus)…", self.show_setup_check)
         act(h, "Connect to Claude Desktop…", self.claude_desktop)
+        act(h, "Connect AI apps (ChatGPT, Gemini, LM Studio…)…", self.ai_apps)
         act(h, "Design data calculators…", lambda: self.design_data(0))
         act(h, "Reference library (your handbooks)…", lambda: self.design_data(1))
         act(h, "Splash screen…", lambda: __import__("daedalus.ui.splash", fromlist=["editor"]).editor(self).exec())

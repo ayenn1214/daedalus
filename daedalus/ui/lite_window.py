@@ -104,6 +104,8 @@ class LiteWindow(QMainWindow):
         act(h, "Report a bug…", self.report_bug)
         act(h, "Connect to Claude Desktop…", lambda: __import__("daedalus.ui.claude_bridge", fromlist=["x"])
             .ClaudeDesktopDialog(self.claude_bridge, self).exec())
+        act(h, "Connect AI apps (ChatGPT, Gemini, LM Studio…)…", lambda: __import__(
+            "daedalus.ui.ai_apps_ui", fromlist=["x"]).AIAppsDialog(self.claude_bridge, self).exec())
         act(h, "Crash reports folder…", lambda: __import__("PySide6.QtGui", fromlist=["x"]).QDesktopServices.openUrl(
             __import__("PySide6.QtCore", fromlist=["x"]).QUrl.fromLocalFile(
                 str(__import__("daedalus.crash", fromlist=["x"]).crash_dir()))))
