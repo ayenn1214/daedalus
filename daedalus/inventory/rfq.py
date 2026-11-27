@@ -169,7 +169,10 @@ def compose(inv, vendor: str, items, rfq: str | None = None, due: str | None = N
                  due_line=f"We'd appreciate your quote by {M.fmt_date(due)}.\n" if due else "",
                  lines=lines_text(ls, prices), sender=st.get("sender") or inv.userName or "",
                  count=str(len(ls)), phone=po.get("phone") or "", email=po.get("email") or "")
-    body = (st.get("body") or BODY).format_map(vals)
+    tpl = st.get("body") or BODY
+    if not vals["sender"]:
+        tpl = tpl.replace("{sender}\n", "")                # no name set: no empty line above the company
+    body = tpl.format_map(vals)
     body = re.sub(r"\n{3,}", "\n\n", body).strip() + "\n"
     return {"vendor": vendor, "to": v.get("email") or "", "cc": "", "subject": (st.get("subject") or SUBJECT)
             .format_map(vals).strip(), "body": body, "lines": ls, "rfq": rfq, "due": due or "",
